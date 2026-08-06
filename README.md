@@ -2,6 +2,8 @@
 
 基于 **Phaser 4 + Vite + TypeScript** 的 2D 音乐弹幕游戏原型。
 
+**🎮 在线试玩：<https://cj-viewer.github.io/MusicGameDemo/>**（push 到 main 后由 GitHub Actions 自动部署）
+
 策划案见 [docs/2D音乐弹幕游戏策划案 (持续更新).md](<docs/2D音乐弹幕游戏策划案 (持续更新).md>)，
 原型实现范围见 [docs/简化玩法策划案（原型版）.md](docs/简化玩法策划案（原型版）.md)。
 
