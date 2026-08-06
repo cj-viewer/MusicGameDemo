@@ -44,3 +44,6 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+        with:
+          # Pages 部署队列偶尔较慢，放宽等待时间到 30 分钟
+          timeout: 1800000
