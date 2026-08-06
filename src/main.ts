@@ -1,5 +1,4 @@
 import Phaser from 'phaser';
-import { BootScene } from './scenes/BootScene';
 import { MainScene } from './scenes/MainScene';
 
 const config: Phaser.Types.Core.GameConfig = {
@@ -12,7 +11,17 @@ const config: Phaser.Types.Core.GameConfig = {
     mode: Phaser.Scale.FIT,
     autoCenter: Phaser.Scale.CENTER_BOTH
   },
-  scene: [BootScene, MainScene]
+  physics: {
+    default: 'arcade',
+    arcade: {
+      gravity: { x: 0, y: 0 },
+      debug: false
+    }
+  },
+  scene: [MainScene]
 };
 
-new Phaser.Game(config);
+const game = new Phaser.Game(config);
+
+// 原型调试句柄（便于控制台/自动化测试访问）
+(window as unknown as Record<string, unknown>).__game = game;
