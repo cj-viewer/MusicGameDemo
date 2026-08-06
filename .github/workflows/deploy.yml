@@ -6,14 +6,16 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+  pages: write
+  id-token: write
 
 concurrency:
   group: pages
   cancel-in-progress: true
 
 jobs:
-  build-deploy:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,11 +29,18 @@ jobs:
 
       - run: npm run build
 
-      # 写入构建时间戳，保证每次运行 gh-pages 都有新提交、必定触发 Pages 重建
-      - run: date -u +'%Y-%m-%dT%H:%M:%SZ' > dist/.build-stamp
+      - uses: actions/configure-pages@v5
 
-      # 推送到 gh-pages 分支，GitHub 自动从该分支提供 Pages 服务
-      - uses: peaceiris/actions-gh-pages@v4
+      - uses: actions/upload-pages-artifact@v3
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./dist
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
