@@ -3,6 +3,10 @@ dist/
 *.local
 .DS_Store
 
+# 用户自备歌曲（可能含受版权保护的内容，只留在本地）
+public/music/*
+!public/music/README.md
+
 # Editor
 .vscode/*
 !.vscode/extensions.json

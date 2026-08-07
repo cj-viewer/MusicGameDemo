@@ -13,9 +13,18 @@ const DODGE_COST_ONBEAT = 15;
 const DODGE_BEAT_WINDOW = 0.12;
 const SHOCKWAVE_RADIUS = 60;
 
+/**
+ * 精灵表（120x120/帧）中角色贴着帧底部绘制：占位约 x:47~74, y:65~120。
+ * 取角色视觉中心 (60, 92) 作为锚点，物理圆形碰撞体以该点为圆心。
+ */
+const SPRITE_ANCHOR_X = 60;
+const SPRITE_ANCHOR_Y = 92;
+/** 倒地帧（第 7 行第 2 列） */
+const FRAME_DOWN = 25;
+
 export class Player {
   scene: MainScene;
-  go: Phaser.GameObjects.Arc;
+  go: Phaser.GameObjects.Sprite;
   body: Phaser.Physics.Arcade.Body;
 
   hp = 100;
@@ -31,14 +40,17 @@ export class Player {
   private invulnUntil = 0;
   private staminaFullSince = 0;
   private lastTrailAt = 0;
+  private dead = false;
 
   constructor(scene: MainScene, x: number, y: number) {
     this.scene = scene;
-    this.go = scene.add.circle(x, y, PLAYER_RADIUS, 0x4ade80).setDepth(5);
+    this.go = scene.add.sprite(x, y, 'girl', 0).setDepth(5);
+    this.go.setOrigin(SPRITE_ANCHOR_X / 120, SPRITE_ANCHOR_Y / 120);
     scene.physics.add.existing(this.go);
     this.body = this.go.body as Phaser.Physics.Arcade.Body;
-    this.body.setCircle(PLAYER_RADIUS);
+    this.body.setCircle(PLAYER_RADIUS, SPRITE_ANCHOR_X - PLAYER_RADIUS, SPRITE_ANCHOR_Y - PLAYER_RADIUS);
     this.body.setCollideWorldBounds(true);
+    this.go.play('girl-idle');
 
     this.gfx = scene.add.graphics().setDepth(6);
     this.keys = scene.input.keyboard!.addKeys('W,A,S,D') as Record<
@@ -56,6 +68,8 @@ export class Player {
   }
 
   update(timeMs: number): void {
+    if (this.dead) return;
+
     // 移动（闪避期间由 tween 控制位移）
     if (!this.isDodging) {
       const dir = this.moveDir();
@@ -66,15 +80,31 @@ export class Player {
     const pointer = this.scene.input.activePointer;
     this.aimAngle = Phaser.Math.Angle.Between(this.x, this.y, pointer.worldX, pointer.worldY);
 
+    // 朝向与走/停动画（素材面朝右，瞄准左侧时水平翻转）
+    this.go.setFlipX(Math.cos(this.aimAngle) < 0);
+    const moving = this.isDodging || this.body.velocity.lengthSq() > 1;
+    this.go.play(moving ? 'girl-walk' : 'girl-idle', true);
+
     this.drawOverlay(timeMs);
   }
 
   onBeat(): void {
     this.stamina = Math.min(this.maxStamina, this.stamina + STAMINA_REGEN_PER_BEAT);
+
+    // 踩拍律动：轻微的蹲弹，让角色跟着音乐"跳舞"
+    if (!this.dead && !this.isDodging) {
+      this.scene.tweens.add({
+        targets: this.go,
+        scaleX: { from: 1.08, to: 1 },
+        scaleY: { from: 0.94, to: 1 },
+        duration: 150,
+        ease: 'Sine.easeOut'
+      });
+    }
   }
 
   tryDodge(): void {
-    if (this.isDodging) return;
+    if (this.isDodging || this.dead) return;
     const conductor = this.scene.conductor;
     if (!conductor.started) return;
 
@@ -126,26 +156,45 @@ export class Player {
 
   takeDamage(amount: number): void {
     const now = this.scene.time.now;
-    if (this.isDodging || now < this.invulnUntil) return;
+    if (this.isDodging || this.dead || now < this.invulnUntil) return;
     this.hp = Math.max(0, this.hp - amount);
     this.invulnUntil = now + 600;
     this.scene.sfx.hurt();
     this.scene.hud.setHp(this.hp, this.maxHp);
-    this.flash(0xef4444);
+    this.flash();
     this.scene.cameras.main.shake(120, 0.004);
     if (this.hp <= 0) {
       this.scene.onPlayerDied();
     }
   }
 
-  /** 输入错误的噪音反馈 */
-  errorFlash(): void {
-    this.flash(0xef4444);
+  /** 战败：倒地姿势 */
+  die(): void {
+    this.dead = true;
+    this.body.setVelocity(0, 0);
+    this.go.stop();
+    this.go.setFrame(FRAME_DOWN);
+    this.resetTint();
+    this.go.setAlpha(0.9);
+    this.gfx.clear();
   }
 
-  private flash(color: number): void {
-    this.go.setFillStyle(color);
-    this.scene.time.delayedCall(120, () => this.go.setFillStyle(0x4ade80));
+  /** 输入错误的噪音反馈 */
+  errorFlash(): void {
+    this.flash();
+  }
+
+  private flash(): void {
+    if (this.dead) return;
+    this.go.setTint(0xef4444).setTintMode(Phaser.TintModes.FILL);
+    this.scene.time.delayedCall(120, () => {
+      if (!this.dead) this.resetTint();
+    });
+  }
+
+  private resetTint(): void {
+    this.go.clearTint();
+    this.go.setTintMode(Phaser.TintModes.MULTIPLY);
   }
 
   private moveDir(): Phaser.Math.Vector2 {
@@ -161,7 +210,11 @@ export class Player {
     if (now - this.lastTrailAt < 50) return;
     this.lastTrailAt = now;
     const trail = this.scene.add
-      .circle(this.go.x, this.go.y, PLAYER_RADIUS, 0x4ade80, 0.7)
+      .sprite(this.go.x, this.go.y, 'girl', this.go.frame.name)
+      .setOrigin(this.go.originX, this.go.originY)
+      .setFlipX(this.go.flipX)
+      .setAlpha(0.55)
+      .setTint(0x9be8ff)
       .setDepth(4);
     this.scene.tweens.add({
       targets: trail,

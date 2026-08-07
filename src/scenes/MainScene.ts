@@ -1,16 +1,17 @@
 import Phaser from 'phaser';
 import { Conductor, type BeatInfo } from '../core/Conductor';
+import { MusicDirector } from '../core/Music';
 import { Sfx } from '../core/Sfx';
+import { TRACKS, cycleTrack, getSelectedTrack, loadUserTracks, type TrackDef } from '../core/tracks';
 import { ComboSystem } from '../game/ComboSystem';
 import { HUD } from '../game/HUD';
 import { Player } from '../game/Player';
 import { BATON, GLOWSTICKS, getAttackSpec, type WeaponDef } from '../game/weapons';
 import { BigFan, Enemy, MidGuard, SmallGuard, type EnemyKind } from '../game/enemies';
 
-const BPM = 120;
 const ARENA = { x: 12, y: 12, width: 1256, height: 696 };
 
-type GameState = 'title' | 'playing' | 'intermission' | 'over';
+type GameState = 'title' | 'loading' | 'playing' | 'intermission' | 'over';
 
 const WAVES: EnemyKind[][] = [
   ['smallGuard', 'smallGuard'],
@@ -33,6 +34,7 @@ interface Pickup {
 
 export class MainScene extends Phaser.Scene {
   conductor!: Conductor;
+  music!: MusicDirector;
   sfx!: Sfx;
   combo!: ComboSystem;
   hud!: HUD;
@@ -46,12 +48,19 @@ export class MainScene extends Phaser.Scene {
   private waveIdx = -1;
   private lastComboLevel = 0;
   private feverBorder!: Phaser.GameObjects.Graphics;
+  /** 场景重启计数：用于丢弃上一局遗留的异步流程（如音乐加载） */
+  private generation = 0;
 
   constructor() {
     super('MainScene');
   }
 
+  preload(): void {
+    this.load.spritesheet('girl', 'assets/schoolgirl.png', { frameWidth: 120, frameHeight: 120 });
+  }
+
   create(): void {
+    this.generation++;
     this.enemies = [];
     this.pickups = [];
     this.state = 'title';
@@ -68,7 +77,25 @@ export class MainScene extends Phaser.Scene {
     this.feverBorder.lineStyle(6, 0xf97316, 1);
     this.feverBorder.strokeRect(ARENA.x + 3, ARENA.y + 3, ARENA.width - 6, ARENA.height - 6);
 
-    this.conductor = new Conductor(this, BPM);
+    // 主角动画（全局注册一次）
+    if (!this.anims.exists('girl-idle')) {
+      this.anims.create({
+        key: 'girl-idle',
+        frames: this.anims.generateFrameNumbers('girl', { frames: [0, 1] }),
+        frameRate: 2.5,
+        repeat: -1
+      });
+      this.anims.create({
+        key: 'girl-walk',
+        frames: this.anims.generateFrameNumbers('girl', { frames: [4, 5, 6, 7] }),
+        frameRate: 9,
+        repeat: -1
+      });
+    }
+
+    this.conductor = new Conductor(this, getSelectedTrack().bpm);
+    this.music = new MusicDirector(this.conductor.ctx);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.music.stop());
     this.sfx = new Sfx(this.conductor.ctx);
     this.combo = new ComboSystem(this.conductor, GLOWSTICKS.pattern);
     this.hud = new HUD(this, this.conductor);
@@ -97,6 +124,7 @@ export class MainScene extends Phaser.Scene {
 
   update(_time: number, delta: number): void {
     this.conductor.update();
+    this.music.update();
     this.hud.update();
 
     if (this.state === 'over' || this.state === 'title') return;
@@ -118,10 +146,10 @@ export class MainScene extends Phaser.Scene {
 
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       if (this.state === 'title') {
-        this.startGame();
+        void this.startGame();
         return;
       }
-      if (this.state === 'over') return;
+      if (this.state === 'loading' || this.state === 'over') return;
 
       const btn = pointer.rightButtonDown() ? 'H' : pointer.leftButtonDown() ? 'L' : null;
       if (!btn) return;
@@ -149,6 +177,14 @@ export class MainScene extends Phaser.Scene {
       this.scene.restart();
     });
 
+    // 标题界面按 M 切换曲目
+    this.input.keyboard!.on('keydown-M', () => {
+      if (this.state === 'title') {
+        cycleTrack();
+        this.showTitleText();
+      }
+    });
+
     // 原型调试键：F 直接充满 ComboMeter，便于快速验证 Fever Time
     this.input.keyboard!.on('keydown-F', () => {
       if (this.state === 'playing' || this.state === 'intermission') {
@@ -162,16 +198,50 @@ export class MainScene extends Phaser.Scene {
 
   private showTitle(): void {
     this.add.rectangle(640, 360, 1280, 720, 0x000000, 0.6).setDepth(19).setName('titleOverlay');
+    this.showTitleText();
+    // 异步注册 public/music/tracks.json 里的用户自备歌曲，加载到后刷新标题
+    void loadUserTracks().then((added) => {
+      if (added && this.state === 'title') this.showTitleText();
+    });
+  }
+
+  private showTitleText(): void {
+    const trackLine =
+      TRACKS.length > 1
+        ? `♪ 曲目：${getSelectedTrack().name}（M 切换）`
+        : `♪ 曲目：${getSelectedTrack().name}`;
     this.hud.message(
       '音乐弹幕原型\n\n' +
-        'WASD 移动 · 鼠标瞄准\n左键=轻攻击 · 右键=重攻击（按节拍连段）\n空格=闪避（踩拍消耗减半并清弹）\n\n点击开始'
+        'WASD 移动 · 鼠标瞄准\n左键=轻攻击 · 右键=重攻击（按节拍连段）\n空格=闪避（踩拍消耗减半并清弹）\n\n' +
+        `${trackLine}\n\n点击开始`
     );
   }
 
-  private startGame(): void {
+  private async startGame(): Promise<void> {
+    this.state = 'loading';
+    const gen = this.generation;
+    let track: TrackDef = getSelectedTrack();
+
+    if (track.kind === 'file') {
+      this.hud.message('加载音乐中…');
+      try {
+        await this.music.prepare(track);
+      } catch (err) {
+        console.warn('音乐加载失败，回退到内置合成曲', err);
+        track = TRACKS[0];
+      }
+      // 加载期间被 R 重开：放弃本次启动
+      if (gen !== this.generation || this.state !== 'loading') return;
+    }
+
     this.children.getByName('titleOverlay')?.destroy();
     this.hud.message('');
-    this.conductor.start();
+    this.conductor.setBpm(track.bpm);
+    // 歌曲有前奏时给足前导时间（上限 1.2s，太长的前奏从中间切入）
+    const lead =
+      track.kind === 'file' ? Phaser.Math.Clamp(track.firstBeatOffset + 0.1, 0.2, 1.2) : 0.2;
+    this.conductor.start(lead);
+    this.music.start(this.conductor, track);
     this.state = 'intermission';
     this.time.delayedCall(400, () => this.startWave(0));
   }
@@ -219,7 +289,7 @@ export class MainScene extends Phaser.Scene {
 
   onPlayerDied(): void {
     this.state = 'over';
-    this.player.go.setAlpha(0.3);
+    this.player.die();
     this.hud.message('FAILED...\n\n按 R 重新开始');
   }
 
