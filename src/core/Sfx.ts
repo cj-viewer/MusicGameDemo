@@ -1,6 +1,4 @@
-/**
- * 程序合成音效：原型阶段无音频资源，全部用 WebAudio 现场合成。
- */
+/** 战斗反馈使用 WebAudio 合成；轻重节拍喊声由 Conductor 播放外部采样。 */
 export class Sfx {
   private ctx: AudioContext | null;
 
@@ -63,6 +61,11 @@ export class Sfx {
   /** 玩家受伤 */
   hurt(): void {
     this.tone(140, 60, 0.18, 'square', 0.18);
+  }
+
+  /** Enemy hit, deliberately lighter than player damage. */
+  enemyHurt(): void {
+    this.tone(520, 260, 0.1, 'triangle', 0.1);
   }
 
   /** 踩拍闪避的震荡波 */

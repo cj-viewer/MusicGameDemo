@@ -7,35 +7,34 @@ export const INPUT_WINDOW = 0.2;
 
 export type InputResult =
   | { type: 'correct'; beatIdx: number; globalBeat: number }
+  | { type: 'protectedCorrect'; beatIdx: number; globalBeat: number }
   | { type: 'wrong'; beatIdx: number }
-  | { type: 'ignored'; reason: 'locked' | 'protected' | 'consumed' | 'notStarted' };
+  | { type: 'ignored'; reason: 'protected' | 'consumed' | 'notStarted' };
 
 export interface BeatTickResult {
   /** 本拍需要系统自动演示的攻击拍序号（0~3） */
   demoAttack?: number;
   /** 自动演示是否在本拍结束 */
   demoEnded?: boolean;
-  /** Fever Time 是否在本拍结束 */
-  feverEnded?: boolean;
 }
 
 /** Fever Time 持续拍数（4 小节） */
 export const FEVER_DURATION_BEATS = 16;
+export const FEVER_ENERGY_MULTIPLIER = 3;
+export const FEVER_ACTIVE_GAIN_SCALE = 0.5;
 
 const LEVEL_DAMAGE_BONUS = [0, 0.1, 0.15, 0.2, 0.25, 0.3];
 
 /**
  * 轻重连段判定 + ComboMeter。
  * 规则见《简化玩法策划案（原型版）》：
- * - 窗口内按对 → 攻击 + Meter+2%；按错/窗口外 → 本小节锁定 + Meter 清零；
+ * - 窗口内按对会积攒 Fever 能量；错误输入不积攒，但不会清空或锁定小节；
  * - 空拍无惩罚；换武器后到自动演示结束为保护期（输入忽略、不清零）。
  */
 export class ComboSystem {
   progress = 0;
   pattern: [BeatKey, BeatKey, BeatKey, BeatKey];
 
-  /** 错误锁定持续到该整数拍（该拍起恢复输入） */
-  private lockedUntilBeat = -1;
   /** 保护期（切换武器 + 自动演示）持续到该整数拍 */
   private protectedUntilBeat = -1;
   private demoStart = -1;
@@ -71,15 +70,19 @@ export class ComboSystem {
     return Phaser.Math.Clamp((this.feverUntilBeat - bf) / FEVER_DURATION_BEATS, 0, 1);
   }
 
+  /** 按浮点拍位置精确结束 Fever，避免小数拍回充被量化成整拍。 */
+  updateFever(): boolean {
+    if (this.feverUntilBeat <= 0) return false;
+    if (this.conductor.beatFloatAt(this.conductor.now()) < this.feverUntilBeat) return false;
+    this.feverUntilBeat = -1;
+    this.progress = 0;
+    return true;
+  }
+
   /** Meter 满时进入 Fever Time；结束后 Meter 清零重新积累 */
   startFever(): void {
     const bf = this.conductor.beatFloatAt(this.conductor.now());
     this.feverUntilBeat = Math.floor(Math.max(bf, 0)) + FEVER_DURATION_BEATS;
-  }
-
-  /** 当前小节是否处于错误锁定状态 */
-  isLocked(): boolean {
-    return this.conductor.beatFloatAt(this.conductor.now()) < this.lockedUntilBeat;
   }
 
   isProtected(): boolean {
@@ -94,39 +97,66 @@ export class ComboSystem {
   handleInput(btn: BeatKey, t: number): InputResult {
     if (!this.conductor.started) return { type: 'ignored', reason: 'notStarted' };
     const bf = this.conductor.beatFloatAt(t);
-    if (bf < this.protectedUntilBeat) return { type: 'ignored', reason: 'protected' };
-    if (bf < this.lockedUntilBeat) return { type: 'ignored', reason: 'locked' };
+    if (bf < this.protectedUntilBeat) {
+      // 下一完整小节由系统独占演示，避免玩家输入与自动攻击重复计分。
+      if (bf >= this.demoStart) return { type: 'ignored', reason: 'protected' };
+      const { n, offset } = this.conductor.nearestBeat(t);
+      if (
+        Math.abs(offset) <= INPUT_WINDOW &&
+        n >= 0 &&
+        n !== this.consumedBeat &&
+        btn === this.pattern[n % 4]
+      ) {
+        this.consumedBeat = n;
+        this.addCorrectInputProgress(2);
+        return { type: 'protectedCorrect', beatIdx: n % 4, globalBeat: n };
+      }
+      if (n >= 0 && n !== this.consumedBeat) {
+        this.consumedBeat = n;
+        return { type: 'wrong', beatIdx: n % 4 };
+      }
+      return { type: 'ignored', reason: 'consumed' };
+    }
 
     const { n, offset } = this.conductor.nearestBeat(t);
+    if (n >= 0 && n === this.consumedBeat) {
+      return { type: 'ignored', reason: 'consumed' };
+    }
 
     if (Math.abs(offset) > INPUT_WINDOW || n < 0) {
-      this.fail(bf);
+      if (n >= 0) this.consumedBeat = n;
       return { type: 'wrong', beatIdx: ((n % 4) + 4) % 4 };
-    }
-    if (n === this.consumedBeat) {
-      return { type: 'ignored', reason: 'consumed' };
     }
 
     const beatIdx = n % 4;
     if (btn === this.pattern[beatIdx]) {
       this.consumedBeat = n;
-      this.progress = Math.min(100, this.progress + 2);
+      this.addCorrectInputProgress(2);
       return { type: 'correct', beatIdx, globalBeat: n };
     }
 
-    this.fail(bf);
+    this.consumedBeat = n;
     return { type: 'wrong', beatIdx };
   }
 
-  /** 踩拍闪避等额外奖励 */
+  /** 所有 Fever 能量来源统一按当前获取倍率结算。 */
   addProgress(amount: number): void {
-    this.progress = Math.min(100, this.progress + amount);
+    this.progress = Math.min(100, this.progress + amount * FEVER_ENERGY_MULTIPLIER);
   }
 
-  private fail(beatFloat: number): void {
-    this.progress = 0;
-    // 锁定到当前小节结束
-    this.lockedUntilBeat = (Math.floor(Math.max(beatFloat, 0) / 4) + 1) * 4;
+  private addCorrectInputProgress(amount: number): void {
+    if (!this.feverActive()) {
+      this.addProgress(amount);
+      return;
+    }
+
+    const gainedEnergy = amount * FEVER_ENERGY_MULTIPLIER * FEVER_ACTIVE_GAIN_SCALE;
+    const extensionBeats = (gainedEnergy / 100) * FEVER_DURATION_BEATS;
+    const beatFloat = Math.max(0, this.conductor.beatFloatAt(this.conductor.now()));
+    this.feverUntilBeat = Math.min(
+      beatFloat + FEVER_DURATION_BEATS,
+      this.feverUntilBeat + extensionBeats
+    );
   }
 
   /**
@@ -139,7 +169,6 @@ export class ComboSystem {
     this.demoStart = m0;
     this.demoEnd = m0 + 4;
     this.protectedUntilBeat = m0 + 4;
-    this.lockedUntilBeat = -1;
     this.consumedBeat = -1;
   }
 
@@ -147,17 +176,12 @@ export class ComboSystem {
     const result: BeatTickResult = {};
     if (info.globalBeat >= this.demoStart && info.globalBeat < this.demoEnd) {
       result.demoAttack = info.beatInMeasure;
-      this.progress = Math.min(100, this.progress + 2);
+      this.addProgress(2);
     }
     if (info.globalBeat === this.demoEnd) {
       result.demoEnded = true;
       this.demoStart = -1;
       this.demoEnd = -1;
-    }
-    if (this.feverUntilBeat > 0 && info.globalBeat >= this.feverUntilBeat) {
-      this.feverUntilBeat = -1;
-      this.progress = 0;
-      result.feverEnded = true;
     }
     return result;
   }
