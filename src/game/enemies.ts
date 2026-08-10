@@ -2,19 +2,16 @@ import Phaser from 'phaser';
 import type { BeatInfo } from '../core/Conductor';
 import type { MainScene } from '../scenes/MainScene';
 
-export type EnemyKind = 'smallGuard' | 'midGuard' | 'bigFan';
+export type EnemyKind = 'smallGuard' | 'midGuard' | 'fan';
 
-interface ShapeWithBody extends Phaser.GameObjects.Shape {
-  body: Phaser.Physics.Arcade.Body;
-}
+type EnemyVisual = Phaser.GameObjects.Shape | Phaser.GameObjects.Image;
+type VisualWithBody = EnemyVisual & { body: Phaser.Physics.Arcade.Body };
 
-/**
- * 敌人基类：自由移动（每帧 update），攻击行为由节拍驱动（onBeat）。
- */
+/** 敌人基类：移动逐帧更新，攻击和方向重选由节拍驱动。 */
 export abstract class Enemy {
   abstract readonly kind: EnemyKind;
   scene: MainScene;
-  go: ShapeWithBody;
+  go: VisualWithBody;
   hp: number;
   maxHp: number;
   radius: number;
@@ -23,10 +20,12 @@ export abstract class Enemy {
   private hpBarBg: Phaser.GameObjects.Rectangle;
   private hpBar: Phaser.GameObjects.Rectangle;
   private baseColor: number;
+  private knockbackUntil = 0;
+  private knockbackVelocity = new Phaser.Math.Vector2();
 
-  constructor(scene: MainScene, go: Phaser.GameObjects.Shape, hp: number, radius: number, color: number) {
+  constructor(scene: MainScene, go: EnemyVisual, hp: number, radius: number, color: number) {
     this.scene = scene;
-    this.go = go as ShapeWithBody;
+    this.go = go as VisualWithBody;
     this.hp = hp;
     this.maxHp = hp;
     this.radius = radius;
@@ -49,7 +48,11 @@ export abstract class Enemy {
 
   update(dtMs: number): void {
     if (this.dead) return;
-    this.move(dtMs);
+    if (this.scene.time.now < this.knockbackUntil) {
+      this.go.body.setVelocity(this.knockbackVelocity.x, this.knockbackVelocity.y);
+    } else {
+      this.move(dtMs);
+    }
     const bx = this.go.x - 14;
     const by = this.go.y - this.radius - 12;
     this.hpBarBg.setPosition(bx, by);
@@ -60,12 +63,19 @@ export abstract class Enemy {
   abstract onBeat(info: BeatInfo): void;
   protected abstract move(dtMs: number): void;
 
-  takeDamage(amount: number): void {
+  takeDamage(amount: number, knockbackAngle?: number, knockbackSpeed = 0): void {
     if (this.dead) return;
     this.hp -= amount;
-    this.go.setFillStyle(0xffffff);
+    if (knockbackAngle !== undefined && knockbackSpeed > 0) {
+      this.knockbackVelocity.setToPolar(knockbackAngle, knockbackSpeed);
+      this.knockbackUntil = this.scene.time.now + 160;
+      this.go.body.setVelocity(this.knockbackVelocity.x, this.knockbackVelocity.y);
+    }
+    this.scene.queueBeatSfx('enemyHurt');
+    this.scene.spawnImpactFx(this.x, this.y, 0xef4444, false);
+    this.setVisualColor(0xffffff);
     this.scene.time.delayedCall(80, () => {
-      if (!this.dead) this.go.setFillStyle(this.baseColor);
+      if (!this.dead) this.restoreVisualColor();
     });
     if (this.hp <= 0) {
       this.die();
@@ -74,7 +84,6 @@ export abstract class Enemy {
 
   protected die(): void {
     this.dead = true;
-    this.scene.sfx.enemyDie();
     this.hpBarBg.destroy();
     this.hpBar.destroy();
     this.go.body.enable = false;
@@ -104,9 +113,23 @@ export abstract class Enemy {
     return Phaser.Math.Angle.Between(this.x, this.y, p.x, p.y);
   }
 
+  protected approachVelocity(targetX: number, targetY: number, dtMs: number, acceleration: number): void {
+    const maxChange = acceleration * Math.min(dtMs, 50) / 1000;
+    const velocity = this.go.body.velocity;
+    this.go.body.setVelocity(
+      this.moveTowards(velocity.x, targetX, maxChange),
+      this.moveTowards(velocity.y, targetY, maxChange)
+    );
+  }
+
+  private moveTowards(current: number, target: number, maxChange: number): number {
+    if (Math.abs(target - current) <= maxChange) return target;
+    return current + Math.sign(target - current) * maxChange;
+  }
+
   /** 蓄力/预警闪烁 */
   protected telegraph(): void {
-    this.go.setFillStyle(0xffffff);
+    this.setVisualColor(0xffd166);
     this.scene.tweens.add({
       targets: this.go,
       alpha: 0.5,
@@ -115,60 +138,59 @@ export abstract class Enemy {
       repeat: 1,
       onComplete: () => {
         if (!this.dead) {
-          this.go.setFillStyle(this.baseColor);
+          this.restoreVisualColor();
           this.go.setAlpha(1);
         }
       }
     });
   }
+
+  private setVisualColor(color: number): void {
+    if (this.go instanceof Phaser.GameObjects.Shape) this.go.setFillStyle(color);
+    else this.go.setTint(color);
+  }
+
+  private restoreVisualColor(): void {
+    if (this.go instanceof Phaser.GameObjects.Shape) this.go.setFillStyle(this.baseColor);
+    else this.go.clearTint();
+  }
 }
 
-/**
- * 小型保安（蓝色方块）：追击玩家。
- * 节拍行为：1拍横扫 → 2拍蓄力 → 3拍突进 → 4拍终点重击。
- */
+/** 小型保安：卡拍追击，每小节第 1 拍发射一枚直线弹。 */
 export class SmallGuard extends Enemy {
   readonly kind = 'smallGuard';
-  private static readonly CHASE_SPEED = 90;
-  private dashUntil = 0;
+  // 120 BPM 下每拍位移为 0.4s * 30 + 0.1s * 105 = 22.5px，平均速度为原 90px/s 的一半。
+  private static readonly DRIFT_SPEED = 30;
+  private static readonly BEAT_STEP_SPEED = 105;
+  private static readonly BEAT_STEP_WINDOW = 0.1;
+  private movementAngle = 0;
 
   constructor(scene: MainScene, x: number, y: number) {
-    super(scene, scene.add.rectangle(x, y, 26, 26, 0x60a5fa), 40, 15, 0x60a5fa);
+    super(scene, scene.add.image(x, y, 'guard').setDisplaySize(46, 70), 40, 17, 0xffffff);
+    this.go.body.setCircle(17);
+    this.chooseMovementAngle();
   }
 
   onBeat(info: BeatInfo): void {
     if (this.dead) return;
+    this.chooseMovementAngle();
+    if (info.beatInMeasure !== 0) return;
     const angle = this.angleToPlayer();
-    switch (info.beatInMeasure) {
-      case 0: // 横扫
-        this.scene.spawnArcFx(this.x, this.y, angle, 60, 60, 0xf87171);
-        if (this.distToPlayer() < 60 + 16) this.scene.player.takeDamage(10);
-        break;
-      case 1: // 蓄力预警
-        this.telegraph();
-        break;
-      case 2: { // 突进
-        const v = this.scene.physics.velocityFromRotation(angle, 380);
-        this.go.body.setVelocity(v.x, v.y);
-        this.dashUntil = this.scene.time.now + 250;
-        break;
-      }
-      case 3: // 终点重击
-        this.scene.spawnArcFx(this.x, this.y, angle, 75, 70, 0xef4444);
-        if (this.distToPlayer() < 75 + 16) this.scene.player.takeDamage(15);
-        break;
-    }
+    this.scene.spawnEnemyProjectile(this.x, this.y, angle, 12, 0x3b82f6);
   }
 
-  protected move(_dtMs: number): void {
-    if (this.scene.time.now < this.dashUntil) return; // 突进期间保持冲刺速度
-    const dist = this.distToPlayer();
-    if (dist > 55) {
-      const v = this.scene.physics.velocityFromRotation(this.angleToPlayer(), SmallGuard.CHASE_SPEED);
-      this.go.body.setVelocity(v.x, v.y);
-    } else {
-      this.go.body.setVelocity(0, 0);
-    }
+  protected move(dtMs: number): void {
+    const stepping = this.scene.conductor.timeToNextBeat(this.scene.conductor.now()) <= SmallGuard.BEAT_STEP_WINDOW;
+    const speed = stepping ? SmallGuard.BEAT_STEP_SPEED : SmallGuard.DRIFT_SPEED;
+    const v = this.scene.physics.velocityFromRotation(this.movementAngle, speed);
+    this.approachVelocity(v.x, v.y, dtMs, stepping ? 650 : 420);
+  }
+
+  private chooseMovementAngle(): void {
+    // 近身时扩大离散角，避免大批保安持续瞄准同一点并排成规则圆环。
+    const maxOffset = this.distToPlayer() < 90 ? 70 : 24;
+    const offset = Phaser.Math.FloatBetween(-maxOffset, maxOffset);
+    this.movementAngle = this.angleToPlayer() + Phaser.Math.DegToRad(offset);
   }
 }
 
@@ -179,34 +201,22 @@ export class SmallGuard extends Enemy {
 export class MidGuard extends Enemy {
   readonly kind = 'midGuard';
   private aiming = false;
+  private lockedAngle = 0;
   private laserGfx: Phaser.GameObjects.Graphics;
 
   constructor(scene: MainScene, x: number, y: number) {
-    super(scene, scene.add.triangle(x, y, 0, 32, 16, 0, 32, 32, 0x3b82f6), 60, 18, 0x3b82f6);
+    super(scene, scene.add.image(x, y, 'guard').setDisplaySize(52, 78), 60, 18, 0xffffff);
+    this.go.body.setCircle(18);
+    this.lockedAngle = this.angleToPlayer();
     this.laserGfx = scene.add.graphics().setDepth(2);
   }
 
   onBeat(info: BeatInfo): void {
-    if (this.dead) return;
-    if (info.beatInMeasure === 0 || info.beatInMeasure === 2) {
-      this.aiming = true;
-    } else {
-      // 固定当前方向发射一组聚焦弹幕
-      this.aiming = false;
-      const angle = this.angleToPlayer();
-      for (let i = 0; i < 3; i++) {
-        const offset = i * 16;
-        this.scene.spawnBullet(
-          this.x + Math.cos(angle) * (this.radius + 6 + offset),
-          this.y + Math.sin(angle) * (this.radius + 6 + offset),
-          angle,
-          300,
-          10,
-          0xfb7185
-        );
-      }
-      this.flashLaser(angle);
-    }
+    if (this.dead || info.beatInMeasure !== 0) return;
+    this.lockedAngle = this.angleToPlayer();
+    this.aiming = false;
+    this.scene.spawnEnemyProjectile(this.x, this.y, this.lockedAngle, 12, 0x3b82f6);
+    this.flashLaser(this.lockedAngle);
   }
 
   update(dtMs: number): void {
@@ -214,22 +224,23 @@ export class MidGuard extends Enemy {
     this.laserGfx.clear();
     if (!this.dead && this.aiming) {
       const p = this.scene.player;
+      this.lockedAngle = this.angleToPlayer();
       this.laserGfx.lineStyle(2, 0xff4444, 0.35);
       this.laserGfx.lineBetween(this.x, this.y, p.x, p.y);
     }
   }
 
-  protected move(_dtMs: number): void {
+  protected move(dtMs: number): void {
     const dist = this.distToPlayer();
     const angle = this.angleToPlayer();
     if (dist > 340) {
       const v = this.scene.physics.velocityFromRotation(angle, 80);
-      this.go.body.setVelocity(v.x, v.y);
+      this.approachVelocity(v.x, v.y, dtMs, 140);
     } else if (dist < 240) {
       const v = this.scene.physics.velocityFromRotation(angle + Math.PI, 80);
-      this.go.body.setVelocity(v.x, v.y);
+      this.approachVelocity(v.x, v.y, dtMs, 140);
     } else {
-      this.go.body.setVelocity(0, 0);
+      this.approachVelocity(0, 0, dtMs, 170);
     }
   }
 
@@ -255,52 +266,38 @@ export class MidGuard extends Enemy {
   }
 }
 
-/**
- * 大型粉丝（粉色大圆）：保持远距离。
- * 节拍行为：1~3拍每拍朝玩家发射 1 枚直线弹幕 → 4拍发射扇形弹幕（5 枚）。
- */
-export class BigFan extends Enemy {
-  readonly kind = 'bigFan';
+/** 粉丝临时复用小型保安的卡拍移动与每小节单发攻击。 */
+export class FanEnemy extends Enemy {
+  readonly kind = 'fan';
+  private static readonly DRIFT_SPEED = 30;
+  private static readonly BEAT_STEP_SPEED = 105;
+  private static readonly BEAT_STEP_WINDOW = 0.1;
+  private movementAngle = 0;
 
   constructor(scene: MainScene, x: number, y: number) {
-    super(scene, scene.add.circle(x, y, 28, 0xf472b6), 90, 28, 0xf472b6);
-    this.go.body.setCircle(28);
+    super(scene, scene.add.image(x, y, 'fan').setDisplaySize(54, 76), 40, 17, 0xffffff);
+    this.go.body.setCircle(17);
+    this.chooseMovementAngle();
   }
 
   onBeat(info: BeatInfo): void {
     if (this.dead) return;
+    this.chooseMovementAngle();
+    if (info.beatInMeasure !== 0) return;
     const angle = this.angleToPlayer();
-    const spawnX = this.x + Math.cos(angle) * (this.radius + 8);
-    const spawnY = this.y + Math.sin(angle) * (this.radius + 8);
-    if (info.beatInMeasure < 3) {
-      this.scene.spawnBullet(spawnX, spawnY, angle, 200, 10, 0xfb7185);
-      if (info.beatInMeasure === 2) this.telegraph(); // 对焦闪烁，预告扇形弹幕
-    } else {
-      for (let i = -2; i <= 2; i++) {
-        const a = angle + Phaser.Math.DegToRad(i * 20);
-        this.scene.spawnBullet(
-          this.x + Math.cos(a) * (this.radius + 8),
-          this.y + Math.sin(a) * (this.radius + 8),
-          a,
-          220,
-          12,
-          0xfda4af
-        );
-      }
-    }
+    this.scene.spawnEnemyProjectile(this.x, this.y, angle, 12, 0x3b82f6);
   }
 
-  protected move(_dtMs: number): void {
-    const dist = this.distToPlayer();
-    const angle = this.angleToPlayer();
-    if (dist > 430) {
-      const v = this.scene.physics.velocityFromRotation(angle, 50);
-      this.go.body.setVelocity(v.x, v.y);
-    } else if (dist < 330) {
-      const v = this.scene.physics.velocityFromRotation(angle + Math.PI, 50);
-      this.go.body.setVelocity(v.x, v.y);
-    } else {
-      this.go.body.setVelocity(0, 0);
-    }
+  protected move(dtMs: number): void {
+    const stepping = this.scene.conductor.timeToNextBeat(this.scene.conductor.now()) <= FanEnemy.BEAT_STEP_WINDOW;
+    const speed = stepping ? FanEnemy.BEAT_STEP_SPEED : FanEnemy.DRIFT_SPEED;
+    const v = this.scene.physics.velocityFromRotation(this.movementAngle, speed);
+    this.approachVelocity(v.x, v.y, dtMs, stepping ? 650 : 420);
+  }
+
+  private chooseMovementAngle(): void {
+    const maxOffset = this.distToPlayer() < 90 ? 70 : 24;
+    const offset = Phaser.Math.FloatBetween(-maxOffset, maxOffset);
+    this.movementAngle = this.angleToPlayer() + Phaser.Math.DegToRad(offset);
   }
 }
