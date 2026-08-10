@@ -62,11 +62,11 @@ export class MainScene extends Phaser.Scene {
 
   preload(): void {
     const asset = (file: string): string => `${import.meta.env.BASE_URL}assets/${file}`;
-    this.load.image('guard', asset('guard.png'));
-    this.load.image('fan', asset('fan.png'));
-    this.load.image('player', asset('player.png'));
-    this.load.audio('beat-light', asset('beat-light.mp3'));
-    this.load.audio('beat-heavy', asset('beat-heavy.mp3'));
+    this.load.image('guard', asset('images/characters/guard.png'));
+    this.load.image('fan', asset('images/characters/fan.png'));
+    this.load.image('player', asset('images/characters/player.png'));
+    this.load.audio('beat-light', asset('audio/sfx/sfx-beat-light.mp3'));
+    this.load.audio('beat-heavy', asset('audio/sfx/sfx-beat-heavy.mp3'));
   }
 
   create(): void {
