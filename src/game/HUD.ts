@@ -15,6 +15,11 @@ interface NoteView {
   consumed: boolean;
 }
 
+interface MeasureDividerView {
+  left: Phaser.GameObjects.Container;
+  right: Phaser.GameObjects.Container;
+}
+
 /**
  * 战斗 HUD：
  * 判定条为单中心点样式——节奏块（○轻 ◆重）从两侧向中心移动，汇聚到中心点的瞬间即拍点。
@@ -25,8 +30,8 @@ export class HUD {
   private conductor: Conductor;
 
   private notes = new Map<number, NoteView>();
+  private measureDividers = new Map<number, MeasureDividerView>();
   private pattern: BeatKey[] = ['L', 'L', 'L', 'L'];
-  private lockedUntilBeat = -1;
 
   private centerMark: Phaser.GameObjects.Arc;
   private meterGfx: Phaser.GameObjects.Graphics;
@@ -135,6 +140,12 @@ export class HUD {
       if (!this.notes.has(n)) this.spawnNote(n);
     }
 
+    const firstMeasure = Math.max(1, Math.ceil((bf + 0.5) / 4));
+    const lastMeasure = Math.floor((bf + LOOKAHEAD_BEATS + 0.5) / 4);
+    for (let measure = firstMeasure; measure <= lastMeasure; measure++) {
+      if (!this.measureDividers.has(measure)) this.spawnMeasureDivider(measure);
+    }
+
     for (const [n, note] of [...this.notes]) {
       if (note.consumed) continue;
       const beatTime = this.conductor.timeOfBeat(n);
@@ -147,9 +158,23 @@ export class HUD {
       const dx = TRAVEL_DIST * progress;
       note.left.x = BAR_CENTER_X - dx;
       note.right.x = BAR_CENTER_X + dx;
-      const alpha = n < this.lockedUntilBeat ? 0.15 : 0.95;
-      note.left.setAlpha(alpha);
-      note.right.setAlpha(alpha);
+      note.left.setAlpha(0.95);
+      note.right.setAlpha(0.95);
+    }
+
+    for (const [measure, divider] of [...this.measureDividers]) {
+      const boundaryBeat = measure * 4 - 0.5;
+      const boundaryTime = this.conductor.timeOfBeat(boundaryBeat);
+      if (now > boundaryTime + 0.25) {
+        this.killMeasureDivider(measure);
+        continue;
+      }
+      const progress = Math.max(0, (boundaryTime - now) / (this.conductor.beatDur * LOOKAHEAD_BEATS));
+      const dx = TRAVEL_DIST * progress;
+      divider.left.x = BAR_CENTER_X - dx;
+      divider.right.x = BAR_CENTER_X + dx;
+      divider.left.setAlpha(1);
+      divider.right.setAlpha(1);
     }
   }
 
@@ -173,6 +198,30 @@ export class HUD {
       onComplete: () => {
         note.left.destroy();
         note.right.destroy();
+      }
+    });
+  }
+
+  private spawnMeasureDivider(measure: number): void {
+    const make = (): Phaser.GameObjects.Container => {
+      const lineA = this.scene.add.rectangle(-4, 0, 4, 44, 0xf472b6).setStrokeStyle(1, 0xffffff, 0.9);
+      const lineB = this.scene.add.rectangle(4, 0, 4, 44, 0xa855f7).setStrokeStyle(1, 0xffffff, 0.9);
+      return this.scene.add.container(0, BAR_Y, [lineA, lineB]).setDepth(12);
+    };
+    this.measureDividers.set(measure, { left: make(), right: make() });
+  }
+
+  private killMeasureDivider(measure: number): void {
+    const divider = this.measureDividers.get(measure);
+    if (!divider) return;
+    this.measureDividers.delete(measure);
+    this.scene.tweens.add({
+      targets: [divider.left, divider.right],
+      alpha: 0,
+      duration: 120,
+      onComplete: () => {
+        divider.left.destroy(true);
+        divider.right.destroy(true);
       }
     });
   }
@@ -206,12 +255,11 @@ export class HUD {
     });
   }
 
-  /** 错误锁定：本小节剩余节奏块失效变暗，下一小节自动恢复 */
-  setLockedVisual(): void {
-    const bf = this.conductor.beatFloatAt(this.conductor.now());
-    this.lockedUntilBeat = (Math.floor(Math.max(bf, 0) / 4) + 1) * 4;
+  /** 错误输入只提供瞬时反馈，不再锁定本小节。 */
+  flashError(): void {
     this.centerMark.setStrokeStyle(3, 0xef4444, 0.9);
     this.scene.cameras.main.shake(100, 0.003);
+    this.scene.time.delayedCall(180, () => this.centerMark.setStrokeStyle(3, 0xffffff, 0.9));
   }
 
   setPattern(pattern: BeatKey[], weaponName: string): void {
@@ -221,10 +269,7 @@ export class HUD {
     this.weaponText.setText(`${weaponName}　${pattern.map((k) => (k === 'L' ? '轻' : '重')).join(' → ')}`);
   }
 
-  onBeat(beatInMeasure: number): void {
-    if (beatInMeasure === 0 && this.conductor.beatFloatAt(this.conductor.now()) >= this.lockedUntilBeat) {
-      this.centerMark.setStrokeStyle(3, 0xffffff, 0.9);
-    }
+  onBeat(_beatInMeasure: number): void {
     // 中心点随节拍脉冲
     this.centerMark.setScale(1.35);
     this.scene.tweens.add({ targets: this.centerMark, scaleX: 1, scaleY: 1, duration: 160 });

@@ -18,6 +18,9 @@ const config: Phaser.Types.Core.GameConfig = {
       debug: false
     }
   },
+  input: {
+    gamepad: true
+  },
   scene: [MainScene]
 };
 

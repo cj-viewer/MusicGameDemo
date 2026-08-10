@@ -3,31 +3,36 @@ import { Conductor, type BeatInfo } from '../core/Conductor';
 import { Sfx } from '../core/Sfx';
 import { ComboSystem } from '../game/ComboSystem';
 import { HUD } from '../game/HUD';
-import { Player } from '../game/Player';
+import { Player, PLAYER_RADIUS } from '../game/Player';
 import { BATON, GLOWSTICKS, getAttackSpec, type WeaponDef } from '../game/weapons';
-import { BigFan, Enemy, MidGuard, SmallGuard, type EnemyKind } from '../game/enemies';
+import { Enemy, FanEnemy, SmallGuard } from '../game/enemies';
+import { GAMEPAD_BUTTON, rumbleParameters, type RumbleKind } from '../game/GamepadControls';
 
 const BPM = 120;
 const ARENA = { x: 12, y: 12, width: 1256, height: 696 };
+const PLAYER_BULLET_LENGTH = 38;
+const ENEMY_BULLET_LENGTH = 36 * 0.75;
+const BULLET_THICKNESS = 10;
+const ENEMY_BULLET_THICKNESS = BULLET_THICKNESS * 0.75;
+const PLAYER_BULLET_SPEED = 320;
+const ENEMY_DRIFT_SPEED = 6;
+const ENEMY_BEAT_BURST_SPEED = 600;
+const ENEMY_BEAT_BURST_WINDOW = 0.1;
+const PLAYER_BULLET_COLOR = 0xef4444;
+const BATON_BULLET_COLOR = 0xa855f7;
+const GLOWSTICK_KNOCKBACK_SPEED = 150;
+const BATON_KNOCKBACK_SPEED = GLOWSTICK_KNOCKBACK_SPEED * 1.25;
 
 type GameState = 'title' | 'playing' | 'intermission' | 'over';
+type BeatSfxCue = 'playerHurt' | 'feverStart' | 'enemyHurt' | 'pickup';
 
-const WAVES: EnemyKind[][] = [
-  ['smallGuard', 'smallGuard'],
-  ['smallGuard', 'smallGuard', 'midGuard'],
-  ['smallGuard', 'midGuard', 'bigFan']
-];
-
-const SPAWN_POINTS: [number, number][] = [
-  [120, 120],
-  [1160, 120],
-  [120, 600],
-  [1160, 600],
-  [640, 110]
-];
+const WAVE_ENEMY_COUNTS = [2, 4, 8, 16, 32];
 
 interface Pickup {
-  go: Phaser.GameObjects.Rectangle;
+  go: Phaser.GameObjects.Container;
+  parts: Phaser.GameObjects.Rectangle[];
+  colors: number[];
+  baseY: number;
   weapon: WeaponDef;
 }
 
@@ -41,14 +46,27 @@ export class MainScene extends Phaser.Scene {
   private enemies: Enemy[] = [];
   private enemyGroup!: Phaser.Physics.Arcade.Group;
   private bullets!: Phaser.Physics.Arcade.Group;
+  private playerBullets!: Phaser.Physics.Arcade.Group;
   private pickups: Pickup[] = [];
   private state: GameState = 'title';
   private waveIdx = -1;
   private lastComboLevel = 0;
   private feverBorder!: Phaser.GameObjects.Graphics;
+  private rhythmBlocks: Phaser.GameObjects.Rectangle[] = [];
+  private pendingBeatSfx = new Set<BeatSfxCue>();
+  private gamepadButtonState = { dodge: false, attack: false };
 
   constructor() {
     super('MainScene');
+  }
+
+  preload(): void {
+    const asset = (file: string): string => `${import.meta.env.BASE_URL}assets/${file}`;
+    this.load.image('guard', asset('guard.png'));
+    this.load.image('fan', asset('fan.png'));
+    this.load.image('player', asset('player.png'));
+    this.load.audio('beat-light', asset('beat-light.mp3'));
+    this.load.audio('beat-heavy', asset('beat-heavy.mp3'));
   }
 
   create(): void {
@@ -57,11 +75,15 @@ export class MainScene extends Phaser.Scene {
     this.state = 'title';
     this.waveIdx = -1;
     this.lastComboLevel = 0;
+    this.rhythmBlocks = [];
+    this.pendingBeatSfx.clear();
+    this.gamepadButtonState = { dodge: false, attack: false };
 
     this.physics.world.setBounds(ARENA.x, ARENA.y, ARENA.width, ARENA.height);
     const border = this.add.graphics().setDepth(1);
     border.lineStyle(3, 0x475569, 1);
     border.strokeRect(ARENA.x, ARENA.y, ARENA.width, ARENA.height);
+    this.createRhythmEdgeBlocks();
 
     // Fever Time 期间的橙色边框光效（随节拍脉冲）
     this.feverBorder = this.add.graphics().setDepth(7).setAlpha(0);
@@ -75,18 +97,32 @@ export class MainScene extends Phaser.Scene {
     this.player = new Player(this, 640, 400);
 
     this.hud.setPattern(GLOWSTICKS.pattern, GLOWSTICKS.name);
+    this.conductor.setCuePattern(GLOWSTICKS.pattern);
     this.hud.setHp(this.player.hp, this.player.maxHp);
 
     this.enemyGroup = this.physics.add.group();
     this.bullets = this.physics.add.group();
+    this.playerBullets = this.physics.add.group();
 
     this.physics.add.collider(this.player.go, this.enemyGroup);
     this.physics.add.collider(this.enemyGroup, this.enemyGroup);
     this.physics.add.overlap(this.player.go, this.bullets, (_playerGO, bulletGO) => {
       if (this.state !== 'playing') return;
-      const bullet = bulletGO as Phaser.GameObjects.Arc;
+      const bullet = bulletGO as Phaser.GameObjects.Rectangle;
       this.player.takeDamage(bullet.getData('damage') as number);
-      bullet.destroy();
+      this.destroyEnemyBullet(bullet);
+    });
+    this.physics.add.overlap(this.playerBullets, this.enemyGroup, (bulletGO, enemyGO) => {
+      const bullet = bulletGO as Phaser.GameObjects.Rectangle;
+      const enemy = this.enemies.find((candidate) => candidate.go === enemyGO);
+      if (enemy && !enemy.dead) {
+        enemy.takeDamage(
+          bullet.getData('damage') as number,
+          bullet.getData('knockbackAngle') as number | undefined,
+          (bullet.getData('knockbackSpeed') as number | undefined) ?? 0
+        );
+      }
+      this.destroyPlayerBullet(bullet);
     });
 
     this.conductor.on('beat', this.onBeat, this);
@@ -98,11 +134,15 @@ export class MainScene extends Phaser.Scene {
   update(_time: number, delta: number): void {
     this.conductor.update();
     this.hud.update();
+    if (this.combo.updateFever()) this.endFever();
+    this.handleGamepadInput();
 
     if (this.state === 'over' || this.state === 'title') return;
 
-    this.player.update(this.time.now);
+    this.player.update(this.time.now, delta);
     for (const enemy of this.enemies) enemy.update(delta);
+    this.updateEnemyBulletMotion();
+    this.updateBulletTrails(delta);
     this.cleanupBullets();
     this.checkPickups();
 
@@ -125,21 +165,10 @@ export class MainScene extends Phaser.Scene {
 
       const btn = pointer.rightButtonDown() ? 'H' : pointer.leftButtonDown() ? 'L' : null;
       if (!btn) return;
-
-      const result = this.combo.handleInput(btn, this.conductor.now());
-      if (result.type === 'correct') {
-        this.performWeaponAttack(result.beatIdx, false);
-        this.hud.flashSuccess(result.globalBeat);
-        this.refreshComboHUD();
-      } else if (result.type === 'wrong') {
-        this.sfx.error();
-        this.player.errorFlash();
-        this.hud.setLockedVisual();
-        this.refreshComboHUD();
-      }
+      this.handleAttackInput(btn);
     });
 
-    this.input.keyboard!.on('keydown-SPACE', () => {
+    this.input.keyboard!.on('keydown-SHIFT', () => {
       if (this.state === 'playing' || this.state === 'intermission') {
         this.player.tryDodge();
       }
@@ -158,13 +187,76 @@ export class MainScene extends Phaser.Scene {
     });
   }
 
+  private handleAttackInput(btn: 'L' | 'H', pad?: Phaser.Input.Gamepad.Gamepad): void {
+    const result = this.combo.handleInput(btn, this.conductor.now());
+    if (result.type === 'correct' || result.type === 'protectedCorrect') {
+      this.conductor.registerCorrectAttack(result.globalBeat);
+      this.performWeaponAttack(result.beatIdx, false, 5, true);
+      this.hud.flashSuccess(result.globalBeat);
+      this.refreshComboHUD();
+      if (pad) this.rumbleGamepad(pad, btn === 'H' ? 'heavy' : 'light');
+    } else if (result.type === 'wrong') {
+      this.performWeaponAttack(result.beatIdx, false, 1, false);
+      this.sfx.error();
+      this.player.errorFlash();
+      this.hud.flashError();
+    }
+  }
+
+  private handleGamepadInput(): void {
+    const pad = this.input.gamepad?.pad1;
+    if (!pad) {
+      this.gamepadButtonState = { dodge: false, attack: false };
+      return;
+    }
+
+    const current = {
+      dodge: this.isGamepadButtonDown(pad, GAMEPAD_BUTTON.dodge),
+      attack: this.isGamepadButtonDown(pad, GAMEPAD_BUTTON.attack)
+    };
+    const pressed = {
+      dodge: current.dodge && !this.gamepadButtonState.dodge,
+      attack: current.attack && !this.gamepadButtonState.attack
+    };
+    this.gamepadButtonState = current;
+
+    if (this.state === 'title' && (pressed.dodge || pressed.attack)) {
+      this.startGame();
+      return;
+    }
+    if (this.state !== 'playing' && this.state !== 'intermission') return;
+
+    if (pressed.dodge && this.player.tryDodge()) this.rumbleGamepad(pad, 'dodge');
+    if (pressed.attack) this.handleAttackInput(this.gamepadBeatKey(), pad);
+  }
+
+  private gamepadBeatKey(): 'L' | 'H' {
+    const nearestBeat = this.conductor.nearestBeat(this.conductor.now()).n;
+    const beatInMeasure = ((nearestBeat % 4) + 4) % 4;
+    return this.combo.pattern[beatInMeasure];
+  }
+
+  private isGamepadButtonDown(pad: Phaser.Input.Gamepad.Gamepad, index: number): boolean {
+    return index < pad.buttons.length && pad.getButtonValue(index) > 0.5;
+  }
+
+  private rumbleGamepad(pad: Phaser.Input.Gamepad.Gamepad, kind: RumbleKind): void {
+    const actuator = pad.vibration;
+    if (!actuator?.playEffect) return;
+    try {
+      void actuator.playEffect('dual-rumble', rumbleParameters(kind)).catch(() => undefined);
+    } catch {
+      // 部分浏览器会暴露执行器但拒绝调用；输入本身不应受影响。
+    }
+  }
+
   // ---------- 流程 ----------
 
   private showTitle(): void {
     this.add.rectangle(640, 360, 1280, 720, 0x000000, 0.6).setDepth(19).setName('titleOverlay');
     this.hud.message(
       '音乐弹幕原型\n\n' +
-        'WASD 移动 · 鼠标瞄准\n左键=轻攻击 · 右键=重攻击（按节拍连段）\n空格=闪避（踩拍消耗减半并清弹）\n\n点击开始'
+        'WASD 移动 · 鼠标瞄准\n左键=轻攻击 · 右键=重攻击（按节拍连段）\nShift=沿移动方向冲刺（踩拍消耗减半并清弹）\n\n点击开始'
     );
   }
 
@@ -180,30 +272,31 @@ export class MainScene extends Phaser.Scene {
     if (this.state === 'over') return;
     this.waveIdx = idx;
     this.state = 'playing';
-    this.hud.setWave(`Wave ${idx + 1} / ${WAVES.length}`);
+    this.hud.setWave(`Wave ${idx + 1} / ${WAVE_ENEMY_COUNTS.length}`);
     this.flashMessage(`WAVE ${idx + 1}`);
 
-    WAVES[idx].forEach((kind, i) => {
-      const [x, y] = SPAWN_POINTS[i % SPAWN_POINTS.length];
-      let enemy: Enemy;
-      if (kind === 'smallGuard') enemy = new SmallGuard(this, x, y);
-      else if (kind === 'midGuard') enemy = new MidGuard(this, x, y);
-      else enemy = new BigFan(this, x, y);
+    const enemyCount = WAVE_ENEMY_COUNTS[idx];
+    for (let i = 0; i < enemyCount; i++) {
+      const [x, y] = this.spawnPointOnArenaEdge(i, enemyCount);
+      const enemy: Enemy = i % 2 === 0
+        ? new SmallGuard(this, x, y)
+        : new FanEnemy(this, x, y);
       this.enemies.push(enemy);
       this.enemyGroup.add(enemy.go);
-    });
+    }
   }
 
   onEnemyKilled(enemy: Enemy): void {
     this.enemies = this.enemies.filter((e) => e !== enemy);
 
-    // 小型保安掉落伸缩警棍
-    if (enemy.kind === 'smallGuard') {
-      this.spawnPickup(enemy.x, enemy.y, BATON);
+    // 保安掉警棍，粉丝掉荧光棒；玩家已持有或场上已有时不重复生成。
+    const drop = enemy.kind === 'smallGuard' ? BATON : enemy.kind === 'fan' ? GLOWSTICKS : undefined;
+    if (drop && this.player.weapon.id !== drop.id && !this.pickups.some((pickup) => pickup.weapon.id === drop.id)) {
+      this.spawnPickup(enemy.x, enemy.y, drop);
     }
 
     if (this.enemies.length === 0 && this.state === 'playing') {
-      if (this.waveIdx >= WAVES.length - 1) {
+      if (this.waveIdx >= WAVE_ENEMY_COUNTS.length - 1) {
         this.state = 'over';
         this.hud.message('VICTORY!\n\n按 R 重新开始');
       } else {
@@ -217,10 +310,51 @@ export class MainScene extends Phaser.Scene {
     }
   }
 
+  private spawnPointOnArenaEdge(index: number, total: number): [number, number] {
+    const margin = 70;
+    const left = ARENA.x + margin;
+    const right = ARENA.x + ARENA.width - margin;
+    const top = ARENA.y + margin;
+    const bottom = ARENA.y + ARENA.height - margin;
+    const width = right - left;
+    const height = bottom - top;
+    const perimeter = 2 * (width + height);
+    let distance = (index / total) * perimeter;
+
+    if (distance <= width) return [left + distance, top];
+    distance -= width;
+    if (distance <= height) return [right, top + distance];
+    distance -= height;
+    if (distance <= width) return [right - distance, bottom];
+    distance -= width;
+    return [left, bottom - distance];
+  }
+
   onPlayerDied(): void {
     this.state = 'over';
     this.player.go.setAlpha(0.3);
     this.hud.message('FAILED...\n\n按 R 重新开始');
+  }
+
+  getAssistedAimAngle(mouseAngle: number): number {
+    let nearest: Enemy | undefined;
+    let nearestDistance = Infinity;
+    const halfAssistCone = Math.PI / 4;
+
+    for (const enemy of this.enemies) {
+      if (enemy.dead) continue;
+      const enemyAngle = Phaser.Math.Angle.Between(this.player.x, this.player.y, enemy.x, enemy.y);
+      if (Math.abs(Phaser.Math.Angle.Wrap(enemyAngle - mouseAngle)) > halfAssistCone) continue;
+      const distance = Phaser.Math.Distance.Between(this.player.x, this.player.y, enemy.x, enemy.y);
+      if (distance < nearestDistance) {
+        nearest = enemy;
+        nearestDistance = distance;
+      }
+    }
+
+    return nearest
+      ? Phaser.Math.Angle.Between(this.player.x, this.player.y, nearest.x, nearest.y)
+      : mouseAngle;
   }
 
   private flashMessage(text: string): void {
@@ -233,28 +367,24 @@ export class MainScene extends Phaser.Scene {
   // ---------- 节拍 ----------
 
   private onBeat(info: BeatInfo): void {
-    if (this.state === 'over' || this.state === 'title') return;
+    if (this.state === 'title') return;
+    this.playQueuedBeatSfx();
+    if (this.state === 'over') return;
 
     this.player.onBeat();
     this.hud.onBeat(info.beatInMeasure);
+    this.pulseRhythmEdgeBlocks(this.combo.pattern[info.beatInMeasure] === 'H');
+    this.pulsePickups();
 
     const tick = this.combo.onBeat(info);
     if (tick.demoAttack !== undefined) {
       this.hud.setState('自动演示中…');
-      this.performWeaponAttack(tick.demoAttack, true);
+      this.performWeaponAttack(tick.demoAttack, true, 5, true);
       this.hud.flashSuccess(info.globalBeat);
       this.refreshComboHUD();
     }
     if (tick.demoEnded) {
       this.hud.setState('');
-    }
-
-    if (tick.feverEnded) {
-      this.sfx.feverEnd();
-      this.hud.setFever(false);
-      this.tweens.add({ targets: this.feverBorder, alpha: 0, duration: 300 });
-      this.lastComboLevel = 0; // Fever 结束清零不再额外播放 comboBreak 音
-      this.refreshComboHUD();
     }
 
     // 节拍脉冲：平时按 Combo 等级增强（积累感），Fever 期间最强并闪烁边框
@@ -272,28 +402,44 @@ export class MainScene extends Phaser.Scene {
 
   // ---------- 攻击 ----------
 
-  private performWeaponAttack(beatIdx: number, _demo: boolean): void {
+  private performWeaponAttack(beatIdx: number, _demo: boolean, pelletCount: number, enableFever: boolean): void {
     const weapon = this.player.weapon;
     const spec = getAttackSpec(weapon.id, beatIdx);
     const mult = this.combo.damageMultiplier;
     const heavy = weapon.pattern[beatIdx] === 'H';
     const angle = this.player.aimAngle;
 
-    if (spec.kind === 'arc') {
-      this.sfx.attack(heavy);
-      this.spawnArcFx(this.player.x, this.player.y, angle, spec.radius, spec.halfArcDeg, spec.color);
-      this.damageEnemiesInArc(this.player.x, this.player.y, angle, spec.radius, spec.halfArcDeg, spec.damage * mult);
-    } else if (spec.kind === 'charge') {
-      this.sfx.attack(heavy);
+    const damage = spec.kind === 'charge' ? 8 : spec.damage;
+    this.sfx.attack(heavy);
+    this.player.playAttackAnimation(angle);
+    if (weapon.id === 'baton') {
+      this.spawnBatonSweep(
+        this.player.x,
+        this.player.y,
+        angle,
+        damage * mult,
+        enableFever ? 3 : 1,
+        heavy
+      );
+    } else {
+      this.spawnPlayerShotgun(
+        this.player.x,
+        this.player.y,
+        angle,
+        heavy ? 560 : 480,
+        damage * mult,
+        PLAYER_BULLET_COLOR,
+        pelletCount
+      );
+    }
+
+    if (weapon.id !== 'baton' && spec.kind === 'charge') {
       const ring = this.add.circle(this.player.x, this.player.y, 20).setStrokeStyle(3, spec.color, 0.9).setDepth(6);
       this.tweens.add({ targets: ring, scale: 1.8, alpha: 0, duration: 250, onComplete: () => ring.destroy() });
-    } else if (spec.kind === 'dash') {
-      this.sfx.attack(heavy);
-      this.performDash(spec.distance, spec.damage * mult, spec.color, angle);
     }
 
     // Fever Time：每次成功攻击额外释放清屏音波（轻=扇形，重=全圆）
-    if (this.combo.feverActive()) {
+    if (enableFever && this.combo.feverActive()) {
       this.sfx.feverWave();
       if (heavy) {
         this.spawnSoundWave(this.player.x, this.player.y, angle, 180, 190, 14 * mult);
@@ -346,8 +492,8 @@ export class MainScene extends Phaser.Scene {
         }
         // 波前清弹
         for (const obj of this.bullets.getChildren().slice()) {
-          const bullet = obj as Phaser.GameObjects.Arc;
-          if (inSector(bullet.x, bullet.y, radius)) bullet.destroy();
+          const bullet = obj as Phaser.GameObjects.Rectangle;
+          if (inSector(bullet.x, bullet.y, radius)) this.destroyEnemyBullet(bullet);
         }
         // 波前伤害（每个敌人只结算一次）
         for (const enemy of [...this.enemies]) {
@@ -359,31 +505,6 @@ export class MainScene extends Phaser.Scene {
         }
       },
       onComplete: () => gfx.destroy()
-    });
-  }
-
-  private performDash(distance: number, damage: number, color: number, angle: number): void {
-    const p = this.player;
-    if (p.isDodging) return;
-    const bounds = this.physics.world.bounds;
-    const tx = Phaser.Math.Clamp(p.x + Math.cos(angle) * distance, bounds.left + 20, bounds.right - 20);
-    const ty = Phaser.Math.Clamp(p.y + Math.sin(angle) * distance, bounds.top + 20, bounds.bottom - 20);
-    p.isDodging = true;
-    p.body.setVelocity(0, 0);
-    p.body.enable = false;
-    this.tweens.add({
-      targets: p.go,
-      x: tx,
-      y: ty,
-      duration: 150,
-      ease: 'Cubic.easeOut',
-      onComplete: () => {
-        p.isDodging = false;
-        p.body.enable = true;
-        p.body.reset(p.go.x, p.go.y);
-        this.spawnArcFx(p.x, p.y, angle, 55, 180, color);
-        this.damageEnemiesInArc(p.x, p.y, angle, 55, 180, damage);
-      }
     });
   }
 
@@ -416,27 +537,321 @@ export class MainScene extends Phaser.Scene {
     this.tweens.add({ targets: gfx, alpha: 0, duration: 200, onComplete: () => gfx.destroy() });
   }
 
-  spawnBullet(x: number, y: number, angle: number, speed: number, damage: number, color: number): void {
-    const bullet = this.add.circle(x, y, 5, color).setDepth(4);
+  spawnBullet(x: number, y: number, angle: number, _speed: number, damage: number, color: number): void {
+    const bullet = this.add
+      .rectangle(x, y, ENEMY_BULLET_LENGTH, ENEMY_BULLET_THICKNESS, color)
+      .setRotation(angle)
+      .setDepth(4);
     this.bullets.add(bullet);
     const body = bullet.body as Phaser.Physics.Arcade.Body;
-    body.setCircle(5);
-    const v = this.physics.velocityFromRotation(angle, speed);
-    body.setVelocity(v.x, v.y);
+    body.setSize(ENEMY_BULLET_LENGTH, ENEMY_BULLET_THICKNESS);
+    body.setVelocity(0, 0);
     bullet.setData('damage', damage);
+    bullet.setData('angle', angle);
+    bullet.setData('despawnBeat', Math.floor(this.conductor.beatFloatAt(this.conductor.now())) + 8);
+    bullet.setData('trailColor', color);
+    bullet.setData('trailThickness', ENEMY_BULLET_THICKNESS);
+    bullet.setData('bursting', false);
+    this.createHeldEnemyTrail(bullet);
+  }
+
+  spawnEnemyProjectile(x: number, y: number, angle: number, damage: number, color: number): void {
+    this.spawnBullet(
+      x + Math.cos(angle) * 26,
+      y + Math.sin(angle) * 26,
+      angle,
+      0,
+      damage,
+      color
+    );
+  }
+
+  private spawnPlayerShotgun(
+    x: number,
+    y: number,
+    angle: number,
+    _speed: number,
+    damage: number,
+    color: number,
+    pelletCount: number
+  ): void {
+    const judgedBeat = this.conductor.nearestBeat(this.conductor.now()).n;
+    const despawnBeat = Math.max(0, judgedBeat + 1);
+    for (let i = 0; i < pelletCount; i++) {
+      const offset = pelletCount === 1 ? 0 : -15 + (30 * i) / (pelletCount - 1);
+      const shotAngle = angle + Phaser.Math.DegToRad(offset);
+      const bullet = this.add.rectangle(
+        x + Math.cos(shotAngle) * (PLAYER_RADIUS + 8),
+        y + Math.sin(shotAngle) * (PLAYER_RADIUS + 8),
+        PLAYER_BULLET_LENGTH,
+        BULLET_THICKNESS,
+        color
+      ).setRotation(shotAngle).setDepth(4);
+      this.playerBullets.add(bullet);
+      const body = bullet.body as Phaser.Physics.Arcade.Body;
+      body.setSize(PLAYER_BULLET_LENGTH, BULLET_THICKNESS);
+      const velocity = this.physics.velocityFromRotation(shotAngle, PLAYER_BULLET_SPEED);
+      body.setVelocity(velocity.x, velocity.y);
+      bullet.setData('damage', damage);
+      bullet.setData('despawnBeat', despawnBeat);
+      bullet.setData('trailColor', color);
+      bullet.setData('trailThickness', BULLET_THICKNESS);
+      bullet.setData('knockbackAngle', shotAngle);
+      bullet.setData('knockbackSpeed', GLOWSTICK_KNOCKBACK_SPEED);
+    }
+  }
+
+  private spawnBatonSweep(
+    originX: number,
+    originY: number,
+    aimAngle: number,
+    damage: number,
+    bulletCount: number,
+    heavy: boolean
+  ): void {
+    const clockwise = !heavy;
+    const halfSweep = heavy ? Math.PI / 3 : Math.PI / 4;
+    const startAngle = aimAngle + (clockwise ? -halfSweep : halfSweep);
+    const endAngle = aimAngle + (clockwise ? halfSweep : -halfSweep);
+    const middleRadius = 74 * 1.25;
+    const layerSpacing = 20 * 1.15;
+    const radii = bulletCount === 1
+      ? [middleRadius]
+      : [middleRadius - layerSpacing, middleRadius, middleRadius + layerSpacing];
+    const lengthScales = bulletCount === 1 ? [1] : [0.5, 1, 1.5];
+    const baseLength = (heavy ? 62 : 46) * 1.5;
+    const bullets = radii.map((radius, index) => {
+      const arcLength = baseLength * lengthScales[index];
+      const halfArcAngle = arcLength / (2 * radius);
+      const visual = this.add.graphics().setDepth(4);
+      const bullet = this.add
+        .rectangle(originX, originY, arcLength, BULLET_THICKNESS + 4, BATON_BULLET_COLOR, 0)
+        .setDepth(4);
+      this.playerBullets.add(bullet);
+      const body = bullet.body as Phaser.Physics.Arcade.Body;
+      body.setSize(arcLength, BULLET_THICKNESS + 4);
+      body.setVelocity(0, 0);
+      bullet.setData('damage', damage);
+      bullet.setData('despawnBeat', Infinity);
+      bullet.setData('trailColor', BATON_BULLET_COLOR);
+      bullet.setData('batonVisual', visual);
+      bullet.setData('trailThickness', BULLET_THICKNESS + 4);
+      bullet.setData('knockbackSpeed', BATON_KNOCKBACK_SPEED);
+      return { bullet, visual, radius, halfArcAngle };
+    });
+
+    const sweep = { progress: 0 };
+    const updatePositions = (): void => {
+      const angle = Phaser.Math.Linear(startAngle, endAngle, sweep.progress);
+      for (const { bullet, visual, radius, halfArcAngle } of bullets) {
+        if (!bullet.active) continue;
+        const x = originX + Math.cos(angle) * radius;
+        const y = originY + Math.sin(angle) * radius;
+        bullet.setPosition(x, y).setRotation(angle + Math.PI / 2);
+        (bullet.body as Phaser.Physics.Arcade.Body).reset(x, y);
+        bullet.setData('knockbackAngle', angle + (clockwise ? Math.PI / 2 : -Math.PI / 2));
+        visual.clear();
+        visual.lineStyle(BULLET_THICKNESS, BATON_BULLET_COLOR, 1);
+        visual.beginPath();
+        visual.arc(originX, originY, radius, angle - halfArcAngle, angle + halfArcAngle, false);
+        visual.strokePath();
+      }
+    };
+    updatePositions();
+    this.tweens.add({
+      targets: sweep,
+      progress: 1,
+      duration: 150,
+      ease: 'Linear',
+      onUpdate: updatePositions,
+      onComplete: () => {
+        for (const { bullet } of bullets) {
+          if (bullet.active) this.destroyPlayerBullet(bullet);
+        }
+      }
+    });
+  }
+
+  private updateBulletTrails(deltaMs: number): void {
+    const now = this.time.now;
+    const dt = Math.max(deltaMs, 1) / 1000;
+    for (const group of [this.bullets, this.playerBullets]) {
+      for (const obj of group.getChildren()) {
+        const bullet = obj as Phaser.GameObjects.Rectangle;
+        const previousX = bullet.getData('trailX') as number | undefined;
+        const previousY = bullet.getData('trailY') as number | undefined;
+        bullet.setData('trailX', bullet.x);
+        bullet.setData('trailY', bullet.y);
+        if (previousX === undefined || previousY === undefined) continue;
+
+        const distance = Phaser.Math.Distance.Between(previousX, previousY, bullet.x, bullet.y);
+        const speed = distance / dt;
+        if (group === this.bullets && !bullet.getData('bursting')) continue;
+        if (speed < 1) continue;
+        const interval = Phaser.Math.Clamp(95 - speed * 0.1, 16, 80);
+        const lastAt = (bullet.getData('lastTrailAt') as number | undefined) ?? 0;
+        if (now - lastAt < interval) continue;
+        bullet.setData('lastTrailAt', now);
+
+        const angle = bullet.rotation;
+        const length = Phaser.Math.Clamp(speed * 0.045, 8, 42);
+        const alpha = Phaser.Math.Clamp(0.06 + speed / 4000, 0.08, 0.24);
+        const color = (bullet.getData('trailColor') as number | undefined) ?? bullet.fillColor;
+        const thickness = (bullet.getData('trailThickness') as number | undefined) ?? BULLET_THICKNESS;
+        const trail = this.add
+          .rectangle(
+            bullet.x - Math.cos(angle) * length * 0.55,
+            bullet.y - Math.sin(angle) * length * 0.55,
+            length,
+            Math.max(3, thickness * 0.65),
+            color,
+            alpha
+          )
+          .setRotation(angle)
+          .setDepth(3);
+        this.tweens.add({
+          targets: trail,
+          alpha: 0,
+          scaleX: 0.35,
+          duration: Phaser.Math.Clamp(220 - speed * 0.12, 70, 180),
+          onComplete: () => trail.destroy()
+        });
+      }
+    }
+  }
+
+  private destroyPlayerBullet(bullet: Phaser.GameObjects.Rectangle): void {
+    const visual = bullet.getData('batonVisual') as Phaser.GameObjects.Graphics | undefined;
+    if (visual?.active) visual.destroy();
+    if (bullet.active) bullet.destroy();
+  }
+
+  private createHeldEnemyTrail(bullet: Phaser.GameObjects.Rectangle): void {
+    // 慢行阶段保持方向标记；下一次拍前快速移动开始时再清除。
+    const angle = bullet.getData('angle') as number;
+    const length = ENEMY_BULLET_LENGTH * 0.9;
+    const trail = this.add
+      .rectangle(0, 0, length, ENEMY_BULLET_THICKNESS * 0.55, bullet.fillColor, 0.16)
+      .setRotation(angle)
+      .setDepth(3);
+    bullet.setData('heldTrail', trail);
+    this.positionHeldEnemyTrail(bullet, trail);
+  }
+
+  private positionHeldEnemyTrail(
+    bullet: Phaser.GameObjects.Rectangle,
+    trail: Phaser.GameObjects.Rectangle
+  ): void {
+    const angle = bullet.getData('angle') as number;
+    const offset = ENEMY_BULLET_LENGTH * 0.35 + trail.width * 0.5;
+    trail.setPosition(bullet.x - Math.cos(angle) * offset, bullet.y - Math.sin(angle) * offset);
+  }
+
+  private destroyEnemyBullet(bullet: Phaser.GameObjects.Rectangle): void {
+    const heldTrail = bullet.getData('heldTrail') as Phaser.GameObjects.Rectangle | undefined;
+    if (heldTrail?.active) heldTrail.destroy();
+    if (bullet.active) bullet.destroy();
+  }
+
+  spawnImpactFx(x: number, y: number, color: number, strong: boolean): void {
+    const ring = this.add.circle(x, y, strong ? 20 : 10).setStrokeStyle(strong ? 5 : 3, color, 0.95).setDepth(8);
+    this.tweens.add({
+      targets: ring,
+      scale: strong ? 3 : 2,
+      alpha: 0,
+      duration: strong ? 260 : 140,
+      onComplete: () => ring.destroy()
+    });
+    for (let i = 0; i < (strong ? 8 : 4); i++) {
+      const sparkAngle = (Math.PI * 2 * i) / (strong ? 8 : 4);
+      const spark = this.add.rectangle(x, y, strong ? 12 : 8, 3, i % 2 === 0 ? color : 0xffffff).setDepth(8);
+      spark.setRotation(sparkAngle);
+      this.tweens.add({
+        targets: spark,
+        x: x + Math.cos(sparkAngle) * (strong ? 42 : 24),
+        y: y + Math.sin(sparkAngle) * (strong ? 42 : 24),
+        alpha: 0,
+        duration: strong ? 220 : 120,
+        onComplete: () => spark.destroy()
+      });
+    }
+    this.cameras.main.shake(strong ? 130 : 45, strong ? 0.005 : 0.0015);
+    if (strong) this.cameras.main.flash(90, 255, 40, 40, false);
+  }
+
+  private createRhythmEdgeBlocks(): void {
+    const heights = [18, 34, 25, 46, 22, 39, 28, 52];
+    const colors = [0x9333ea, 0xc084fc, 0xdb2777, 0xf472b6];
+    const edgeXs = [44, 86, 128, 170, 212, 254, 296, 338, 942, 984, 1026, 1068, 1110, 1152, 1194, 1236];
+    edgeXs.forEach((x, index) => {
+      const height = heights[index % heights.length];
+      const color = colors[index % colors.length];
+      const top = this.add.rectangle(x, ARENA.y, 22, height, color, 0.2).setOrigin(0.5, 0).setDepth(1);
+      const bottom = this.add
+        .rectangle(x, ARENA.y + ARENA.height, 22, height, color, 0.2)
+        .setOrigin(0.5, 1)
+        .setDepth(1);
+      this.rhythmBlocks.push(top, bottom);
+    });
+  }
+
+  private pulseRhythmEdgeBlocks(heavy: boolean): void {
+    this.tweens.killTweensOf(this.rhythmBlocks);
+    for (const block of this.rhythmBlocks) {
+      block.setScale(1);
+      block.setAlpha(heavy ? 0.55 : 0.32);
+    }
+    this.tweens.add({
+      targets: this.rhythmBlocks,
+      scaleY: heavy ? 1.9 : 1.25,
+      alpha: heavy ? 0.85 : 0.48,
+      duration: heavy ? 150 : 100,
+      yoyo: true,
+      ease: 'Quad.easeOut'
+    });
+  }
+
+  private updateEnemyBulletMotion(): void {
+    const timeToBeat = this.conductor.timeToNextBeat(this.conductor.now());
+    const bursting = timeToBeat <= ENEMY_BEAT_BURST_WINDOW;
+    const speed = bursting ? ENEMY_BEAT_BURST_SPEED : ENEMY_DRIFT_SPEED;
+    for (const obj of this.bullets.getChildren()) {
+      const bullet = obj as Phaser.GameObjects.Rectangle;
+      const angle = bullet.getData('angle') as number;
+      const body = bullet.body as Phaser.Physics.Arcade.Body;
+      const wasBursting = Boolean(bullet.getData('bursting'));
+      if (bursting && !wasBursting) {
+        const heldTrail = bullet.getData('heldTrail') as Phaser.GameObjects.Rectangle | undefined;
+        if (heldTrail?.active) heldTrail.destroy();
+        bullet.setData('heldTrail', undefined);
+      } else if (!bursting && wasBursting) {
+        this.createHeldEnemyTrail(bullet);
+      }
+      bullet.setData('bursting', bursting);
+      const heldTrail = bullet.getData('heldTrail') as Phaser.GameObjects.Rectangle | undefined;
+      if (heldTrail?.active) this.positionHeldEnemyTrail(bullet, heldTrail);
+      body.setVelocity(Math.cos(angle) * speed, Math.sin(angle) * speed);
+    }
   }
 
   private cleanupBullets(): void {
     const pad = 30;
-    for (const obj of this.bullets.getChildren().slice()) {
-      const bullet = obj as Phaser.GameObjects.Arc;
-      if (
-        bullet.x < ARENA.x - pad ||
-        bullet.x > ARENA.x + ARENA.width + pad ||
-        bullet.y < ARENA.y - pad ||
-        bullet.y > ARENA.y + ARENA.height + pad
-      ) {
-        bullet.destroy();
+    const beatFloat = this.conductor.beatFloatAt(this.conductor.now());
+    for (const group of [this.bullets, this.playerBullets]) {
+      for (const obj of group.getChildren().slice()) {
+        const bullet = obj as Phaser.GameObjects.Rectangle;
+        const outsideArena =
+          bullet.x < ARENA.x - pad ||
+          bullet.x > ARENA.x + ARENA.width + pad ||
+          bullet.y < ARENA.y - pad ||
+          bullet.y > ARENA.y + ARENA.height + pad;
+        if (
+          beatFloat >= (bullet.getData('despawnBeat') as number) ||
+          (group === this.playerBullets && outsideArena)
+        ) {
+          if (group === this.playerBullets) this.destroyPlayerBullet(bullet);
+          else this.destroyEnemyBullet(bullet);
+        }
       }
     }
   }
@@ -445,9 +860,9 @@ export class MainScene extends Phaser.Scene {
   triggerShockwave(x: number, y: number, radius: number): void {
     this.sfx.shockwave();
     for (const obj of this.bullets.getChildren().slice()) {
-      const bullet = obj as Phaser.GameObjects.Arc;
+      const bullet = obj as Phaser.GameObjects.Rectangle;
       if (Phaser.Math.Distance.Between(x, y, bullet.x, bullet.y) <= radius) {
-        bullet.destroy();
+        this.destroyEnemyBullet(bullet);
       }
     }
     const ring = this.add.circle(x, y, 12).setStrokeStyle(3, 0xffffff, 0.9).setDepth(6);
@@ -465,10 +880,43 @@ export class MainScene extends Phaser.Scene {
   // ---------- 拾取 ----------
 
   private spawnPickup(x: number, y: number, weapon: WeaponDef): void {
-    const go = this.add.rectangle(x, y, 24, 10, 0xfbbf24).setDepth(2);
-    this.tweens.add({ targets: go, angle: 360, duration: 2000, repeat: -1 });
-    this.tweens.add({ targets: go, y: y - 8, duration: 600, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
-    this.pickups.push({ go, weapon });
+    const go = this.add.container(x, y).setDepth(2);
+    const parts: Phaser.GameObjects.Rectangle[] = [];
+    const colors: number[] = [];
+
+    if (weapon.id === GLOWSTICKS.id) {
+      for (const offset of [-9, 9]) {
+        parts.push(this.add.rectangle(offset, 0, 30, 7.5, 0xef4444).setRotation(-Math.PI / 2));
+        colors.push(0xef4444);
+      }
+    } else {
+      parts.push(this.add.rectangle(0, 0, 51, 9, 0xa855f7).setRotation(-Math.PI / 2));
+      colors.push(0xa855f7);
+    }
+
+    go.add(parts);
+    this.pickups.push({ go, parts, colors, baseY: y, weapon });
+  }
+
+  private pulsePickups(): void {
+    const riseDuration = Math.max(80, this.conductor.beatDur * 420);
+    for (const pickup of this.pickups) {
+      this.tweens.killTweensOf(pickup.go);
+      pickup.go.setY(pickup.baseY);
+      pickup.parts.forEach((part) => part.setFillStyle(0xffffff));
+      this.time.delayedCall(90, () => {
+        pickup.parts.forEach((part, index) => {
+          if (part.active) part.setFillStyle(pickup.colors[index]);
+        });
+      });
+      this.tweens.add({
+        targets: pickup.go,
+        y: pickup.baseY - 10,
+        duration: riseDuration,
+        ease: 'Sine.Out',
+        yoyo: true
+      });
+    }
   }
 
   private checkPickups(): void {
@@ -482,10 +930,11 @@ export class MainScene extends Phaser.Scene {
   }
 
   private equipWeapon(weapon: WeaponDef): void {
-    this.sfx.pickup();
+    this.queueBeatSfx('pickup');
     this.player.weapon = weapon;
     this.combo.startSwitch(weapon.pattern);
     this.hud.setPattern(weapon.pattern, weapon.name);
+    this.conductor.setCuePattern(weapon.pattern);
     this.hud.setState('武器切换中…');
   }
 
@@ -510,10 +959,33 @@ export class MainScene extends Phaser.Scene {
 
   private enterFever(): void {
     this.combo.startFever();
-    this.sfx.feverStart();
+    this.queueBeatSfx('feverStart');
     this.hud.setFever(true);
     this.hud.feverBurst();
     this.cameras.main.shake(200, 0.005);
     this.feverBorder.setAlpha(0.9);
+  }
+
+  private endFever(): void {
+    this.sfx.feverEnd();
+    this.hud.setFever(false);
+    this.tweens.add({ targets: this.feverBorder, alpha: 0, duration: 300 });
+    this.lastComboLevel = 0;
+    this.refreshComboHUD();
+  }
+
+  queueBeatSfx(cue: BeatSfxCue): void {
+    this.pendingBeatSfx.add(cue);
+  }
+
+  private playQueuedBeatSfx(): void {
+    const priority: BeatSfxCue[] = ['playerHurt', 'feverStart', 'enemyHurt', 'pickup'];
+    const cue = priority.find((candidate) => this.pendingBeatSfx.has(candidate));
+    this.pendingBeatSfx.clear();
+
+    if (cue === 'playerHurt') this.sfx.hurt();
+    else if (cue === 'feverStart') this.sfx.feverStart();
+    else if (cue === 'enemyHurt') this.sfx.enemyHurt();
+    else if (cue === 'pickup') this.sfx.pickup();
   }
 }
