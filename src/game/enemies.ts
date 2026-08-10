@@ -1,10 +1,11 @@
 import Phaser from 'phaser';
 import type { BeatInfo } from '../core/Conductor';
 import type { MainScene } from '../scenes/MainScene';
+import { FAN_ATTACK_DURATION_MS, FAN_HURT_ROLL_DURATION_MS, playFanAnimation } from './fanAnimation';
 
 export type EnemyKind = 'smallGuard' | 'midGuard' | 'fan';
 
-type EnemyVisual = Phaser.GameObjects.Shape | Phaser.GameObjects.Image;
+type EnemyVisual = Phaser.GameObjects.Shape | Phaser.GameObjects.Image | Phaser.GameObjects.Sprite;
 type VisualWithBody = EnemyVisual & { body: Phaser.Physics.Arcade.Body };
 
 /** 敌人基类：移动逐帧更新，攻击和方向重选由节拍驱动。 */
@@ -270,14 +271,29 @@ export class MidGuard extends Enemy {
 export class FanEnemy extends Enemy {
   readonly kind = 'fan';
   private static readonly DRIFT_SPEED = 30;
-  private static readonly BEAT_STEP_SPEED = 105;
+  // 0.1 秒节拍突进约为旧实现的两倍位移。
+  private static readonly BEAT_STEP_SPEED = 210;
+  private static readonly BEAT_STEP_ACCELERATION = 1900;
   private static readonly BEAT_STEP_WINDOW = 0.1;
+  private readonly sprite: Phaser.GameObjects.Sprite;
   private movementAngle = 0;
+  private attackUntil = 0;
+  private hurtRollUntil = 0;
 
   constructor(scene: MainScene, x: number, y: number) {
-    super(scene, scene.add.image(x, y, 'fan').setDisplaySize(54, 76), 40, 17, 0xffffff);
+    const sprite = scene.add.sprite(x, y, 'fan-run-2');
+    super(scene, sprite, 40, 17, 0xffffff);
+    this.sprite = sprite;
+    playFanAnimation(this.sprite, 'run');
     this.go.body.setCircle(17);
     this.chooseMovementAngle();
+  }
+
+  takeDamage(amount: number, knockbackAngle?: number, knockbackSpeed = 0): void {
+    super.takeDamage(amount, knockbackAngle, knockbackSpeed);
+    if (this.dead) return;
+    this.hurtRollUntil = this.scene.time.now + FAN_HURT_ROLL_DURATION_MS;
+    playFanAnimation(this.sprite, 'roll', true);
   }
 
   onBeat(info: BeatInfo): void {
@@ -285,14 +301,37 @@ export class FanEnemy extends Enemy {
     this.chooseMovementAngle();
     if (info.beatInMeasure !== 0) return;
     const angle = this.angleToPlayer();
+    this.updateFacing(Math.cos(angle));
+    this.playAttack();
     this.scene.spawnEnemyProjectile(this.x, this.y, angle, 12, 0x3b82f6);
   }
 
   protected move(dtMs: number): void {
-    const stepping = this.scene.conductor.timeToNextBeat(this.scene.conductor.now()) <= FanEnemy.BEAT_STEP_WINDOW;
-    const speed = stepping ? FanEnemy.BEAT_STEP_SPEED : FanEnemy.DRIFT_SPEED;
+    const rolling = this.scene.conductor.timeToNextBeat(this.scene.conductor.now()) <= FanEnemy.BEAT_STEP_WINDOW;
+    const speed = rolling ? FanEnemy.BEAT_STEP_SPEED : FanEnemy.DRIFT_SPEED;
     const v = this.scene.physics.velocityFromRotation(this.movementAngle, speed);
-    this.approachVelocity(v.x, v.y, dtMs, stepping ? 650 : 420);
+    this.approachVelocity(v.x, v.y, dtMs, rolling ? FanEnemy.BEAT_STEP_ACCELERATION : 420);
+    this.updateFacing(v.x);
+    this.updateAnimation(rolling);
+  }
+
+  private playAttack(): void {
+    this.attackUntil = this.scene.time.now + FAN_ATTACK_DURATION_MS;
+    playFanAnimation(this.sprite, 'attack', true);
+  }
+
+  private updateAnimation(rolling: boolean): void {
+    if (this.scene.time.now < this.hurtRollUntil) return;
+    if (this.scene.time.now < this.attackUntil) return;
+    const action = rolling ? 'roll' : 'run';
+    const animation = rolling ? 'fan-roll' : 'fan-run';
+    if (this.sprite.anims.currentAnim?.key !== animation || !this.sprite.anims.isPlaying) {
+      playFanAnimation(this.sprite, action, true);
+    }
+  }
+
+  private updateFacing(horizontalVelocity: number): void {
+    if (Math.abs(horizontalVelocity) > 1) this.sprite.setFlipX(horizontalVelocity < 0);
   }
 
   private chooseMovementAngle(): void {
