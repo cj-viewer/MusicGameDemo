@@ -63,7 +63,14 @@ export class MainScene extends Phaser.Scene {
   preload(): void {
     const asset = (file: string): string => `${import.meta.env.BASE_URL}assets/${file}`;
     this.load.image('guard', asset('images/characters/guard.png'));
-    this.load.image('fan', asset('images/characters/fan.png'));
+    for (const animation of ['run', 'roll', 'attack']) {
+      const firstFrame = animation === 'run' ? 2 : 1;
+      const lastFrame = animation === 'run' ? 5 : 6;
+      for (let index = firstFrame; index <= lastFrame; index++) {
+        const frame = String(index).padStart(2, '0');
+        this.load.image(`fan-${animation}-${index}`, asset(`images/characters/fan/${animation}/${animation}-${frame}.png`));
+      }
+    }
     this.load.image('player', asset('images/characters/player.png'));
     this.load.audio('beat-light', asset('audio/sfx/sfx-beat-light.mp3'));
     this.load.audio('beat-heavy', asset('audio/sfx/sfx-beat-heavy.mp3'));
@@ -78,6 +85,7 @@ export class MainScene extends Phaser.Scene {
     this.rhythmBlocks = [];
     this.pendingBeatSfx.clear();
     this.gamepadButtonState = { dodge: false, attack: false };
+    this.createFanAnimations();
 
     this.physics.world.setBounds(ARENA.x, ARENA.y, ARENA.width, ARENA.height);
     const border = this.add.graphics().setDepth(1);
@@ -238,6 +246,22 @@ export class MainScene extends Phaser.Scene {
 
   private isGamepadButtonDown(pad: Phaser.Input.Gamepad.Gamepad, index: number): boolean {
     return index < pad.buttons.length && pad.getButtonValue(index) > 0.5;
+  }
+
+  private createFanAnimations(): void {
+    const create = (key: string, framePrefix: string, frameNumbers: number[], frameRate: number, repeat: number): void => {
+      if (this.anims.exists(key)) return;
+      this.anims.create({
+        key,
+        frames: frameNumbers.map((frameNumber) => ({ key: `${framePrefix}-${frameNumber}` })),
+        frameRate,
+        repeat
+      });
+    };
+
+    create('fan-run', 'fan-run', [2, 3, 4, 5], 10, -1);
+    create('fan-roll', 'fan-roll', [1, 2, 3, 4, 5, 6], 14, -1);
+    create('fan-attack', 'fan-attack', [1, 2, 3, 4, 5, 6], 12, 0);
   }
 
   private rumbleGamepad(pad: Phaser.Input.Gamepad.Gamepad, kind: RumbleKind): void {
