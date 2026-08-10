@@ -138,7 +138,7 @@ public/assets/
 
 ## 网页部署
 
-推送 `dev-1.0` 后，[deploy-pages.yml](.github/workflows/deploy-pages.yml) 会执行 `npm ci`、生产构建并部署 `dist/` 到 GitHub Pages。Vite 使用相对基础路径，图片、音频和脚本可在仓库子路径下正常加载。
+推送 `main` 后，[deploy-pages.yml](.github/workflows/deploy-pages.yml) 会执行 `npm ci`、生产构建并部署 `dist/` 到 GitHub Pages。`dev-1.0` 推送不会自动部署（可通过 `workflow_dispatch` 手动触发）。Vite 使用相对基础路径，图片、音频和脚本可在仓库子路径下正常加载。
 
 首次部署需要仓库管理员在 GitHub 的 **Settings → Pages → Build and deployment → Source** 中选择 **GitHub Actions**；后续推送会自动更新在线版本。
 
