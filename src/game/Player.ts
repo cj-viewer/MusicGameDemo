@@ -49,7 +49,7 @@ export class Player {
     this.go = scene.add.image(x, y, 'player').setDisplaySize(54, 82).setDepth(5);
     scene.physics.add.existing(this.go);
     this.body = this.go.body as Phaser.Physics.Arcade.Body;
-    this.body.setCircle(PLAYER_RADIUS);
+    // 受击判定使用默认全帧矩形：刚好包裹整张图片，且随图片缩放自动同步（body 世界尺寸 = 源帧尺寸 × scale）
     this.body.setCollideWorldBounds(true);
 
     this.gfx = scene.add.graphics().setDepth(6);
@@ -136,9 +136,10 @@ export class Player {
     this.staminaFullSince = Infinity;
 
     const bounds = this.scene.physics.world.bounds;
-    const pad = PLAYER_RADIUS + 4;
-    const tx = Phaser.Math.Clamp(this.x + dir.x * DODGE_DISTANCE, bounds.left + pad, bounds.right - pad);
-    const ty = Phaser.Math.Clamp(this.y + dir.y * DODGE_DISTANCE, bounds.top + pad, bounds.bottom - pad);
+    const padX = this.body.halfWidth + 4;
+    const padY = this.body.halfHeight + 4;
+    const tx = Phaser.Math.Clamp(this.x + dir.x * DODGE_DISTANCE, bounds.left + padX, bounds.right - padX);
+    const ty = Phaser.Math.Clamp(this.y + dir.y * DODGE_DISTANCE, bounds.top + padY, bounds.bottom - padY);
 
     this.isDodging = true;
     this.body.setVelocity(0, 0);

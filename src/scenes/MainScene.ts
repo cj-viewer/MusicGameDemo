@@ -55,6 +55,9 @@ export class MainScene extends Phaser.Scene {
   private rhythmBlocks: Phaser.GameObjects.Rectangle[] = [];
   private pendingBeatSfx = new Set<BeatSfxCue>();
   private gamepadButtonState = { dodge: false, attack: false };
+  /** 调试：B 键切换判定框显示（红=受击判定，绿=武器/子弹判定），重开局保留开关状态 */
+  private debugHitboxes = false;
+  private debugGfx!: Phaser.GameObjects.Graphics;
 
   constructor() {
     super('MainScene');
@@ -92,6 +95,8 @@ export class MainScene extends Phaser.Scene {
     border.lineStyle(3, 0x475569, 1);
     border.strokeRect(ARENA.x, ARENA.y, ARENA.width, ARENA.height);
     this.createRhythmEdgeBlocks();
+
+    this.debugGfx = this.add.graphics().setDepth(20);
 
     // Fever Time 期间的橙色边框光效（随节拍脉冲）
     this.feverBorder = this.add.graphics().setDepth(7).setAlpha(0);
@@ -144,6 +149,7 @@ export class MainScene extends Phaser.Scene {
     this.hud.update();
     if (this.combo.updateFever()) this.endFever();
     this.handleGamepadInput();
+    this.drawDebugHitboxes();
 
     if (this.state === 'over' || this.state === 'title') return;
 
@@ -184,6 +190,11 @@ export class MainScene extends Phaser.Scene {
 
     this.input.keyboard!.on('keydown-R', () => {
       this.scene.restart();
+    });
+
+    // 调试：B 键切换判定框显示
+    this.input.keyboard!.on('keydown-B', () => {
+      this.debugHitboxes = !this.debugHitboxes;
     });
 
     // 原型调试键：F 直接充满 ComboMeter，便于快速验证 Fever Time
@@ -280,7 +291,7 @@ export class MainScene extends Phaser.Scene {
     this.add.rectangle(640, 360, 1280, 720, 0x000000, 0.6).setDepth(19).setName('titleOverlay');
     this.hud.message(
       '音乐弹幕原型\n\n' +
-        'WASD 移动 · 鼠标瞄准\n左键=轻攻击 · 右键=重攻击（按节拍连段）\nShift=沿移动方向冲刺（踩拍消耗减半并清弹）\n\n点击开始'
+        'WASD 移动 · 鼠标瞄准\n左键=轻攻击 · 右键=重攻击（按节拍连段）\nShift=沿移动方向冲刺（踩拍消耗减半并清弹）\nB=显示判定框（调试）\n\n点击开始'
     );
   }
 
@@ -379,6 +390,37 @@ export class MainScene extends Phaser.Scene {
     return nearest
       ? Phaser.Math.Angle.Between(this.player.x, this.player.y, nearest.x, nearest.y)
       : mouseAngle;
+  }
+
+  // ---------- 调试 ----------
+
+  /** 红框=玩家与敌人的受击判定（物理 body），绿框=玩家武器与敌方子弹的判定 */
+  private drawDebugHitboxes(): void {
+    this.debugGfx.clear();
+    if (!this.debugHitboxes) return;
+
+    this.debugGfx.lineStyle(2, 0xff0000, 0.9);
+    this.strokeDebugBody(this.player.body);
+    for (const enemy of this.enemies) {
+      if (!enemy.dead) this.strokeDebugBody(enemy.go.body);
+    }
+
+    this.debugGfx.lineStyle(2, 0x00ff00, 0.9);
+    for (const group of [this.playerBullets, this.bullets]) {
+      for (const obj of group.getChildren()) {
+        this.strokeDebugBody((obj as Phaser.GameObjects.Rectangle).body as Phaser.Physics.Arcade.Body);
+      }
+    }
+  }
+
+  private strokeDebugBody(body: Phaser.Physics.Arcade.Body): void {
+    // body 关闭时（闪避无敌、死亡）不参与判定，跳过绘制
+    if (!body.enable) return;
+    if (body.isCircle) {
+      this.debugGfx.strokeCircle(body.center.x, body.center.y, body.halfWidth);
+    } else {
+      this.debugGfx.strokeRect(body.x, body.y, body.width, body.height);
+    }
   }
 
   private flashMessage(text: string): void {

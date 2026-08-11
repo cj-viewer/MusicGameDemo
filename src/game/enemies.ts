@@ -15,7 +15,6 @@ export abstract class Enemy {
   go: VisualWithBody;
   hp: number;
   maxHp: number;
-  radius: number;
   dead = false;
 
   private hpBarBg: Phaser.GameObjects.Rectangle;
@@ -24,15 +23,16 @@ export abstract class Enemy {
   private knockbackUntil = 0;
   private knockbackVelocity = new Phaser.Math.Vector2();
 
-  constructor(scene: MainScene, go: EnemyVisual, hp: number, radius: number, color: number) {
+  constructor(scene: MainScene, go: EnemyVisual, hp: number, color: number) {
     this.scene = scene;
     this.go = go as VisualWithBody;
     this.hp = hp;
     this.maxHp = hp;
-    this.radius = radius;
     this.baseColor = color;
     go.setDepth(3);
     scene.physics.add.existing(go);
+    // 受击判定统一用默认全帧矩形：刚好包裹整张图片，随图片缩放自动同步。
+    // 新增角色一律沿用此默认，不要再手动 setCircle/setSize。
     this.go.body.setCollideWorldBounds(true);
 
     this.hpBarBg = scene.add.rectangle(go.x, go.y, 28, 4, 0x1f2937).setDepth(3).setOrigin(0, 0.5);
@@ -47,8 +47,14 @@ export abstract class Enemy {
     return this.go.y;
   }
 
+  /** 逻辑判定半径（音波/近战范围用）：取包围盒半宽高的较大值，始终与当前判定框一致 */
+  get radius(): number {
+    return Math.max(this.go.body.halfWidth, this.go.body.halfHeight);
+  }
+
   update(dtMs: number): void {
     if (this.dead) return;
+    this.syncBodyToCurrentFrame();
     if (this.scene.time.now < this.knockbackUntil) {
       this.go.body.setVelocity(this.knockbackVelocity.x, this.knockbackVelocity.y);
     } else {
@@ -63,6 +69,16 @@ export abstract class Enemy {
 
   abstract onBeat(info: BeatInfo): void;
   protected abstract move(dtMs: number): void;
+
+  /** 精灵动画换帧时源尺寸可能变化，同步 body 保证判定框始终等于当前显示图片 */
+  private syncBodyToCurrentFrame(): void {
+    if (!(this.go instanceof Phaser.GameObjects.Sprite)) return;
+    const frame = this.go.frame;
+    const body = this.go.body;
+    if (body.sourceWidth !== frame.realWidth || body.sourceHeight !== frame.realHeight) {
+      body.setSize(frame.realWidth, frame.realHeight, true);
+    }
+  }
 
   takeDamage(amount: number, knockbackAngle?: number, knockbackSpeed = 0): void {
     if (this.dead) return;
@@ -167,8 +183,7 @@ export class SmallGuard extends Enemy {
   private movementAngle = 0;
 
   constructor(scene: MainScene, x: number, y: number) {
-    super(scene, scene.add.image(x, y, 'guard').setDisplaySize(46, 70), 40, 17, 0xffffff);
-    this.go.body.setCircle(17);
+    super(scene, scene.add.image(x, y, 'guard').setDisplaySize(46, 70), 40, 0xffffff);
     this.chooseMovementAngle();
   }
 
@@ -206,8 +221,7 @@ export class MidGuard extends Enemy {
   private laserGfx: Phaser.GameObjects.Graphics;
 
   constructor(scene: MainScene, x: number, y: number) {
-    super(scene, scene.add.image(x, y, 'guard').setDisplaySize(52, 78), 60, 18, 0xffffff);
-    this.go.body.setCircle(18);
+    super(scene, scene.add.image(x, y, 'guard').setDisplaySize(52, 78), 60, 0xffffff);
     this.lockedAngle = this.angleToPlayer();
     this.laserGfx = scene.add.graphics().setDepth(2);
   }
@@ -282,10 +296,9 @@ export class FanEnemy extends Enemy {
 
   constructor(scene: MainScene, x: number, y: number) {
     const sprite = scene.add.sprite(x, y, 'fan-run-2');
-    super(scene, sprite, 40, 17, 0xffffff);
+    super(scene, sprite, 40, 0xffffff);
     this.sprite = sprite;
     playFanAnimation(this.sprite, 'run');
-    this.go.body.setCircle(17);
     this.chooseMovementAngle();
   }
 
