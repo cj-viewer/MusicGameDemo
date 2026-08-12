@@ -41,7 +41,10 @@ const BATON_BULLET_COLOR = 0xa855f7;
 const GLOWSTICK_KNOCKBACK_SPEED = 150;
 const BATON_KNOCKBACK_SPEED = GLOWSTICK_KNOCKBACK_SPEED * 1.25;
 
-type GameState = 'title' | 'playing' | 'intermission' | 'over';
+type GameState = 'title' | 'tutorial' | 'tutorialConfirm' | 'playing' | 'intermission' | 'over';
+
+/** 教学要求连续全对的小节数 */
+const TUTORIAL_TARGET_STREAK = 3;
 type BeatSfxCue = 'playerHurt' | 'feverStart' | 'enemyHurt' | 'pickup';
 
 const WAVE_ENEMY_COUNTS = [2, 4, 8, 16, 32];
@@ -88,6 +91,21 @@ export class MainScene extends Phaser.Scene {
   private debugHitboxes = false;
   private debugGfx!: Phaser.GameObjects.Graphics;
 
+  // 连段面板（教学模式含说明与进度，游戏模式只保留节拍块，随武器连段重建）
+  private patternPanel?: Phaser.GameObjects.Container;
+  private patternIcons: Phaser.GameObjects.Shape[] = [];
+
+  // 教学状态
+  private tutorialStreakText?: Phaser.GameObjects.Text;
+  private tutorialStreak = 0;
+  private tutorialHitBeats = new Set<number>();
+  private tutorialFailedMeasures = new Set<number>();
+  private confirmUi?: Phaser.GameObjects.Container;
+  /** 确认按钮点击后短暂屏蔽攻击输入，避免同一次点击又触发挥击 */
+  private suppressAttackUntil = 0;
+  /** 进入游戏的节拍倒计时（每小节减一），-1 表示未激活 */
+  private countdownRemaining = -1;
+
   constructor() {
     super('MainScene');
   }
@@ -121,6 +139,15 @@ export class MainScene extends Phaser.Scene {
     this.rhythmPulseUntil = 0;
     this.pendingBeatSfx.clear();
     this.gamepadButtonState = { dodge: false, attack: false };
+    this.patternPanel = undefined;
+    this.patternIcons = [];
+    this.confirmUi = undefined;
+    this.tutorialStreakText = undefined;
+    this.tutorialStreak = 0;
+    this.tutorialHitBeats.clear();
+    this.tutorialFailedMeasures.clear();
+    this.suppressAttackUntil = 0;
+    this.countdownRemaining = -1;
     this.createFanAnimations();
 
     this.physics.world.setBounds(ARENA.x, ARENA.y, ARENA.width, ARENA.height);
@@ -215,7 +242,8 @@ export class MainScene extends Phaser.Scene {
         this.startGame();
         return;
       }
-      if (this.state === 'over') return;
+      if (this.state === 'over' || this.state === 'tutorialConfirm') return;
+      if (this.time.now < this.suppressAttackUntil) return;
 
       const btn = pointer.rightButtonDown() ? 'H' : pointer.leftButtonDown() ? 'L' : null;
       if (!btn) return;
@@ -223,7 +251,7 @@ export class MainScene extends Phaser.Scene {
     });
 
     this.input.keyboard!.on('keydown-SHIFT', () => {
-      if (this.state === 'playing' || this.state === 'intermission') {
+      if (this.state === 'playing' || this.state === 'intermission' || this.state === 'tutorial') {
         this.player.tryDodge();
       }
     });
@@ -260,6 +288,7 @@ export class MainScene extends Phaser.Scene {
     if (result.type === 'correct' || result.type === 'protectedCorrect') {
       this.performWeaponAttack(result.beatIdx, false, 5, true);
       this.hud.flashSuccess(result.globalBeat);
+      this.flashPatternIcon(result.globalBeat % 4);
       this.refreshComboHUD();
       if (pad) this.rumbleGamepad(pad, btn === 'H' ? 'heavy' : 'light');
     } else if (result.type === 'wrong') {
@@ -267,6 +296,14 @@ export class MainScene extends Phaser.Scene {
       this.sfx.error();
       this.player.errorFlash();
       this.hud.flashError();
+    }
+
+    if (this.state === 'tutorial') {
+      if (result.type === 'correct' || result.type === 'protectedCorrect') {
+        this.tutorialHitBeats.add(result.globalBeat);
+      } else if (result.type === 'wrong') {
+        this.failTutorialMeasure();
+      }
     }
   }
 
@@ -291,7 +328,12 @@ export class MainScene extends Phaser.Scene {
       this.startGame();
       return;
     }
-    if (this.state !== 'playing' && this.state !== 'intermission') return;
+    if (this.state === 'tutorialConfirm') {
+      if (pressed.attack) this.finishTutorial();
+      else if (pressed.dodge) this.retryTutorial();
+      return;
+    }
+    if (this.state !== 'playing' && this.state !== 'intermission' && this.state !== 'tutorial') return;
 
     if (pressed.dodge && this.player.tryDodge()) this.rumbleGamepad(pad, 'dodge');
     if (pressed.attack) this.handleAttackInput(this.gamepadBeatKey(), pad);
@@ -349,8 +391,7 @@ export class MainScene extends Phaser.Scene {
     this.conductor.start();
     this.bgmFirstBeat = 0;
     this.playBgmAlignedToBeat(this.bgmFirstBeat);
-    this.state = 'intermission';
-    this.time.delayedCall(400, () => this.startWave(0));
+    this.startTutorial();
   }
 
   /**
@@ -442,6 +483,230 @@ export class MainScene extends Phaser.Scene {
     if (!this.conductor.started) return;
     this.bgmFirstBeat += BGM_LOOP_BEATS;
     this.playBgmAlignedToBeat(this.bgmFirstBeat);
+  }
+
+  // ---------- 教学 ----------
+
+  /** 开场教学：不生成敌人，玩家跟随上方节拍点连打，连续 3 个小节全对后确认进入游戏 */
+  private startTutorial(): void {
+    this.state = 'tutorial';
+    this.tutorialStreak = 0;
+    this.tutorialHitBeats.clear();
+    this.tutorialFailedMeasures.clear();
+    this.buildPatternPanel(true);
+    this.updateTutorialStreakText();
+    this.hud.setWave('教学中');
+    this.flashMessage('跟随节拍！');
+  }
+
+  /**
+   * 重建顶部连段面板：按当前武器连段生成节拍块（○轻 ◆重）。
+   * tutorial=true 时附带教学说明与连击进度；游戏模式为紧凑版。武器切换时以新连段重建。
+   */
+  private buildPatternPanel(tutorial: boolean): void {
+    this.patternPanel?.destroy();
+    this.patternIcons = [];
+    this.tutorialStreakText = undefined;
+
+    const ui = this.add.container(640, 0).setDepth(15);
+    if (tutorial) {
+      ui.add(this.add.rectangle(0, 122, 560, 180, 0x0f172a, 0.72).setStrokeStyle(1, 0x334155));
+      ui.add(
+        this.add
+          .text(0, 56, '教学 · 按节拍打出连段', { fontFamily: 'Arial', fontSize: '22px', color: '#e2e8f0' })
+          .setOrigin(0.5)
+      );
+      ui.add(
+        this.add
+          .text(0, 86, '左键 = 轻（○）　右键 = 重（◆）', { fontFamily: 'Arial', fontSize: '15px', color: '#94a3b8' })
+          .setOrigin(0.5)
+      );
+    } else {
+      ui.add(this.add.rectangle(0, 144, 350, 96, 0x0f172a, 0.55).setStrokeStyle(1, 0x334155));
+    }
+
+    const xs = [-108, -36, 36, 108];
+    this.combo.pattern.forEach((key, i) => {
+      const icon: Phaser.GameObjects.Shape = key === 'L'
+        ? this.add.circle(xs[i], 128, 14).setStrokeStyle(3, 0x67e8f9)
+        : this.add.rectangle(xs[i], 128, 22, 22, 0xfbbf24).setAngle(45);
+      const label = this.add
+        .text(xs[i], 160, key === 'L' ? '轻' : '重', {
+          fontFamily: 'Arial',
+          fontSize: '16px',
+          color: key === 'L' ? '#67e8f9' : '#fbbf24'
+        })
+        .setOrigin(0.5);
+      ui.add([icon, label]);
+      this.patternIcons.push(icon);
+    });
+
+    if (tutorial) {
+      this.tutorialStreakText = this.add
+        .text(0, 192, '', { fontFamily: 'Arial', fontSize: '17px', color: '#facc15' })
+        .setOrigin(0.5);
+      ui.add(this.tutorialStreakText);
+    }
+    this.patternPanel = ui;
+  }
+
+  /** 每拍高亮当前拍的节拍块（教学与游戏通用） */
+  private pulsePatternIcon(beatIdx: number): void {
+    const icon = this.patternIcons[beatIdx];
+    if (!icon) return;
+    icon.setScale(1.35);
+    this.tweens.add({ targets: icon, scaleX: 1, scaleY: 1, duration: 150 });
+  }
+
+  private updateTutorialStreakText(): void {
+    this.tutorialStreakText?.setText(`连续完整小节 ${this.tutorialStreak} / ${TUTORIAL_TARGET_STREAK}`);
+  }
+
+  /** 教学中每拍：小节交界时结算上一小节（第 0 小节为热身，不计） */
+  private onTutorialBeat(info: BeatInfo): void {
+    if (info.beatInMeasure === 0 && info.measure >= 2) {
+      this.evaluateTutorialMeasure(info.measure - 1);
+    }
+  }
+
+  private evaluateTutorialMeasure(measure: number): void {
+    const allHit = [0, 1, 2, 3].every((i) => this.tutorialHitBeats.has(measure * 4 + i));
+    const success = allHit && !this.tutorialFailedMeasures.has(measure);
+    if (success) {
+      this.tutorialStreak++;
+      this.spawnTutorialVerdict('✓', '#4ade80');
+      if (this.tutorialStreak >= TUTORIAL_TARGET_STREAK) {
+        this.updateTutorialStreakText();
+        this.showTutorialConfirm();
+        return;
+      }
+    } else {
+      this.tutorialStreak = 0;
+    }
+    this.updateTutorialStreakText();
+  }
+
+  /** 错拍立即判当前小节失败并清零连击 */
+  private failTutorialMeasure(): void {
+    const measure = Math.floor(Math.max(0, this.conductor.beatFloatAt(this.conductor.now())) / 4);
+    this.tutorialFailedMeasures.add(measure);
+    if (this.tutorialStreak > 0) {
+      this.tutorialStreak = 0;
+      this.updateTutorialStreakText();
+    }
+    this.spawnTutorialVerdict('✕', '#f87171');
+  }
+
+  /** 命中反馈：对应节拍块处扩散绿环（教学与游戏通用） */
+  private flashPatternIcon(beatIdx: number): void {
+    const icon = this.patternIcons[beatIdx];
+    if (!icon || !this.patternPanel) return;
+    const ring = this.add.circle(icon.x, icon.y, 16).setStrokeStyle(3, 0x4ade80, 0.95);
+    this.patternPanel.add(ring);
+    this.tweens.add({ targets: ring, scale: 1.9, alpha: 0, duration: 220, onComplete: () => ring.destroy() });
+  }
+
+  /** 图标行右侧弹出 ✓/✕ 小节结果 */
+  private spawnTutorialVerdict(mark: string, color: string): void {
+    if (!this.patternPanel || !this.tutorialStreakText) return;
+    const text = this.add
+      .text(190, 128, mark, { fontFamily: 'Arial', fontSize: '30px', fontStyle: 'bold', color })
+      .setOrigin(0.5);
+    this.patternPanel.add(text);
+    this.tweens.add({ targets: text, y: 100, alpha: 0, duration: 500, ease: 'Sine.easeOut', onComplete: () => text.destroy() });
+  }
+
+  private showTutorialConfirm(): void {
+    this.state = 'tutorialConfirm';
+    const ui = this.add.container(640, 360).setDepth(21);
+    const overlay = this.add.rectangle(0, 0, 1280, 720, 0x000000, 0.55);
+    const title = this.add
+      .text(0, -90, '教学完成！', {
+        fontFamily: 'Arial',
+        fontSize: '48px',
+        fontStyle: 'bold',
+        color: '#4ade80',
+        stroke: '#000000',
+        strokeThickness: 5
+      })
+      .setOrigin(0.5);
+    const sub = this.add
+      .text(0, -34, `连续 ${TUTORIAL_TARGET_STREAK} 个小节全部命中，节奏感不错！`, {
+        fontFamily: 'Arial',
+        fontSize: '20px',
+        color: '#e2e8f0'
+      })
+      .setOrigin(0.5);
+    ui.add([overlay, title, sub]);
+    ui.add(this.createConfirmButton(-130, 60, '进入游戏', 0x16a34a, () => this.finishTutorial()));
+    ui.add(this.createConfirmButton(130, 60, '重新教学', 0x475569, () => this.retryTutorial()));
+    this.confirmUi = ui;
+  }
+
+  private createConfirmButton(
+    x: number,
+    y: number,
+    label: string,
+    color: number,
+    onClick: () => void
+  ): Phaser.GameObjects.GameObject[] {
+    const rect = this.add.rectangle(x, y, 210, 58, color, 0.95).setStrokeStyle(2, 0xffffff, 0.85);
+    const text = this.add
+      .text(x, y, label, { fontFamily: 'Arial', fontSize: '24px', color: '#ffffff' })
+      .setOrigin(0.5);
+    rect.setInteractive({ useHandCursor: true });
+    rect.on('pointerover', () => rect.setScale(1.05));
+    rect.on('pointerout', () => rect.setScale(1));
+    rect.on('pointerdown', () => {
+      this.suppressAttackUntil = this.time.now + 200;
+      onClick();
+    });
+    return [rect, text];
+  }
+
+  private retryTutorial(): void {
+    this.confirmUi?.destroy();
+    this.confirmUi = undefined;
+    this.startTutorial();
+  }
+
+  private finishTutorial(): void {
+    this.confirmUi?.destroy();
+    this.confirmUi = undefined;
+    // 教学面板换为游戏模式的紧凑连段面板
+    this.buildPatternPanel(false);
+    // 教学期间积累的 Fever 能量清零，正式开局从零开始
+    this.combo.progress = 0;
+    this.lastComboLevel = 0;
+    this.hud.setCombo(0, 0);
+    this.state = 'intermission';
+    this.hud.setWave('准备…');
+    // 节拍同步倒计时：每小节减一，5→1 后下一小节开波
+    this.countdownRemaining = 5;
+  }
+
+  /** 倒计时数字随小节弹出，显示至本小节临近结束（数字越小越接近警示色） */
+  private showCountdownTick(label: string, color: string): void {
+    const text = this.add
+      .text(640, 300, label, {
+        fontFamily: 'Arial',
+        fontSize: '96px',
+        fontStyle: 'bold',
+        color,
+        stroke: '#000000',
+        strokeThickness: 8
+      })
+      .setOrigin(0.5)
+      .setDepth(20)
+      .setScale(1.5);
+    this.tweens.add({ targets: text, scale: 1, duration: 120, ease: 'Back.easeOut' });
+    this.tweens.add({
+      targets: text,
+      alpha: 0,
+      delay: Math.max(120, this.conductor.beatDur * 4 * 1000 - 300),
+      duration: 220,
+      onComplete: () => text.destroy()
+    });
   }
 
   private startWave(idx: number): void {
@@ -582,12 +847,26 @@ export class MainScene extends Phaser.Scene {
     this.hud.onBeat(info.beatInMeasure);
     this.pulseRhythmEdgeBlocks(this.combo.pattern[info.beatInMeasure] === 'H');
     this.pulsePickups();
+    this.pulsePatternIcon(info.beatInMeasure);
+    if (this.state === 'tutorial') this.onTutorialBeat(info);
+
+    // 进入游戏的倒计时：每小节第 1 拍减一
+    if (this.state === 'intermission' && this.countdownRemaining >= 0 && info.beatInMeasure === 0) {
+      if (this.countdownRemaining > 0) {
+        this.showCountdownTick(String(this.countdownRemaining), this.countdownRemaining <= 2 ? '#f97316' : '#facc15');
+        this.countdownRemaining--;
+      } else {
+        this.countdownRemaining = -1;
+        this.startWave(0);
+      }
+    }
 
     const tick = this.combo.onBeat(info);
     if (tick.demoAttack !== undefined) {
       this.hud.setState('自动演示中…');
       this.performWeaponAttack(tick.demoAttack, true, 5, true);
       this.hud.flashSuccess(info.globalBeat);
+      this.flashPatternIcon(info.beatInMeasure);
       this.refreshComboHUD();
     }
     if (tick.demoEnded) {
@@ -1318,6 +1597,8 @@ export class MainScene extends Phaser.Scene {
     this.combo.startSwitch(weapon.pattern);
     this.hud.setPattern(weapon.pattern, weapon.name);
     this.conductor.setCuePattern(weapon.pattern);
+    // 顶部连段面板随新武器连段重建
+    this.buildPatternPanel(false);
     this.hud.setState('武器切换中…');
   }
 
@@ -1334,8 +1615,8 @@ export class MainScene extends Phaser.Scene {
     this.lastComboLevel = level;
     this.hud.setCombo(this.combo.progress, level);
 
-    // Meter 满 → 进入 Fever Time
-    if (level === 5 && !this.combo.feverActive()) {
+    // Meter 满 → 进入 Fever Time（教学阶段不触发）
+    if (level === 5 && !this.combo.feverActive() && (this.state === 'playing' || this.state === 'intermission')) {
       this.enterFever();
     }
   }
