@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import type { MainScene } from './MainScene';
+import type { Enemy } from '../game/enemies';
 
 /**
  * 实验性第一人称视角面板（右半屏）：不做真 3D，每帧读取 MainScene 状态，
@@ -31,8 +32,11 @@ interface Projected {
 }
 
 export class FpvScene extends Phaser.Scene {
-  private enemySprites: Phaser.GameObjects.Image[] = [];
-  private bulletSprites: Phaser.GameObjects.Rectangle[] = [];
+  // billboard 与实体固定绑定（而非每帧按排序重新分配），避免池位轮换造成的频闪
+  private enemyBillboards = new Map<Enemy, Phaser.GameObjects.Image>();
+  private freeEnemySprites: Phaser.GameObjects.Image[] = [];
+  private bulletBillboards = new Map<Phaser.GameObjects.GameObject, Phaser.GameObjects.Rectangle>();
+  private freeBulletSprites: Phaser.GameObjects.Rectangle[] = [];
   private beatRing!: Phaser.GameObjects.Arc;
   private viewAngle = 0;
 
@@ -61,13 +65,15 @@ export class FpvScene extends Phaser.Scene {
     this.add.rectangle(1, PANEL_H / 2, 2, PANEL_H, 0x475569).setOrigin(0, 0.5).setDepth(10000);
 
     // 对象池
-    this.enemySprites = [];
+    this.enemyBillboards.clear();
+    this.freeEnemySprites = [];
     for (let i = 0; i < ENEMY_POOL; i++) {
-      this.enemySprites.push(this.add.image(0, 0, 'guard').setOrigin(0.5, 1).setVisible(false));
+      this.freeEnemySprites.push(this.add.image(0, 0, 'guard').setOrigin(0.5, 1).setVisible(false));
     }
-    this.bulletSprites = [];
+    this.bulletBillboards.clear();
+    this.freeBulletSprites = [];
     for (let i = 0; i < BULLET_POOL; i++) {
-      this.bulletSprites.push(this.add.rectangle(0, 0, 8, 8, 0xffffff).setVisible(false));
+      this.freeBulletSprites.push(this.add.rectangle(0, 0, 8, 8, 0xffffff).setVisible(false));
     }
 
     // 准星 + 节拍环（射击位的独立节奏提示）
@@ -115,7 +121,7 @@ export class FpvScene extends Phaser.Scene {
     const dist = Phaser.Math.Distance.Between(px, py, tx, ty);
     if (dist < NEAR_CLIP) return null;
     const rel = Phaser.Math.Angle.Wrap(Phaser.Math.Angle.Between(px, py, tx, ty) - this.viewAngle);
-    if (Math.abs(rel) > FOV / 2 + 0.35) return null;
+    if (Math.abs(rel) > FOV / 2 + 0.6) return null;
     // 深度用视线方向分量，避免边缘目标被 tan 拉伸得过大
     const depth = Math.max(dist * Math.cos(rel), NEAR_CLIP);
     return {
@@ -128,65 +134,88 @@ export class FpvScene extends Phaser.Scene {
   }
 
   private drawEnemies(main: MainScene, px: number, py: number): void {
-    const projected: { p: Projected; tex: string }[] = [];
+    const seen = new Set<Enemy>();
     for (const enemy of main.fpvEnemies) {
       if (enemy.dead) continue;
+      seen.add(enemy);
       const go = enemy.go as Phaser.GameObjects.Image;
       const p = this.project(px, py, enemy.x, enemy.y, go.displayWidth, go.displayHeight);
-      if (p) projected.push({ p, tex: go.texture?.key ?? 'guard' });
-    }
-    // 远的先画（深度小），近的盖在上面
-    projected.sort((a, b) => b.p.dist - a.p.dist);
-
-    for (let i = 0; i < this.enemySprites.length; i++) {
-      const sprite = this.enemySprites[i];
-      const item = projected[i];
-      if (!item) {
-        sprite.setVisible(false);
+      let sprite = this.enemyBillboards.get(enemy);
+      if (!p) {
+        // 视野外：保留绑定只隐藏，回到视野时不换池位
+        sprite?.setVisible(false);
         continue;
+      }
+      if (!sprite) {
+        sprite = this.freeEnemySprites.pop();
+        if (!sprite) continue;
+        this.enemyBillboards.set(enemy, sprite);
       }
       sprite
         .setVisible(true)
-        .setTexture(item.tex)
-        .setPosition(item.p.screenX, item.p.bottomY)
-        .setDisplaySize(item.p.width, item.p.height)
-        .setDepth(-item.p.dist);
+        .setTexture(go.texture?.key ?? 'guard')
+        .setPosition(p.screenX, p.bottomY)
+        .setDisplaySize(p.width, p.height)
+        .setDepth(-p.dist);
+    }
+    // 回收已死亡/移除的敌人的 billboard
+    for (const [enemy, sprite] of [...this.enemyBillboards]) {
+      if (!seen.has(enemy)) {
+        sprite.setVisible(false);
+        this.enemyBillboards.delete(enemy);
+        this.freeEnemySprites.push(sprite);
+      }
     }
   }
 
   private drawBullets(main: MainScene, px: number, py: number): void {
-    const all: { p: Projected; color: number }[] = [];
+    const seen = new Set<Phaser.GameObjects.GameObject>();
     for (const group of [main.fpvEnemyBullets, main.fpvPlayerBullets]) {
       for (const obj of group) {
         const bullet = obj as Phaser.GameObjects.Rectangle;
         if (!bullet.active) continue;
+        seen.add(bullet);
         const p = this.project(px, py, bullet.x, bullet.y, bullet.displayWidth, bullet.displayHeight);
-        if (p) all.push({ p, color: bullet.fillColor });
+        let sprite = this.bulletBillboards.get(bullet);
+        if (!p) {
+          sprite?.setVisible(false);
+          continue;
+        }
+        if (!sprite) {
+          sprite = this.freeBulletSprites.pop();
+          if (!sprite) continue;
+          this.bulletBillboards.set(bullet, sprite);
+        }
+        // 子弹按飞行高度悬浮在地面与地平线之间
+        const y = HORIZON_Y + (p.bottomY - HORIZON_Y) * 0.55;
+        sprite
+          .setVisible(true)
+          .setPosition(p.screenX, y)
+          .setDisplaySize(Math.max(3, p.width), Math.max(3, p.height))
+          .setFillStyle(bullet.fillColor)
+          .setDepth(-p.dist);
       }
     }
-    all.sort((a, b) => b.p.dist - a.p.dist);
-
-    for (let i = 0; i < this.bulletSprites.length; i++) {
-      const sprite = this.bulletSprites[i];
-      const item = all[i];
-      if (!item) {
+    for (const [bullet, sprite] of [...this.bulletBillboards]) {
+      if (!seen.has(bullet)) {
         sprite.setVisible(false);
-        continue;
+        this.bulletBillboards.delete(bullet);
+        this.freeBulletSprites.push(sprite);
       }
-      // 子弹按飞行高度悬浮在地面与地平线之间
-      const y = HORIZON_Y + (item.p.bottomY - HORIZON_Y) * 0.55;
-      sprite
-        .setVisible(true)
-        .setPosition(item.p.screenX, y)
-        .setDisplaySize(Math.max(3, item.p.width), Math.max(3, item.p.height))
-        .setFillStyle(item.color)
-        .setDepth(-item.p.dist);
     }
   }
 
   private hideAll(): void {
-    for (const sprite of this.enemySprites) sprite.setVisible(false);
-    for (const sprite of this.bulletSprites) sprite.setVisible(false);
+    for (const [entity, sprite] of [...this.enemyBillboards]) {
+      sprite.setVisible(false);
+      this.enemyBillboards.delete(entity);
+      this.freeEnemySprites.push(sprite);
+    }
+    for (const [entity, sprite] of [...this.bulletBillboards]) {
+      sprite.setVisible(false);
+      this.bulletBillboards.delete(entity);
+      this.freeBulletSprites.push(sprite);
+    }
     if (this.beatRing) this.beatRing.setVisible(false);
   }
 }

@@ -19,6 +19,11 @@ const DODGE_BEAT_WINDOW = 0.12;
 const SHOCKWAVE_RADIUS = 60;
 const WEAPON_SWING_DURATION_MS = 200;
 const BATON_SIDE_OFFSET = worldSize(17);
+/** 分屏 FPV 瞄准：指针在右半屏偏离面板中心的量转为转向速度（弧度/秒，满偏时） */
+const FPV_TURN_SPEED = 3.2;
+const FPV_PANEL_LEFT = 640;
+const FPV_PANEL_CENTER_X = 960;
+const FPV_PANEL_HALF_W = 320;
 
 export class Player {
   scene: MainScene;
@@ -89,7 +94,7 @@ export class Player {
     }
 
     // 瞄准
-    this.updateAim();
+    this.updateAim(dtMs);
 
     const playerDepth = worldDepth(this.y + this.body.halfHeight);
     this.go.setDepth(playerDepth);
@@ -213,7 +218,11 @@ export class Player {
     return dir.lengthSq() > 0 ? dir.normalize() : dir;
   }
 
-  private updateAim(): void {
+  private updateAim(dtMs: number): void {
+    if (this.scene.isSplitMode) {
+      this.updateFpvAim(dtMs);
+      return;
+    }
     const pointer = this.scene.input.activePointer;
     const pointerMoved = pointer.x !== this.lastPointerX || pointer.y !== this.lastPointerY;
     this.lastPointerX = pointer.x;
@@ -238,6 +247,19 @@ export class Player {
     this.aimAngle = this.scene.getAssistedAimAngle(rawAngle);
   }
 
+  /**
+   * 分屏 FPV 瞄准：只响应右半屏内的指针。指针偏离面板中心越远转向越快（平方响应，
+   * 中心带小死区便于稳定持向），不做辅助瞄准以保证 FPV 视角平稳。
+   */
+  private updateFpvAim(dtMs: number): void {
+    const pointer = this.scene.input.activePointer;
+    if (pointer.x < FPV_PANEL_LEFT) return;
+    const offset = Phaser.Math.Clamp((pointer.x - FPV_PANEL_CENTER_X) / FPV_PANEL_HALF_W, -1, 1);
+    if (Math.abs(offset) < 0.08) return;
+    const turn = offset * Math.abs(offset) * FPV_TURN_SPEED * (dtMs / 1000);
+    this.aimAngle = Phaser.Math.Angle.Wrap(this.aimAngle + turn);
+  }
+
   private moveTowards(current: number, target: number, maxChange: number): number {
     if (Math.abs(target - current) <= maxChange) return target;
     return current + Math.sign(target - current) * maxChange;
@@ -258,56 +280,39 @@ export class Player {
     });
   }
 
+  /** 武器始终指向瞄准方向；挥击时绕瞄准方向从一侧扫到另一侧。 */
   private updateWeaponVisual(): void {
-    if (!this.weaponSwingActive) {
-      if (this.weapon.id === 'glowsticks') {
-        this.weaponBars[0]
-          .setVisible(true)
-          .setFillStyle(0xef4444)
-          .setDisplaySize(worldSize(30), worldSize(7.5))
-          .setPosition(this.x - worldSize(17), this.y + worldSize(20))
-          .setRotation(-Math.PI / 2);
-        this.weaponBars[1]
-          .setVisible(true)
-          .setFillStyle(0xef4444)
-          .setDisplaySize(worldSize(30), worldSize(7.5))
-          .setPosition(this.x + worldSize(17), this.y + worldSize(20))
-          .setRotation(-Math.PI / 2);
-      } else {
-        const batonSide = Math.cos(this.aimAngle) >= 0 ? 1 : -1;
-        this.weaponBars[0]
-          .setVisible(true)
-          .setFillStyle(0xa855f7)
-          .setDisplaySize(worldSize(51), worldSize(9))
-          .setPosition(this.x + batonSide * BATON_SIDE_OFFSET, this.y + worldSize(30.5))
-          .setRotation(-Math.PI / 2);
-        this.weaponBars[1].setVisible(false);
-      }
-      return;
-    }
-
+    const aim = this.aimAngle;
     const swingDegrees = this.weapon.id === 'baton' ? 50 : 30;
-    const angle = -Math.PI / 2 +
-      this.weaponSwingDirection * Phaser.Math.DegToRad(swingDegrees) * this.weaponSwing.progress;
+    const rotation = this.weaponSwingActive
+      ? aim + this.weaponSwingDirection * Phaser.Math.DegToRad(swingDegrees) * (this.weaponSwing.progress * 2 - 1)
+      : aim;
+    const perpX = Math.cos(aim + Math.PI / 2);
+    const perpY = Math.sin(aim + Math.PI / 2);
+    const fwdX = Math.cos(aim);
+    const fwdY = Math.sin(aim);
 
     if (this.weapon.id === 'glowsticks') {
+      // 双持：两根荧光棒分列瞄准方向两侧，握把在角色边缘、棒身指向瞄准方向
       for (let i = 0; i < this.weaponBars.length; i++) {
-        const pivotX = this.x + worldSize(i === 0 ? -17 : 17);
+        const side = i === 0 ? -1 : 1;
         this.weaponBars[i]
           .setVisible(true)
           .setFillStyle(0xef4444)
           .setDisplaySize(worldSize(30), worldSize(7.5))
-          .setPosition(pivotX, this.y + worldSize(20))
-          .setRotation(angle);
+          .setPosition(
+            this.x + perpX * side * worldSize(14) + fwdX * worldSize(12),
+            this.y + perpY * side * worldSize(14) + fwdY * worldSize(12)
+          )
+          .setRotation(rotation);
       }
     } else {
-      const batonSide = Math.cos(this.aimAngle) >= 0 ? 1 : -1;
       this.weaponBars[0]
         .setVisible(true)
         .setFillStyle(0xa855f7)
         .setDisplaySize(worldSize(51), worldSize(9))
-        .setPosition(this.x + batonSide * BATON_SIDE_OFFSET, this.y + worldSize(30.5))
-        .setRotation(angle);
+        .setPosition(this.x + fwdX * BATON_SIDE_OFFSET, this.y + fwdY * BATON_SIDE_OFFSET)
+        .setRotation(rotation);
       this.weaponBars[1].setVisible(false);
     }
   }

@@ -254,6 +254,8 @@ export class MainScene extends Phaser.Scene {
 
       const btn = pointer.rightButtonDown() ? 'H' : pointer.leftButtonDown() ? 'L' : null;
       if (!btn) return;
+      // 分屏时左半屏归移动位，点击不触发射击；只有指针在右半屏才响应
+      if (this.splitMode && pointer.x < 640) return;
       this.handleAttackInput(btn);
     });
 
@@ -1040,6 +1042,10 @@ export class MainScene extends Phaser.Scene {
     }
     cam.setZoom(this.baseZoom);
     cam.centerOn(640, 360);
+  }
+
+  get isSplitMode(): boolean {
+    return this.splitMode;
   }
 
   // FPV 场景的只读访问器，不改变任何游戏逻辑
