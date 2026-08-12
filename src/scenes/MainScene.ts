@@ -616,9 +616,12 @@ export class MainScene extends Phaser.Scene {
     const heavy = weapon.pattern[beatIdx] === 'H';
     const angle = this.player.aimAngle;
 
+    // enableFever 为 true 即踩拍成功（含自动演示），攻击带强调特效与发光弹丸
+    const onBeat = enableFever;
     const damage = spec.kind === 'charge' ? 8 : spec.damage;
     this.sfx.attack(heavy);
     this.player.playAttackAnimation(angle);
+    if (onBeat) this.spawnOnBeatAttackFx(this.player.x, this.player.y, angle, heavy, spec.color);
     if (weapon.id === 'baton') {
       this.spawnBatonSweep(
         this.player.x,
@@ -626,7 +629,8 @@ export class MainScene extends Phaser.Scene {
         angle,
         damage * mult,
         enableFever ? 3 : 1,
-        heavy
+        heavy,
+        onBeat
       );
     } else {
       this.spawnPlayerShotgun(
@@ -636,7 +640,8 @@ export class MainScene extends Phaser.Scene {
         heavy ? 560 : 480,
         damage * mult,
         PLAYER_BULLET_COLOR,
-        pelletCount
+        pelletCount,
+        onBeat
       );
     }
 
@@ -657,6 +662,67 @@ export class MainScene extends Phaser.Scene {
         this.spawnSoundWave(this.player.x, this.player.y, angle, 55, 230, 10 * mult);
       }
     }
+  }
+
+  /**
+   * 踩拍攻击的强调特效：双层冲击环 + 瞄准方向楔形闪光 + 音符飘散 + 相机微推拉。
+   * 与普通（错拍）攻击形成明显区分；重拍整体比轻拍更夸张。
+   */
+  private spawnOnBeatAttackFx(x: number, y: number, angle: number, heavy: boolean, color: number): void {
+    // 双层冲击环：外环用本拍攻击色，内环白色、更快消散
+    const outer = this.add.circle(x, y, 16).setStrokeStyle(heavy ? 5 : 4, color, 0.95).setDepth(6);
+    const inner = this.add.circle(x, y, 10).setStrokeStyle(3, 0xffffff, 0.9).setDepth(6);
+    this.tweens.add({
+      targets: outer,
+      scale: heavy ? 3.4 : 2.6,
+      alpha: 0,
+      duration: heavy ? 260 : 200,
+      ease: 'Cubic.easeOut',
+      onComplete: () => outer.destroy()
+    });
+    this.tweens.add({
+      targets: inner,
+      scale: 2,
+      alpha: 0,
+      duration: 140,
+      ease: 'Cubic.easeOut',
+      onComplete: () => inner.destroy()
+    });
+
+    // 瞄准方向的楔形闪光：即时反馈攻击朝向
+    const wedge = this.add.graphics().setDepth(6);
+    const halfRad = Phaser.Math.DegToRad(heavy ? 34 : 22);
+    wedge.fillStyle(0xffffff, 0.5);
+    wedge.slice(x, y, heavy ? 64 : 48, angle - halfRad, angle + halfRad, false);
+    wedge.fillPath();
+    this.tweens.add({ targets: wedge, alpha: 0, duration: 130, onComplete: () => wedge.destroy() });
+
+    // 音符飘散：音游主题的踩拍标记
+    const colorHex = `#${color.toString(16).padStart(6, '0')}`;
+    const noteCount = heavy ? 2 : 1;
+    for (let i = 0; i < noteCount; i++) {
+      const nx = x + Phaser.Math.Between(-18, 18);
+      const note = this.add
+        .text(nx, y - 26, i % 2 === 0 ? '♪' : '♫', { fontSize: heavy ? '22px' : '17px', color: colorHex })
+        .setOrigin(0.5)
+        .setDepth(8);
+      this.tweens.add({
+        targets: note,
+        y: note.y - Phaser.Math.Between(26, 40),
+        x: nx + Phaser.Math.Between(-12, 12),
+        alpha: 0,
+        angle: Phaser.Math.Between(-25, 25),
+        duration: 420,
+        ease: 'Sine.easeOut',
+        onComplete: () => note.destroy()
+      });
+    }
+
+    // 相机微推拉：轻拍几乎不可察觉的顿挫，重拍稍强
+    const cam = this.cameras.main;
+    this.tweens.killTweensOf(cam);
+    cam.setZoom(1);
+    this.tweens.add({ targets: cam, zoom: heavy ? 1.03 : 1.015, duration: 60, yoyo: true, ease: 'Quad.easeOut' });
   }
 
   /**
@@ -783,7 +849,8 @@ export class MainScene extends Phaser.Scene {
     _speed: number,
     damage: number,
     color: number,
-    pelletCount: number
+    pelletCount: number,
+    onBeat = false
   ): void {
     const judgedBeat = this.conductor.nearestBeat(this.conductor.now()).n;
     const despawnBeat = Math.max(0, judgedBeat + 1);
@@ -797,6 +864,8 @@ export class MainScene extends Phaser.Scene {
         BULLET_THICKNESS,
         color
       ).setRotation(shotAngle).setDepth(4);
+      // 踩拍弹丸带白色描边发光，与错拍的普通弹丸区分
+      if (onBeat) bullet.setStrokeStyle(2, 0xffffff, 0.95);
       this.playerBullets.add(bullet);
       const body = bullet.body as Phaser.Physics.Arcade.Body;
       body.setSize(PLAYER_BULLET_LENGTH, BULLET_THICKNESS);
@@ -817,7 +886,8 @@ export class MainScene extends Phaser.Scene {
     aimAngle: number,
     damage: number,
     bulletCount: number,
-    heavy: boolean
+    heavy: boolean,
+    onBeat = false
   ): void {
     const clockwise = !heavy;
     const halfSweep = heavy ? Math.PI / 3 : Math.PI / 4;
@@ -861,6 +931,13 @@ export class MainScene extends Phaser.Scene {
         (bullet.body as Phaser.Physics.Arcade.Body).reset(x, y);
         bullet.setData('knockbackAngle', angle + (clockwise ? Math.PI / 2 : -Math.PI / 2));
         visual.clear();
+        // 踩拍扫击带白色光晕底层
+        if (onBeat) {
+          visual.lineStyle(BULLET_THICKNESS + 8, 0xffffff, 0.22);
+          visual.beginPath();
+          visual.arc(originX, originY, radius, angle - halfArcAngle * 1.15, angle + halfArcAngle * 1.15, false);
+          visual.strokePath();
+        }
         visual.lineStyle(BULLET_THICKNESS, BATON_BULLET_COLOR, 1);
         visual.beginPath();
         visual.arc(originX, originY, radius, angle - halfArcAngle, angle + halfArcAngle, false);
