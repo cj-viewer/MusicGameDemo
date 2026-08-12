@@ -19,7 +19,18 @@ const DODGE_COST_ONBEAT = 15;
 const DODGE_BEAT_WINDOW = 0.12;
 const SHOCKWAVE_RADIUS = 60;
 const WEAPON_SWING_DURATION_MS = 200;
-const BATON_SIDE_OFFSET = worldSize(17);
+/**
+ * 手部锚点（角色朝右时相对角色中心；翻转时 X 取反）。
+ * 由 idle 帧目测标定：持手在面向侧躯干边缘，内容坐标约 (18, 24)，
+ * 相对内容中心 (10.5, 27.5) 偏移 (7.5, -3.5)px，乘 1.156 显示缩放。
+ */
+const HAND_OFFSET_X = worldSize(11);
+const HAND_OFFSET_Y = -worldSize(5);
+/** 双持荧光棒在手中的扇形夹角（弧度，两棒各偏一半） */
+const GLOWSTICK_FAN = 0.26;
+/** 武器握持前倾角（弧度，向面朝方向倾斜，避免竖直棒身遮脸） */
+const GLOWSTICK_LEAN = 0.42;
+const BATON_LEAN = 0.55;
 
 export class Player {
   scene: MainScene;
@@ -302,56 +313,38 @@ export class Player {
     });
   }
 
+  /**
+   * 武器示意绑定在角色手部锚点：底端（握把）为旋转轴，随角色朝向换手。
+   * 待机不跟随鼠标角度旋转；挥击时围绕手部在 200ms 内完成摆动。
+   */
   private updateWeaponVisual(): void {
-    if (!this.weaponSwingActive) {
-      if (this.weapon.id === 'glowsticks') {
-        this.weaponBars[0]
-          .setVisible(true)
-          .setFillStyle(0xef4444)
-          .setDisplaySize(worldSize(30), worldSize(7.5))
-          .setPosition(this.x - worldSize(17), this.y + worldSize(20))
-          .setRotation(-Math.PI / 2);
-        this.weaponBars[1]
-          .setVisible(true)
-          .setFillStyle(0xef4444)
-          .setDisplaySize(worldSize(30), worldSize(7.5))
-          .setPosition(this.x + worldSize(17), this.y + worldSize(20))
-          .setRotation(-Math.PI / 2);
-      } else {
-        const batonSide = Math.cos(this.aimAngle) >= 0 ? 1 : -1;
-        this.weaponBars[0]
-          .setVisible(true)
-          .setFillStyle(0xa855f7)
-          .setDisplaySize(worldSize(51), worldSize(9))
-          .setPosition(this.x + batonSide * BATON_SIDE_OFFSET, this.y + worldSize(30.5))
-          .setRotation(-Math.PI / 2);
-        this.weaponBars[1].setVisible(false);
-      }
-      return;
-    }
-
+    const handSide = this.go.flipX ? -1 : 1;
+    const handX = this.x + handSide * HAND_OFFSET_X;
+    const handY = this.y + HAND_OFFSET_Y;
     const swingDegrees = this.weapon.id === 'baton' ? 50 : 30;
-    const angle = -Math.PI / 2 +
-      this.weaponSwingDirection * Phaser.Math.DegToRad(swingDegrees) * this.weaponSwing.progress;
+    const swingAngle = this.weaponSwingActive
+      ? this.weaponSwingDirection * Phaser.Math.DegToRad(swingDegrees) * this.weaponSwing.progress
+      : 0;
 
     if (this.weapon.id === 'glowsticks') {
+      // 双棒同握一手，向面朝方向前倾并呈扇形展开
+      const lean = handSide * GLOWSTICK_LEAN;
       for (let i = 0; i < this.weaponBars.length; i++) {
-        const pivotX = this.x + worldSize(i === 0 ? -17 : 17);
+        const fan = (i === 0 ? -0.5 : 0.5) * GLOWSTICK_FAN * handSide;
         this.weaponBars[i]
           .setVisible(true)
           .setFillStyle(0xef4444)
           .setDisplaySize(worldSize(30), worldSize(7.5))
-          .setPosition(pivotX, this.y + worldSize(20))
-          .setRotation(angle);
+          .setPosition(handX + (i === 1 ? handSide * worldSize(2) : 0), handY + (i === 1 ? worldSize(1.5) : 0))
+          .setRotation(-Math.PI / 2 + lean + fan + swingAngle);
       }
     } else {
-      const batonSide = Math.cos(this.aimAngle) >= 0 ? 1 : -1;
       this.weaponBars[0]
         .setVisible(true)
         .setFillStyle(0xa855f7)
         .setDisplaySize(worldSize(51), worldSize(9))
-        .setPosition(this.x + batonSide * BATON_SIDE_OFFSET, this.y + worldSize(30.5))
-        .setRotation(angle);
+        .setPosition(handX, handY)
+        .setRotation(-Math.PI / 2 + handSide * BATON_LEAN + swingAngle);
       this.weaponBars[1].setVisible(false);
     }
   }
