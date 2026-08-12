@@ -8,7 +8,10 @@ import { BATON, GLOWSTICKS, getAttackSpec, type WeaponDef } from '../game/weapon
 import { Enemy, FanEnemy, SmallGuard } from '../game/enemies';
 import { GAMEPAD_BUTTON, rumbleParameters, type RumbleKind } from '../game/GamepadControls';
 
-const BPM = 120;
+// bgm3.mp3 的实测节拍：对全曲 onset 包络做自相关 + 网格相位搜索得出 BPM，首拍在文件内 0.026s 处。
+const BPM = 146.32;
+const BGM_FIRST_BEAT_OFFSET = 0.026;
+const BGM_VOLUME = 0.5;
 const ARENA = { x: 12, y: 12, width: 1256, height: 696 };
 const PLAYER_BULLET_LENGTH = 38;
 const ENEMY_BULLET_LENGTH = 36 * 0.75;
@@ -42,6 +45,8 @@ export class MainScene extends Phaser.Scene {
   combo!: ComboSystem;
   hud!: HUD;
   player!: Player;
+
+  private bgm!: Phaser.Sound.BaseSound;
 
   private enemies: Enemy[] = [];
   private enemyGroup!: Phaser.Physics.Arcade.Group;
@@ -77,9 +82,12 @@ export class MainScene extends Phaser.Scene {
     this.load.image('player', asset('images/characters/player.png'));
     this.load.audio('beat-light', asset('audio/sfx/sfx-beat-light.mp3'));
     this.load.audio('beat-heavy', asset('audio/sfx/sfx-beat-heavy.mp3'));
+    this.load.audio('bgm', asset('audio/music/bgm3.mp3'));
   }
 
   create(): void {
+    // 重开局（R 键）会在同一个 Scene 实例上重新执行 create()，先停掉旧的 bgm 避免叠放
+    this.sound.stopByKey('bgm');
     this.enemies = [];
     this.pickups = [];
     this.state = 'title';
@@ -105,6 +113,7 @@ export class MainScene extends Phaser.Scene {
 
     this.conductor = new Conductor(this, BPM);
     this.sfx = new Sfx(this.conductor.ctx);
+    this.bgm = this.sound.add('bgm', { loop: true, volume: BGM_VOLUME });
     this.combo = new ComboSystem(this.conductor, GLOWSTICKS.pattern);
     this.hud = new HUD(this, this.conductor);
     this.player = new Player(this, 640, 400);
@@ -299,8 +308,22 @@ export class MainScene extends Phaser.Scene {
     this.children.getByName('titleOverlay')?.destroy();
     this.hud.message('');
     this.conductor.start();
+    this.playBgmAlignedToBeat();
     this.state = 'intermission';
     this.time.delayedCall(400, () => this.startWave(0));
+  }
+
+  /**
+   * 让 bgm3.mp3 的首拍（文件内 BGM_FIRST_BEAT_OFFSET 秒处）与 Conductor 的第 0 拍对齐：
+   * 若倒数时间足够则用 delay 等到那一刻播放，否则直接以 seek 跳过已经过去的部分。
+   */
+  private playBgmAlignedToBeat(): void {
+    const delayToBeat0 = this.conductor.timeOfBeat(0) - this.conductor.now();
+    if (delayToBeat0 >= BGM_FIRST_BEAT_OFFSET) {
+      this.bgm.play({ delay: delayToBeat0 - BGM_FIRST_BEAT_OFFSET });
+    } else {
+      this.bgm.play({ seek: BGM_FIRST_BEAT_OFFSET - delayToBeat0 });
+    }
   }
 
   private startWave(idx: number): void {
