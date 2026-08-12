@@ -6,6 +6,7 @@ import { HUD } from '../game/HUD';
 import { Player, PLAYER_RADIUS } from '../game/Player';
 import { BATON, GLOWSTICKS, getAttackSpec, type WeaponDef } from '../game/weapons';
 import { Enemy, FanEnemy, SmallGuard } from '../game/enemies';
+import type { FpvScene } from './FpvScene';
 import { GAMEPAD_BUTTON, rumbleParameters, type RumbleKind } from '../game/GamepadControls';
 import { WORLD_OBJECT_SCALE, worldDepth, worldSize } from '../game/visualScale';
 
@@ -306,6 +307,7 @@ export class MainScene extends Phaser.Scene {
     if (result.type === 'correct' || result.type === 'protectedCorrect') {
       this.performWeaponAttack(result.beatIdx, false, 5, true);
       this.hud.flashSuccess(result.globalBeat);
+      this.fpvScene()?.flashBeatHit(result.globalBeat);
       this.flashPatternIcon(result.globalBeat % 4);
       this.refreshComboHUD();
       if (pad) this.rumbleGamepad(pad, btn === 'H' ? 'heavy' : 'light');
@@ -314,6 +316,7 @@ export class MainScene extends Phaser.Scene {
       this.sfx.error();
       this.player.errorFlash();
       this.hud.flashError();
+      this.fpvScene()?.flashBeatError();
     }
 
     if (this.state === 'tutorial') {
@@ -886,6 +889,7 @@ export class MainScene extends Phaser.Scene {
       this.hud.setState('自动演示中…');
       this.performWeaponAttack(tick.demoAttack, true, 5, true);
       this.hud.flashSuccess(info.globalBeat);
+      this.fpvScene()?.flashBeatHit(info.globalBeat);
       this.flashPatternIcon(info.beatInMeasure);
       this.refreshComboHUD();
     }
@@ -1049,6 +1053,13 @@ export class MainScene extends Phaser.Scene {
     cam.setZoom(this.baseZoom);
     cam.centerOn(640, 360);
     this.updatePatternPanelVisibility();
+    // 分屏时判定条由 FPV 场景绘制在分屏线上，左侧原判定条隐藏
+    this.hud.setBarVisible(!this.splitMode);
+  }
+
+  /** FPV 场景引用（仅在分屏激活时返回），用于转发踩拍命中/错拍信号 */
+  private fpvScene(): FpvScene | undefined {
+    return this.scene.isActive('FpvScene') ? (this.scene.get('FpvScene') as FpvScene) : undefined;
   }
 
   /** 分屏时节奏点移到右侧 FPV 面板显示，左侧紧凑连段面板隐藏；教学面板始终显示 */

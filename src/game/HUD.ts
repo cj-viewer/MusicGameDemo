@@ -52,6 +52,9 @@ export class HUD {
   private feverMode = false;
   private hpBaseColor = 0x4ade80;
   private hpPulseUntil = 0;
+  private centerLine: Phaser.GameObjects.Line;
+  /** 分屏时判定条改由 FPV 场景绘制在分屏线上，此处隐藏 */
+  private barVisible = true;
 
   constructor(scene: Phaser.Scene, conductor: Conductor) {
     this.scene = scene;
@@ -68,7 +71,10 @@ export class HUD {
       .circle(BAR_CENTER_X, BAR_Y, 16)
       .setStrokeStyle(3, 0xffffff, 0.9)
       .setDepth(11);
-    scene.add.line(0, 0, BAR_CENTER_X, BAR_Y - 26, BAR_CENTER_X, BAR_Y + 26, 0xffffff, 0.35).setOrigin(0).setDepth(10);
+    this.centerLine = scene.add
+      .line(0, 0, BAR_CENTER_X, BAR_Y - 26, BAR_CENTER_X, BAR_Y + 26, 0xffffff, 0.35)
+      .setOrigin(0)
+      .setDepth(10);
 
     this.feverText = scene.add
       .text(METER_X, BAR_Y - 42, 'ComboMeter', {
@@ -137,9 +143,25 @@ export class HUD {
 
   // ---------- 节奏块（两侧向中心汇聚） ----------
 
+  /**
+   * 分屏时判定条由 FPV 场景绘制在分屏线上，隐藏左侧原判定条（含在途节奏块）。
+   * 其余 HUD 元素（HP、Meter、武器名等）不受影响。
+   */
+  setBarVisible(visible: boolean): void {
+    if (this.barVisible === visible) return;
+    this.barVisible = visible;
+    this.panel.setVisible(visible);
+    this.centerMark.setVisible(visible);
+    this.centerLine.setVisible(visible);
+    if (!visible) {
+      for (const n of [...this.notes.keys()]) this.killNote(n);
+      for (const m of [...this.measureDividers.keys()]) this.killMeasureDivider(m);
+    }
+  }
+
   /** 每帧调用：按 Conductor 时钟生成/移动/清理节奏块 */
   update(): void {
-    if (!this.conductor.started) return;
+    if (!this.conductor.started || !this.barVisible) return;
     const now = this.conductor.now();
     const bf = this.conductor.beatFloatAt(now);
     this.updateHpAnticipation(now, bf);
@@ -239,6 +261,7 @@ export class HUD {
 
   /** 成功命中：对应节奏块在中心合并爆闪 */
   flashSuccess(globalBeat: number): void {
+    if (!this.barVisible) return;
     const note = this.notes.get(globalBeat);
     if (note && !note.consumed) {
       note.consumed = true;

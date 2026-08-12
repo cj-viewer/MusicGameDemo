@@ -29,6 +29,17 @@ const ARENA_BOTTOM = 708;
 const POST_SPACING = 157;
 const FLOOR_GRID_STEP = 140;
 
+/**
+ * 共享判定条：分屏时唯一的节奏判定条，居中在分屏线上（屏幕 x=640），
+ * 左右两侧的节奏块在分屏线相遇——两名玩家共用同一个拍点。
+ * 放在远离 FPV 主相机视野的隔离区，由底部全宽的第二相机单独渲染。
+ */
+const SBAR_REGION = 6000;
+const SBAR_CENTER_X = 640;
+const SBAR_Y = SBAR_REGION + 668;
+const SBAR_LOOKAHEAD_BEATS = 2;
+const SBAR_TRAVEL = 210;
+
 interface Projected {
   screenX: number;
   bottomY: number;
@@ -57,6 +68,16 @@ export class FpvScene extends Phaser.Scene {
   // 节奏点条（分屏时从左侧移过来）
   private patternIcons: Phaser.GameObjects.Shape[] = [];
   private patternKey = '';
+
+  // 分屏线上的共享判定条
+  private sharedCenterMark!: Phaser.GameObjects.Arc;
+  private sharedBarNotes = new Map<number, { left: Phaser.GameObjects.Shape; right: Phaser.GameObjects.Shape }>();
+  private sharedBarDividers = new Map<
+    number,
+    { left: Phaser.GameObjects.Container; right: Phaser.GameObjects.Container }
+  >();
+  /** 已被命中消费的拍：阻止仍在前瞻窗口内的拍重新生成节奏块 */
+  private sharedBarConsumed = new Set<number>();
 
   constructor() {
     super('FpvScene');
@@ -137,6 +158,15 @@ export class FpvScene extends Phaser.Scene {
         .setVisible(false)
     }));
 
+    // 共享判定条：底部全宽第二相机，渲染隔离区中的判定条（中心正对分屏线）
+    const barCam = this.cameras.add(0, 600, 1280, 120);
+    barCam.setScroll(0, SBAR_REGION + 600);
+    this.sharedBarNotes.clear();
+    this.sharedBarDividers.clear();
+    this.add.rectangle(SBAR_CENTER_X, SBAR_Y, 480, 60, 0x0f172a, 0.75).setStrokeStyle(1, 0x334155);
+    this.add.rectangle(SBAR_CENTER_X, SBAR_Y, 2, 52, 0xffffff, 0.3);
+    this.sharedCenterMark = this.add.circle(SBAR_CENTER_X, SBAR_Y, 16).setStrokeStyle(3, 0xffffff, 0.9).setDepth(1);
+
     // 准星 + 节拍环（射击位的独立节奏提示）
     const crosshair = this.add.graphics().setDepth(9000);
     crosshair.lineStyle(2, 0xffffff, 0.9);
@@ -177,8 +207,130 @@ export class FpvScene extends Phaser.Scene {
     this.drawReferenceMarkers(player.x, player.y);
     this.drawCompass();
     this.updatePatternStrip(main);
+    this.updateSharedBar(main);
     this.drawEnemies(main, player.x, player.y);
     this.drawBullets(main, player.x, player.y);
+  }
+
+  // ---------- 分屏线上的共享判定条 ----------
+
+  /** 与 HUD 判定条同一套节奏逻辑：节奏块从两侧向分屏线汇聚，到达即拍点 */
+  private updateSharedBar(main: MainScene): void {
+    const conductor = main.conductor;
+    if (!conductor.started) return;
+    const now = conductor.now();
+    const beatFloat = conductor.beatFloatAt(now);
+
+    const first = Math.max(0, Math.ceil(beatFloat));
+    const last = Math.max(0, Math.floor(beatFloat + SBAR_LOOKAHEAD_BEATS));
+    for (const beat of [...this.sharedBarConsumed]) {
+      if (beat < beatFloat - 1) this.sharedBarConsumed.delete(beat);
+    }
+    for (let n = first; n <= last; n++) {
+      if (this.sharedBarNotes.has(n) || this.sharedBarConsumed.has(n)) continue;
+      const make = (): Phaser.GameObjects.Shape =>
+        main.combo.pattern[n % 4] === 'L'
+          ? (this.add.circle(0, SBAR_Y, 10).setStrokeStyle(3, 0x67e8f9).setDepth(2) as Phaser.GameObjects.Shape)
+          : (this.add.rectangle(0, SBAR_Y, 16, 16, 0xfbbf24).setAngle(45).setDepth(2) as Phaser.GameObjects.Shape);
+      this.sharedBarNotes.set(n, { left: make(), right: make() });
+    }
+
+    const firstMeasure = Math.max(1, Math.ceil((beatFloat + 0.5) / 4));
+    const lastMeasure = Math.floor((beatFloat + SBAR_LOOKAHEAD_BEATS + 0.5) / 4);
+    for (let measure = firstMeasure; measure <= lastMeasure; measure++) {
+      if (this.sharedBarDividers.has(measure)) continue;
+      const make = (): Phaser.GameObjects.Container => {
+        const lineA = this.add.rectangle(-4, 0, 4, 44, 0xf472b6).setStrokeStyle(1, 0xffffff, 0.9);
+        const lineB = this.add.rectangle(4, 0, 4, 44, 0xa855f7).setStrokeStyle(1, 0xffffff, 0.9);
+        return this.add.container(0, SBAR_Y, [lineA, lineB]).setDepth(2);
+      };
+      this.sharedBarDividers.set(measure, { left: make(), right: make() });
+    }
+
+    for (const [n, note] of [...this.sharedBarNotes]) {
+      const beatTime = conductor.timeOfBeat(n);
+      if (now > beatTime + 0.25) {
+        this.killSharedNote(n);
+        continue;
+      }
+      const progress = Math.max(0, (beatTime - now) / (conductor.beatDur * SBAR_LOOKAHEAD_BEATS));
+      const dx = SBAR_TRAVEL * progress;
+      note.left.x = SBAR_CENTER_X - dx;
+      note.right.x = SBAR_CENTER_X + dx;
+    }
+
+    for (const [measure, divider] of [...this.sharedBarDividers]) {
+      const boundaryTime = conductor.timeOfBeat(measure * 4 - 0.5);
+      if (now > boundaryTime + 0.25) {
+        this.killSharedDivider(measure);
+        continue;
+      }
+      const progress = Math.max(0, (boundaryTime - now) / (conductor.beatDur * SBAR_LOOKAHEAD_BEATS));
+      const dx = SBAR_TRAVEL * progress;
+      divider.left.x = SBAR_CENTER_X - dx;
+      divider.right.x = SBAR_CENTER_X + dx;
+    }
+  }
+
+  private killSharedNote(n: number): void {
+    const note = this.sharedBarNotes.get(n);
+    if (!note) return;
+    this.sharedBarNotes.delete(n);
+    this.tweens.add({
+      targets: [note.left, note.right],
+      alpha: 0,
+      duration: 120,
+      onComplete: () => {
+        note.left.destroy();
+        note.right.destroy();
+      }
+    });
+  }
+
+  private killSharedDivider(measure: number): void {
+    const divider = this.sharedBarDividers.get(measure);
+    if (!divider) return;
+    this.sharedBarDividers.delete(measure);
+    this.tweens.add({
+      targets: [divider.left, divider.right],
+      alpha: 0,
+      duration: 120,
+      onComplete: () => {
+        divider.left.destroy(true);
+        divider.right.destroy(true);
+      }
+    });
+  }
+
+  /** 踩拍成功：两侧节奏块在分屏线合并爆闪（由 MainScene 通知） */
+  flashBeatHit(globalBeat: number): void {
+    this.sharedBarConsumed.add(globalBeat);
+    const note = this.sharedBarNotes.get(globalBeat);
+    if (note) {
+      this.sharedBarNotes.delete(globalBeat);
+      this.tweens.add({
+        targets: [note.left, note.right],
+        x: SBAR_CENTER_X,
+        scaleX: 1.6,
+        scaleY: 1.6,
+        alpha: 0,
+        duration: 130,
+        onComplete: () => {
+          note.left.destroy();
+          note.right.destroy();
+        }
+      });
+    }
+    const burst = this.add.circle(SBAR_CENTER_X, SBAR_Y, 16).setStrokeStyle(3, 0xffffff, 0.9).setDepth(3);
+    this.tweens.add({ targets: burst, scale: 2.2, alpha: 0, duration: 200, onComplete: () => burst.destroy() });
+  }
+
+  /** 错拍：中心判定点短暂变红（由 MainScene 通知） */
+  flashBeatError(): void {
+    this.sharedCenterMark.setStrokeStyle(3, 0xef4444, 0.9);
+    this.time.delayedCall(180, () => {
+      if (this.sharedCenterMark.active) this.sharedCenterMark.setStrokeStyle(3, 0xffffff, 0.9);
+    });
   }
 
   /** 边界立柱与地面网格：按索引稳定绑定，无重分配 */
@@ -238,6 +390,8 @@ export class FpvScene extends Phaser.Scene {
     const key = pattern.join('');
     if (key !== this.patternKey) {
       this.patternKey = key;
+      // 连段变化：清掉按旧连段生成的在途节奏块
+      for (const n of [...this.sharedBarNotes.keys()]) this.killSharedNote(n);
       for (const icon of this.patternIcons) icon.destroy();
       this.patternIcons = pattern.map((k, i) => {
         const x = PANEL_W / 2 + (i - 1.5) * 56;
@@ -363,6 +517,8 @@ export class FpvScene extends Phaser.Scene {
     for (const tick of this.compassTicks) tick.setVisible(false);
     for (const label of this.compassLabels) label.text.setVisible(false);
     for (const icon of this.patternIcons) icon.setVisible(false);
+    for (const n of [...this.sharedBarNotes.keys()]) this.killSharedNote(n);
+    for (const m of [...this.sharedBarDividers.keys()]) this.killSharedDivider(m);
     if (this.beatRing) this.beatRing.setVisible(false);
   }
 }
