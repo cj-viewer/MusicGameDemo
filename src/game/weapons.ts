@@ -39,14 +39,14 @@ export type AttackSpec = ArcAttack | DashAttack | ChargeAttack;
 export const GLOWSTICKS: WeaponDef = {
   id: 'glowsticks',
   name: '双持荧光棒',
-  pattern: ['L', 'L', 'H', 'L'],
+  pattern: ['L', 'L', 'L', 'H'],
   color: 0x67e8f9
 };
 
 export const BATON: WeaponDef = {
   id: 'baton',
   name: '伸缩警棍',
-  pattern: ['L', 'H', 'H', 'L'],
+  pattern: ['L', 'L', 'H', 'H'],
   color: 0xfbbf24
 };
 

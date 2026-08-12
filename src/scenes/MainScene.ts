@@ -7,14 +7,32 @@ import { Player, PLAYER_RADIUS } from '../game/Player';
 import { BATON, GLOWSTICKS, getAttackSpec, type WeaponDef } from '../game/weapons';
 import { Enemy, FanEnemy, SmallGuard } from '../game/enemies';
 import { GAMEPAD_BUTTON, rumbleParameters, type RumbleKind } from '../game/GamepadControls';
+import { WORLD_OBJECT_SCALE, worldDepth, worldSize } from '../game/visualScale';
 
-const BPM = 120;
-const ARENA = { x: 12, y: 12, width: 1256, height: 696 };
-const PLAYER_BULLET_LENGTH = 38;
-const ENEMY_BULLET_LENGTH = 36 * 0.75;
-const BULLET_THICKNESS = 10;
+// bgm3.mp3 的实测节拍：对全曲 onset 包络做自相关 + 网格相位搜索得出 BPM，首拍在文件内 0.026s 处。
+const BPM = 146.32;
+const BGM_FIRST_BEAT_OFFSET = 0.026;
+const BGM_VOLUME = 0.3;
+const BGM_LOOP_BEATS = 616;
+const DEFAULT_MASTER_VOLUME = 1.5;
+const MAX_MASTER_VOLUME = 3;
+const VOLUME_TRACK_X = 440;
+const VOLUME_TRACK_WIDTH = 400;
+const VIEW_WIDTH = 1280;
+const VIEW_HEIGHT = 720;
+const ARENA_MARGIN = 12;
+const RHYTHM_EDGE_BAND = 82;
+const ARENA = {
+  x: ARENA_MARGIN + RHYTHM_EDGE_BAND,
+  y: ARENA_MARGIN,
+  width: VIEW_WIDTH - (ARENA_MARGIN + RHYTHM_EDGE_BAND) * 2,
+  height: VIEW_HEIGHT - ARENA_MARGIN * 2 - RHYTHM_EDGE_BAND
+};
+const PLAYER_BULLET_LENGTH = worldSize(38);
+const ENEMY_BULLET_LENGTH = worldSize(36 * 0.75);
+const BULLET_THICKNESS = worldSize(10);
 const ENEMY_BULLET_THICKNESS = BULLET_THICKNESS * 0.75;
-const PLAYER_BULLET_SPEED = 320;
+const PLAYER_BULLET_SPEED = 360;
 const ENEMY_DRIFT_SPEED = 6;
 const ENEMY_BEAT_BURST_SPEED = 600;
 const ENEMY_BEAT_BURST_WINDOW = 0.1;
@@ -43,6 +61,16 @@ export class MainScene extends Phaser.Scene {
   hud!: HUD;
   player!: Player;
 
+  private bgm!: Phaser.Sound.BaseSound;
+  private bgmFirstBeat = 0;
+  private masterVolume = DEFAULT_MASTER_VOLUME;
+  private volumePanel!: Phaser.GameObjects.Container;
+  private volumeFill!: Phaser.GameObjects.Rectangle;
+  private volumeThumb!: Phaser.GameObjects.Arc;
+  private volumeValueText!: Phaser.GameObjects.Text;
+  private volumePanelVisible = false;
+  private volumeDragging = false;
+
   private enemies: Enemy[] = [];
   private enemyGroup!: Phaser.Physics.Arcade.Group;
   private bullets!: Phaser.Physics.Arcade.Group;
@@ -53,8 +81,12 @@ export class MainScene extends Phaser.Scene {
   private lastComboLevel = 0;
   private feverBorder!: Phaser.GameObjects.Graphics;
   private rhythmBlocks: Phaser.GameObjects.Rectangle[] = [];
+  private rhythmPulseUntil = 0;
   private pendingBeatSfx = new Set<BeatSfxCue>();
   private gamepadButtonState = { dodge: false, attack: false };
+  /** 调试：B 键切换判定框显示（红=受击判定，绿=武器/子弹判定），重开局保留开关状态 */
+  private debugHitboxes = false;
+  private debugGfx!: Phaser.GameObjects.Graphics;
 
   constructor() {
     super('MainScene');
@@ -74,15 +106,19 @@ export class MainScene extends Phaser.Scene {
     this.load.image('player', asset('images/characters/player.png'));
     this.load.audio('beat-light', asset('audio/sfx/sfx-beat-light.mp3'));
     this.load.audio('beat-heavy', asset('audio/sfx/sfx-beat-heavy.mp3'));
+    this.load.audio('bgm', asset('audio/music/bgm3.mp3'));
   }
 
   create(): void {
+    // 重开局（R 键）会在同一个 Scene 实例上重新执行 create()，先停掉旧的 bgm 避免叠放
+    this.sound.stopByKey('bgm');
     this.enemies = [];
     this.pickups = [];
     this.state = 'title';
     this.waveIdx = -1;
     this.lastComboLevel = 0;
     this.rhythmBlocks = [];
+    this.rhythmPulseUntil = 0;
     this.pendingBeatSfx.clear();
     this.gamepadButtonState = { dodge: false, attack: false };
     this.createFanAnimations();
@@ -93,13 +129,19 @@ export class MainScene extends Phaser.Scene {
     border.strokeRect(ARENA.x, ARENA.y, ARENA.width, ARENA.height);
     this.createRhythmEdgeBlocks();
 
+    this.debugGfx = this.add.graphics().setDepth(20);
+
     // Fever Time 期间的橙色边框光效（随节拍脉冲）
     this.feverBorder = this.add.graphics().setDepth(7).setAlpha(0);
     this.feverBorder.lineStyle(6, 0xf97316, 1);
     this.feverBorder.strokeRect(ARENA.x + 3, ARENA.y + 3, ARENA.width - 6, ARENA.height - 6);
 
+    const soundManager = this.sound as Phaser.Sound.WebAudioSoundManager;
+    soundManager.masterVolumeNode.gain.setValueAtTime(this.masterVolume, soundManager.context.currentTime);
     this.conductor = new Conductor(this, BPM);
-    this.sfx = new Sfx(this.conductor.ctx);
+    this.sfx = new Sfx(this.conductor.ctx, soundManager.destination);
+    this.bgm = this.sound.add('bgm', { loop: false, volume: BGM_VOLUME });
+    this.bgm.on(Phaser.Sound.Events.COMPLETE, this.onBgmComplete, this);
     this.combo = new ComboSystem(this.conductor, GLOWSTICKS.pattern);
     this.hud = new HUD(this, this.conductor);
     this.player = new Player(this, 640, 400);
@@ -107,6 +149,7 @@ export class MainScene extends Phaser.Scene {
     this.hud.setPattern(GLOWSTICKS.pattern, GLOWSTICKS.name);
     this.conductor.setCuePattern(GLOWSTICKS.pattern);
     this.hud.setHp(this.player.hp, this.player.maxHp);
+    this.createVolumeControl();
 
     this.enemyGroup = this.physics.add.group();
     this.bullets = this.physics.add.group();
@@ -142,8 +185,10 @@ export class MainScene extends Phaser.Scene {
   update(_time: number, delta: number): void {
     this.conductor.update();
     this.hud.update();
+    this.updateRhythmEdgeAnticipation();
     if (this.combo.updateFever()) this.endFever();
     this.handleGamepadInput();
+    this.drawDebugHitboxes();
 
     if (this.state === 'over' || this.state === 'title') return;
 
@@ -165,6 +210,7 @@ export class MainScene extends Phaser.Scene {
     this.input.mouse?.disableContextMenu();
 
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      if (this.volumePanelVisible) return;
       if (this.state === 'title') {
         this.startGame();
         return;
@@ -186,6 +232,20 @@ export class MainScene extends Phaser.Scene {
       this.scene.restart();
     });
 
+    this.input.keyboard!.on('keydown-ALT', (event: KeyboardEvent) => {
+      event.preventDefault();
+      if (!event.repeat) this.setVolumePanelVisible(!this.volumePanelVisible);
+    });
+
+    this.input.keyboard!.on('keydown-ESC', () => {
+      if (this.volumePanelVisible) this.setVolumePanelVisible(false);
+    });
+
+    // 调试：B 键切换判定框显示
+    this.input.keyboard!.on('keydown-B', () => {
+      this.debugHitboxes = !this.debugHitboxes;
+    });
+
     // 原型调试键：F 直接充满 ComboMeter，便于快速验证 Fever Time
     this.input.keyboard!.on('keydown-F', () => {
       if (this.state === 'playing' || this.state === 'intermission') {
@@ -198,7 +258,6 @@ export class MainScene extends Phaser.Scene {
   private handleAttackInput(btn: 'L' | 'H', pad?: Phaser.Input.Gamepad.Gamepad): void {
     const result = this.combo.handleInput(btn, this.conductor.now());
     if (result.type === 'correct' || result.type === 'protectedCorrect') {
-      this.conductor.registerCorrectAttack(result.globalBeat);
       this.performWeaponAttack(result.beatIdx, false, 5, true);
       this.hud.flashSuccess(result.globalBeat);
       this.refreshComboHUD();
@@ -280,7 +339,7 @@ export class MainScene extends Phaser.Scene {
     this.add.rectangle(640, 360, 1280, 720, 0x000000, 0.6).setDepth(19).setName('titleOverlay');
     this.hud.message(
       '音乐弹幕原型\n\n' +
-        'WASD 移动 · 鼠标瞄准\n左键=轻攻击 · 右键=重攻击（按节拍连段）\nShift=沿移动方向冲刺（踩拍消耗减半并清弹）\n\n点击开始'
+        'WASD 移动 · 鼠标瞄准\n左键=轻攻击 · 右键=重攻击（按节拍连段）\nShift=沿移动方向冲刺（踩拍消耗减半并清弹）\nB=显示判定框（调试）\n\n点击开始'
     );
   }
 
@@ -288,8 +347,101 @@ export class MainScene extends Phaser.Scene {
     this.children.getByName('titleOverlay')?.destroy();
     this.hud.message('');
     this.conductor.start();
+    this.bgmFirstBeat = 0;
+    this.playBgmAlignedToBeat(this.bgmFirstBeat);
     this.state = 'intermission';
     this.time.delayedCall(400, () => this.startWave(0));
+  }
+
+  /**
+   * 让 bgm3.mp3 的首拍（文件内 BGM_FIRST_BEAT_OFFSET 秒处）与指定 Conductor 拍点对齐：
+   * 若倒数时间足够则用 delay 等到那一刻播放，否则直接以 seek 跳过已经过去的部分。
+   */
+  private playBgmAlignedToBeat(firstBeat: number): void {
+    const delayToFirstBeat = this.conductor.timeOfBeat(firstBeat) - this.conductor.now();
+    if (delayToFirstBeat >= BGM_FIRST_BEAT_OFFSET) {
+      this.bgm.play({ delay: delayToFirstBeat - BGM_FIRST_BEAT_OFFSET });
+    } else {
+      this.bgm.play({ seek: BGM_FIRST_BEAT_OFFSET - delayToFirstBeat });
+    }
+  }
+
+  private createVolumeControl(): void {
+    this.add
+      .text(1250, 24, 'ALT  音量', { fontFamily: 'Arial', fontSize: '14px', color: '#94a3b8' })
+      .setOrigin(1, 0.5)
+      .setDepth(10);
+
+    const shade = this.add.rectangle(640, 360, 1280, 720, 0x000000, 0.55);
+    const panel = this.add.rectangle(640, 330, 560, 180, 0x0f172a, 0.96).setStrokeStyle(2, 0x67e8f9, 0.9);
+    const title = this.add
+      .text(640, 275, '主音量', { fontFamily: 'Arial', fontSize: '28px', fontStyle: 'bold', color: '#ffffff' })
+      .setOrigin(0.5);
+    const hint = this.add
+      .text(640, 385, 'Alt / Esc 关闭', { fontFamily: 'Arial', fontSize: '14px', color: '#94a3b8' })
+      .setOrigin(0.5);
+    const track = this.add
+      .rectangle(640, 335, VOLUME_TRACK_WIDTH, 12, 0x334155)
+      .setStrokeStyle(1, 0x64748b)
+      .setInteractive({ useHandCursor: true });
+    this.volumeFill = this.add.rectangle(VOLUME_TRACK_X, 335, VOLUME_TRACK_WIDTH, 12, 0x67e8f9).setOrigin(0, 0.5);
+    this.volumeThumb = this.add.circle(VOLUME_TRACK_X + VOLUME_TRACK_WIDTH, 335, 13, 0xffffff)
+      .setStrokeStyle(3, 0x67e8f9)
+      .setInteractive({ useHandCursor: true });
+    this.volumeValueText = this.add
+      .text(640, 305, '', { fontFamily: 'Arial', fontSize: '18px', color: '#67e8f9' })
+      .setOrigin(0.5);
+
+    this.volumePanel = this.add.container(0, 0, [shade, panel, title, hint, track, this.volumeFill, this.volumeThumb, this.volumeValueText])
+      .setDepth(30)
+      .setVisible(false);
+
+    const beginDrag = (pointer: Phaser.Input.Pointer): void => {
+      this.volumeDragging = true;
+      this.updateVolumeFromPointer(pointer.x);
+    };
+    track.on('pointerdown', beginDrag);
+    this.volumeThumb.on('pointerdown', beginDrag);
+    this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
+      if (this.volumeDragging && this.volumePanelVisible) this.updateVolumeFromPointer(pointer.x);
+    });
+    this.input.on('pointerup', () => {
+      this.volumeDragging = false;
+    });
+    this.refreshVolumeControl();
+  }
+
+  private setVolumePanelVisible(visible: boolean): void {
+    this.volumePanelVisible = visible;
+    this.volumeDragging = false;
+    this.volumePanel.setVisible(visible);
+    if (visible) {
+      this.input.mouse?.releasePointerLock();
+      this.input.setDefaultCursor('default');
+      this.game.canvas.style.cursor = 'default';
+    }
+  }
+
+  private updateVolumeFromPointer(pointerX: number): void {
+    const ratio = Phaser.Math.Clamp((pointerX - VOLUME_TRACK_X) / VOLUME_TRACK_WIDTH, 0, 1);
+    this.masterVolume = ratio * MAX_MASTER_VOLUME;
+    const soundManager = this.sound as Phaser.Sound.WebAudioSoundManager;
+    soundManager.masterVolumeNode.gain.setTargetAtTime(this.masterVolume, soundManager.context.currentTime, 0.01);
+    this.refreshVolumeControl();
+  }
+
+  private refreshVolumeControl(): void {
+    const ratio = this.masterVolume / MAX_MASTER_VOLUME;
+    this.volumeFill.displayWidth = VOLUME_TRACK_WIDTH * ratio;
+    this.volumeThumb.x = VOLUME_TRACK_X + VOLUME_TRACK_WIDTH * ratio;
+    this.volumeValueText.setText(`${Math.round(this.masterVolume * 100)}%`);
+  }
+
+  /** bgm3 长度不是整拍；每 616 拍按 Conductor 重新开始，避免 Phaser 原生循环累计漂移。 */
+  private onBgmComplete(): void {
+    if (!this.conductor.started) return;
+    this.bgmFirstBeat += BGM_LOOP_BEATS;
+    this.playBgmAlignedToBeat(this.bgmFirstBeat);
   }
 
   private startWave(idx: number): void {
@@ -381,6 +533,37 @@ export class MainScene extends Phaser.Scene {
       : mouseAngle;
   }
 
+  // ---------- 调试 ----------
+
+  /** 红框=玩家与敌人的受击判定（物理 body），绿框=玩家武器与敌方子弹的判定 */
+  private drawDebugHitboxes(): void {
+    this.debugGfx.clear();
+    if (!this.debugHitboxes) return;
+
+    this.debugGfx.lineStyle(2, 0xff0000, 0.9);
+    this.strokeDebugBody(this.player.body);
+    for (const enemy of this.enemies) {
+      if (!enemy.dead) this.strokeDebugBody(enemy.go.body);
+    }
+
+    this.debugGfx.lineStyle(2, 0x00ff00, 0.9);
+    for (const group of [this.playerBullets, this.bullets]) {
+      for (const obj of group.getChildren()) {
+        this.strokeDebugBody((obj as Phaser.GameObjects.Rectangle).body as Phaser.Physics.Arcade.Body);
+      }
+    }
+  }
+
+  private strokeDebugBody(body: Phaser.Physics.Arcade.Body): void {
+    // body 关闭时（闪避无敌、死亡）不参与判定，跳过绘制
+    if (!body.enable) return;
+    if (body.isCircle) {
+      this.debugGfx.strokeCircle(body.center.x, body.center.y, body.halfWidth);
+    } else {
+      this.debugGfx.strokeRect(body.x, body.y, body.width, body.height);
+    }
+  }
+
   private flashMessage(text: string): void {
     this.hud.message(text);
     this.time.delayedCall(1200, () => {
@@ -458,7 +641,10 @@ export class MainScene extends Phaser.Scene {
     }
 
     if (weapon.id !== 'baton' && spec.kind === 'charge') {
-      const ring = this.add.circle(this.player.x, this.player.y, 20).setStrokeStyle(3, spec.color, 0.9).setDepth(6);
+      const ring = this.add
+        .circle(this.player.x, this.player.y, worldSize(20))
+        .setStrokeStyle(worldSize(3), spec.color, 0.9)
+        .setDepth(6);
       this.tweens.add({ targets: ring, scale: 1.8, alpha: 0, duration: 250, onComplete: () => ring.destroy() });
     }
 
@@ -506,7 +692,7 @@ export class MainScene extends Phaser.Scene {
       onUpdate: () => {
         const radius = 24 + counter.value * (maxRadius - 24);
         gfx.clear();
-        gfx.lineStyle(5, 0xf97316, 1 - counter.value * 0.8);
+        gfx.lineStyle(worldSize(5), 0xf97316, 1 - counter.value * 0.8);
         if (full) {
           gfx.strokeCircle(x, y, radius);
         } else {
@@ -581,8 +767,8 @@ export class MainScene extends Phaser.Scene {
 
   spawnEnemyProjectile(x: number, y: number, angle: number, damage: number, color: number): void {
     this.spawnBullet(
-      x + Math.cos(angle) * 26,
-      y + Math.sin(angle) * 26,
+      x + Math.cos(angle) * worldSize(26),
+      y + Math.sin(angle) * worldSize(26),
       angle,
       0,
       damage,
@@ -605,8 +791,8 @@ export class MainScene extends Phaser.Scene {
       const offset = pelletCount === 1 ? 0 : -15 + (30 * i) / (pelletCount - 1);
       const shotAngle = angle + Phaser.Math.DegToRad(offset);
       const bullet = this.add.rectangle(
-        x + Math.cos(shotAngle) * (PLAYER_RADIUS + 8),
-        y + Math.sin(shotAngle) * (PLAYER_RADIUS + 8),
+        x + Math.cos(shotAngle) * (PLAYER_RADIUS + worldSize(8)),
+        y + Math.sin(shotAngle) * (PLAYER_RADIUS + worldSize(8)),
         PLAYER_BULLET_LENGTH,
         BULLET_THICKNESS,
         color
@@ -637,13 +823,13 @@ export class MainScene extends Phaser.Scene {
     const halfSweep = heavy ? Math.PI / 3 : Math.PI / 4;
     const startAngle = aimAngle + (clockwise ? -halfSweep : halfSweep);
     const endAngle = aimAngle + (clockwise ? halfSweep : -halfSweep);
-    const middleRadius = 74 * 1.25;
-    const layerSpacing = 20 * 1.15;
+    const middleRadius = worldSize(74 * 1.25);
+    const layerSpacing = worldSize(20 * 1.15);
     const radii = bulletCount === 1
       ? [middleRadius]
       : [middleRadius - layerSpacing, middleRadius, middleRadius + layerSpacing];
     const lengthScales = bulletCount === 1 ? [1] : [0.5, 1, 1.5];
-    const baseLength = (heavy ? 62 : 46) * 1.5;
+    const baseLength = worldSize((heavy ? 62 : 46) * 1.5);
     const bullets = radii.map((radius, index) => {
       const arcLength = baseLength * lengthScales[index];
       const halfArcAngle = arcLength / (2 * radius);
@@ -718,7 +904,7 @@ export class MainScene extends Phaser.Scene {
         bullet.setData('lastTrailAt', now);
 
         const angle = bullet.rotation;
-        const length = Phaser.Math.Clamp(speed * 0.045, 8, 42);
+        const length = Phaser.Math.Clamp(speed * 0.045 * WORLD_OBJECT_SCALE, worldSize(8), worldSize(42));
         const alpha = Phaser.Math.Clamp(0.06 + speed / 4000, 0.08, 0.24);
         const color = (bullet.getData('trailColor') as number | undefined) ?? bullet.fillColor;
         const thickness = (bullet.getData('trailThickness') as number | undefined) ?? BULLET_THICKNESS;
@@ -727,7 +913,7 @@ export class MainScene extends Phaser.Scene {
             bullet.x - Math.cos(angle) * length * 0.55,
             bullet.y - Math.sin(angle) * length * 0.55,
             length,
-            Math.max(3, thickness * 0.65),
+            Math.max(worldSize(3), thickness * 0.65),
             color,
             alpha
           )
@@ -778,7 +964,10 @@ export class MainScene extends Phaser.Scene {
   }
 
   spawnImpactFx(x: number, y: number, color: number, strong: boolean): void {
-    const ring = this.add.circle(x, y, strong ? 20 : 10).setStrokeStyle(strong ? 5 : 3, color, 0.95).setDepth(8);
+    const ring = this.add
+      .circle(x, y, worldSize(strong ? 20 : 10))
+      .setStrokeStyle(worldSize(strong ? 5 : 3), color, 0.95)
+      .setDepth(8);
     this.tweens.add({
       targets: ring,
       scale: strong ? 3 : 2,
@@ -788,12 +977,14 @@ export class MainScene extends Phaser.Scene {
     });
     for (let i = 0; i < (strong ? 8 : 4); i++) {
       const sparkAngle = (Math.PI * 2 * i) / (strong ? 8 : 4);
-      const spark = this.add.rectangle(x, y, strong ? 12 : 8, 3, i % 2 === 0 ? color : 0xffffff).setDepth(8);
+      const spark = this.add
+        .rectangle(x, y, worldSize(strong ? 12 : 8), worldSize(3), i % 2 === 0 ? color : 0xffffff)
+        .setDepth(8);
       spark.setRotation(sparkAngle);
       this.tweens.add({
         targets: spark,
-        x: x + Math.cos(sparkAngle) * (strong ? 42 : 24),
-        y: y + Math.sin(sparkAngle) * (strong ? 42 : 24),
+        x: x + Math.cos(sparkAngle) * worldSize(strong ? 42 : 24),
+        y: y + Math.sin(sparkAngle) * worldSize(strong ? 42 : 24),
         alpha: 0,
         duration: strong ? 220 : 120,
         onComplete: () => spark.destroy()
@@ -804,35 +995,118 @@ export class MainScene extends Phaser.Scene {
   }
 
   private createRhythmEdgeBlocks(): void {
-    const heights = [18, 34, 25, 46, 22, 39, 28, 52];
-    const colors = [0x9333ea, 0xc084fc, 0xdb2777, 0xf472b6];
-    const edgeXs = [44, 86, 128, 170, 212, 254, 296, 338, 942, 984, 1026, 1068, 1110, 1152, 1194, 1236];
-    edgeXs.forEach((x, index) => {
-      const height = heights[index % heights.length];
-      const color = colors[index % colors.length];
-      const top = this.add.rectangle(x, ARENA.y, 22, height, color, 0.2).setOrigin(0.5, 0).setDepth(1);
-      const bottom = this.add
-        .rectangle(x, ARENA.y + ARENA.height, 22, height, color, 0.2)
+    const colors = [0x4c1d6f, 0x63356f, 0x70234e, 0x75405c];
+    const brightenAndDesaturate = (colorValue: number, lighten: number, desaturate: number): number => {
+      const color = Phaser.Display.Color.ValueToColor(colorValue);
+      color.lighten(lighten);
+      color.desaturate(desaturate);
+      return color.color;
+    };
+    const addCrowdBar = (
+      x: number,
+      y: number,
+      edge: 'side' | 'bottom',
+      maxHeight = 58,
+      minHeight = 46
+    ): void => {
+      const width = Phaser.Math.Between(22, 26);
+      const height = Phaser.Math.Between(minHeight, maxHeight);
+      const baseColor = Phaser.Utils.Array.GetRandom(colors);
+      const block = this.add
+        .rectangle(x, y, width, height, baseColor, 1)
         .setOrigin(0.5, 1)
-        .setDepth(1);
-      this.rhythmBlocks.push(top, bottom);
-    });
+        .setDepth(worldDepth(y));
+      block.setData('baseColor', baseColor);
+      block.setData('lightColor', brightenAndDesaturate(baseColor, 3, 3));
+      block.setData('heavyColor', brightenAndDesaturate(baseColor, 5, 5));
+      block.setData('edge', edge);
+      block.setData('anticipationDelay', Phaser.Math.FloatBetween(0, 0.12));
+      block.setData('jumpVariance', Phaser.Math.FloatBetween(0.88, 1.12));
+      this.rhythmBlocks.push(block);
+    };
+
+    // 下边缘以屏幕底部为统一落脚点，随机宽高和轻微基线差制造拥挤的人群轮廓。
+    for (let i = 0; i < 64; i++) {
+      addCrowdBar(
+        Phaser.Math.Between(6, VIEW_WIDTH - 6),
+        Phaser.Math.Between(VIEW_HEIGHT - 7, VIEW_HEIGHT + 4),
+        'bottom',
+        50,
+        42
+      );
+    }
+
+    // 左右边缘继续使用竖直条；在预留带内随机散布并允许互相遮叠。
+    for (let i = 0; i < 38; i++) {
+      const y = Phaser.Math.Between(72, VIEW_HEIGHT - 4);
+      addCrowdBar(Phaser.Math.Between(6, ARENA.x - 10), y, 'side');
+      addCrowdBar(Phaser.Math.Between(ARENA.x + ARENA.width + 10, VIEW_WIDTH - 6), y, 'side');
+    }
   }
 
   private pulseRhythmEdgeBlocks(heavy: boolean): void {
     this.tweens.killTweensOf(this.rhythmBlocks);
+    this.rhythmPulseUntil = this.time.now + (heavy ? 230 : 180);
     for (const block of this.rhythmBlocks) {
-      block.setScale(1);
-      block.setAlpha(heavy ? 0.55 : 0.32);
+      const variance = block.getData('jumpVariance') as number;
+      const jumpScale = heavy ? 1.85 : 1.3;
+      block.setScale(heavy ? 0.93 : 0.97, jumpScale * variance);
+      block.setAlpha(1);
+      block.setFillStyle(block.getData(heavy ? 'heavyColor' : 'lightColor') as number, 1);
     }
     this.tweens.add({
       targets: this.rhythmBlocks,
-      scaleY: heavy ? 1.9 : 1.25,
-      alpha: heavy ? 0.85 : 0.48,
-      duration: heavy ? 150 : 100,
-      yoyo: true,
-      ease: 'Quad.easeOut'
+      scaleX: 1,
+      scaleY: 1,
+      duration: heavy ? 220 : 170,
+      ease: 'Back.easeOut',
+      onComplete: () => {
+        for (const block of this.rhythmBlocks) {
+          block.setAlpha(1);
+          block.setFillStyle(block.getData('baseColor') as number, 1);
+        }
+      }
     });
+  }
+
+  private updateRhythmEdgeAnticipation(): void {
+    if (!this.conductor.started || this.time.now < this.rhythmPulseUntil) return;
+
+    const now = this.conductor.now();
+    const timeToBeat = this.conductor.timeToNextBeat(now);
+    const anticipationWindow = this.conductor.beatDur * 0.42;
+    const progress = Phaser.Math.Clamp(1 - timeToBeat / anticipationWindow, 0, 1);
+    const nextBeat = Math.floor(this.conductor.beatFloatAt(now)) + 1;
+    const beatInMeasure = ((nextBeat % 4) + 4) % 4;
+    const heavy = this.combo.pattern[beatInMeasure] === 'H';
+
+    for (const block of this.rhythmBlocks) {
+      const delay = block.getData('anticipationDelay') as number;
+      const localProgress = Phaser.Math.Clamp((progress - delay) / (1 - delay), 0, 1);
+      const eased = localProgress * localProgress;
+      const compressedScale = heavy ? 0.52 : 0.82;
+      block.setScale(
+        1 + eased * (heavy ? 0.12 : 0.04),
+        Phaser.Math.Linear(1, compressedScale, eased)
+      );
+      const baseColor = block.getData('baseColor') as number;
+      const targetColor = block.getData(heavy ? 'heavyColor' : 'lightColor') as number;
+      block.setFillStyle(this.interpolateRgb(baseColor, targetColor, eased), 1);
+      block.setAlpha(1);
+    }
+  }
+
+  private interpolateRgb(from: number, to: number, amount: number): number {
+    const fromR = (from >> 16) & 0xff;
+    const fromG = (from >> 8) & 0xff;
+    const fromB = from & 0xff;
+    const toR = (to >> 16) & 0xff;
+    const toG = (to >> 8) & 0xff;
+    const toB = to & 0xff;
+    const r = Math.round(Phaser.Math.Linear(fromR, toR, amount));
+    const g = Math.round(Phaser.Math.Linear(fromG, toG, amount));
+    const b = Math.round(Phaser.Math.Linear(fromB, toB, amount));
+    return (r << 16) | (g << 8) | b;
   }
 
   private updateEnemyBulletMotion(): void {
@@ -889,10 +1163,14 @@ export class MainScene extends Phaser.Scene {
         this.destroyEnemyBullet(bullet);
       }
     }
-    const ring = this.add.circle(x, y, 12).setStrokeStyle(3, 0xffffff, 0.9).setDepth(6);
+    const shockwaveBaseRadius = worldSize(12);
+    const ring = this.add
+      .circle(x, y, shockwaveBaseRadius)
+      .setStrokeStyle(worldSize(3), 0xffffff, 0.9)
+      .setDepth(6);
     this.tweens.add({
       targets: ring,
-      scale: radius / 12,
+      scale: radius / shockwaveBaseRadius,
       alpha: 0,
       duration: 250,
       onComplete: () => ring.destroy()
@@ -910,11 +1188,15 @@ export class MainScene extends Phaser.Scene {
 
     if (weapon.id === GLOWSTICKS.id) {
       for (const offset of [-9, 9]) {
-        parts.push(this.add.rectangle(offset, 0, 30, 7.5, 0xef4444).setRotation(-Math.PI / 2));
+        parts.push(
+          this.add
+            .rectangle(worldSize(offset), 0, worldSize(30), worldSize(7.5), 0xef4444)
+            .setRotation(-Math.PI / 2)
+        );
         colors.push(0xef4444);
       }
     } else {
-      parts.push(this.add.rectangle(0, 0, 51, 9, 0xa855f7).setRotation(-Math.PI / 2));
+      parts.push(this.add.rectangle(0, 0, worldSize(51), worldSize(9), 0xa855f7).setRotation(-Math.PI / 2));
       colors.push(0xa855f7);
     }
 

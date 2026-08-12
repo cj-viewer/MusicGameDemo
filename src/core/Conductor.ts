@@ -1,12 +1,11 @@
 import Phaser from 'phaser';
 
-const IDLE_CUE_GAIN = 0.16;
-const CORRECT_CUE_GAINS = [0.28, 0.4, 0.52, 0.64] as const;
-
-interface ScheduledCue {
-  sound: Phaser.Sound.WebAudioSound;
-  time: number;
-}
+const CUE_GAIN = 0.28;
+const CUE_SCHEDULE_AHEAD = 0.22;
+const LIGHT_CUE_LEAD = 0.07;
+const HEAVY_CUE_LEAD = 0.074;
+const HEAVY_CUE_FADE_START = 0.33;
+const HEAVY_CUE_FADE_END = 0.36;
 
 export interface BeatInfo {
   /** 从开始起的整数拍序号 */
@@ -36,11 +35,9 @@ export class Conductor extends Phaser.Events.EventEmitter {
   private _started = false;
   private lastEmittedBeat = -1;
   private nextClickBeat = 0;
-  private cuePattern: [BeatCue, BeatCue, BeatCue, BeatCue] = ['L', 'L', 'H', 'L'];
+  private cuePattern: [BeatCue, BeatCue, BeatCue, BeatCue] = ['L', 'L', 'L', 'H'];
   private scene: Phaser.Scene;
   private customBeatAudioReady: boolean;
-  private correctCueGains = new Map<number, number>();
-  private scheduledCues = new Map<number, ScheduledCue>();
 
   constructor(scene: Phaser.Scene, bpm: number) {
     super();
@@ -84,10 +81,10 @@ export class Conductor extends Phaser.Events.EventEmitter {
 
     // 提前调度节拍器音效，保证发声时刻精确
     if (this.ctx) {
-      const horizon = t + 0.12;
+      const horizon = t + CUE_SCHEDULE_AHEAD;
       while (this.timeOfBeat(this.nextClickBeat) < horizon) {
         const heavy = this.cuePattern[this.nextClickBeat % this.beatsPerMeasure] === 'H';
-        this.scheduleClick(this.nextClickBeat, this.timeOfBeat(this.nextClickBeat), heavy);
+        this.scheduleClick(this.timeOfBeat(this.nextClickBeat), heavy);
         this.nextClickBeat++;
       }
     }
@@ -110,26 +107,6 @@ export class Conductor extends Phaser.Events.EventEmitter {
         };
         this.emit('beat', info);
       }
-    }
-    for (const beat of [...this.correctCueGains.keys()]) {
-      if (beat < current - 1) this.correctCueGains.delete(beat);
-    }
-  }
-
-  registerCorrectAttack(globalBeat: number): void {
-    if (!this.ctx || globalBeat < 0) return;
-    const gainValue = CORRECT_CUE_GAINS[globalBeat % this.beatsPerMeasure];
-    this.correctCueGains.set(globalBeat, gainValue);
-    const scheduled = this.scheduledCues.get(globalBeat);
-
-    if (scheduled) {
-      scheduled.sound.setVolume(gainValue);
-      return;
-    }
-
-    if (this.now() >= this.timeOfBeat(globalBeat)) {
-      const heavy = this.cuePattern[globalBeat % this.beatsPerMeasure] === 'H';
-      this.playCue(globalBeat, this.now(), heavy, gainValue);
     }
   }
 
@@ -154,22 +131,32 @@ export class Conductor extends Phaser.Events.EventEmitter {
     return this.timeOfBeat(next) - t;
   }
 
-  private scheduleClick(beat: number, time: number, heavy: boolean): void {
+  private scheduleClick(time: number, heavy: boolean): void {
     if (!this.ctx || !this.customBeatAudioReady) return;
-    const gainValue = this.correctCueGains.get(beat) ?? IDLE_CUE_GAIN;
-    this.playCue(beat, time, heavy, gainValue);
+    this.playCue(time, heavy);
   }
 
-  private playCue(beat: number, time: number, heavy: boolean, gainValue: number): void {
+  private playCue(time: number, heavy: boolean): void {
     if (!this.customBeatAudioReady) return;
     const key = heavy ? 'beat-heavy' : 'beat-light';
-    const sound = this.scene.sound.add(key, { volume: gainValue }) as Phaser.Sound.WebAudioSound;
-    const scheduled = { sound, time };
-    this.scheduledCues.set(beat, scheduled);
+    const sound = this.scene.sound.add(key, { volume: CUE_GAIN }) as Phaser.Sound.WebAudioSound;
     sound.once(Phaser.Sound.Events.COMPLETE, () => {
-      if (this.scheduledCues.get(beat) === scheduled) this.scheduledCues.delete(beat);
       sound.destroy();
     });
-    sound.play({ delay: Math.max(0, time - this.now()), volume: gainValue });
+
+    // 素材本身约有 70ms 前置起声时间，因此提前播放，让有效声音落在理论拍点。
+    const cueLead = heavy ? HEAVY_CUE_LEAD : LIGHT_CUE_LEAD;
+    const cueStartTime = time - cueLead;
+    const delay = Math.max(0, cueStartTime - this.now());
+    sound.play({ delay, volume: CUE_GAIN });
+
+    // 重拍素材尾音原本会跨过下一拍；在素材时间 330~360ms 做短淡出。
+    if (heavy && this.ctx) {
+      const actualStartTime = this.now() + delay;
+      const gain = sound.volumeNode.gain;
+      gain.cancelScheduledValues(actualStartTime + HEAVY_CUE_FADE_START);
+      gain.setValueAtTime(CUE_GAIN, actualStartTime + HEAVY_CUE_FADE_START);
+      gain.linearRampToValueAtTime(0, actualStartTime + HEAVY_CUE_FADE_END);
+    }
   }
 }

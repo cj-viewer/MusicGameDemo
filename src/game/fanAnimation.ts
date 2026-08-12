@@ -1,9 +1,10 @@
 import Phaser from 'phaser';
+import { WORLD_OBJECT_SCALE } from './visualScale';
 
 export type FanAction = 'run' | 'roll' | 'attack';
 
 export const FAN_RUN_FRAME_HEIGHT = 445;
-export const FAN_RUN_DISPLAY_HEIGHT = 73;
+export const FAN_RUN_DISPLAY_HEIGHT = 73 * WORLD_OBJECT_SCALE;
 export const FAN_SPRITE_SCALE = FAN_RUN_DISPLAY_HEIGHT / FAN_RUN_FRAME_HEIGHT;
 export const FAN_ATTACK_DURATION_MS = 500;
 export const FAN_HURT_ROLL_DURATION_MS = 260;
