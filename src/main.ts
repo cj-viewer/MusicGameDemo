@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { MainScene } from './scenes/MainScene';
+import { FpvMiniScene } from './scenes/FpvMiniScene';
 
 const config: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
@@ -21,7 +22,8 @@ const config: Phaser.Types.Core.GameConfig = {
   input: {
     gamepad: true
   },
-  scene: [MainScene]
+  // 右上 FPV 小窗由设置面板开关；它只读取 MainScene 状态，不参与输入或玩法结算。
+  scene: [MainScene, FpvMiniScene]
 };
 
 const game = new Phaser.Game(config);

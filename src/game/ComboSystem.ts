@@ -6,8 +6,8 @@ import type { BeatKey } from './weapons';
 export const INPUT_WINDOW = 0.1;
 
 export type InputResult =
-  | { type: 'correct'; beatIdx: number; globalBeat: number }
-  | { type: 'protectedCorrect'; beatIdx: number; globalBeat: number }
+  | { type: 'correct'; beatIdx: number; globalBeat: number; rawTimingOffset: number }
+  | { type: 'protectedCorrect'; beatIdx: number; globalBeat: number; rawTimingOffset: number }
   | { type: 'wrong'; beatIdx: number }
   | { type: 'ignored'; reason: 'protected' | 'consumed' | 'notStarted' };
 
@@ -43,6 +43,8 @@ export class ComboSystem {
   private consumedBeat = -1;
   /** Fever Time 持续到该整数拍，-1 表示未激活 */
   private feverUntilBeat = -1;
+  /** 教学以玩家真实输入时间估算的设备延迟；正值表示输入到达程序时偏晚。 */
+  private inputLatencyOffset = 0;
 
   private conductor: Conductor;
 
@@ -94,13 +96,26 @@ export class ComboSystem {
     return b >= this.demoStart && b < this.demoEnd;
   }
 
+  /**
+   * 校准值只平移判定时钟，不修改音频节拍本身。限制在 120ms 内，避免一次异常输入扩大窗口。
+   */
+  setInputLatencyOffset(seconds: number): void {
+    this.inputLatencyOffset = Phaser.Math.Clamp(seconds, -0.12, 0.12);
+  }
+
+  getInputLatencyOffset(): number {
+    return this.inputLatencyOffset;
+  }
+
   handleInput(btn: BeatKey, t: number): InputResult {
     if (!this.conductor.started) return { type: 'ignored', reason: 'notStarted' };
-    const bf = this.conductor.beatFloatAt(t);
+    const rawNearest = this.conductor.nearestBeat(t);
+    const judgedTime = t - this.inputLatencyOffset;
+    const bf = this.conductor.beatFloatAt(judgedTime);
     if (bf < this.protectedUntilBeat) {
       // 下一完整小节由系统独占演示，避免玩家输入与自动攻击重复计分。
       if (bf >= this.demoStart) return { type: 'ignored', reason: 'protected' };
-      const { n, offset } = this.conductor.nearestBeat(t);
+      const { n, offset } = this.conductor.nearestBeat(judgedTime);
       if (
         Math.abs(offset) <= INPUT_WINDOW &&
         n >= 0 &&
@@ -109,7 +124,7 @@ export class ComboSystem {
       ) {
         this.consumedBeat = n;
         this.addCorrectInputProgress(2);
-        return { type: 'protectedCorrect', beatIdx: n % 4, globalBeat: n };
+        return { type: 'protectedCorrect', beatIdx: n % 4, globalBeat: n, rawTimingOffset: rawNearest.offset };
       }
       if (n >= 0 && n !== this.consumedBeat) {
         this.consumedBeat = n;
@@ -118,7 +133,7 @@ export class ComboSystem {
       return { type: 'ignored', reason: 'consumed' };
     }
 
-    const { n, offset } = this.conductor.nearestBeat(t);
+    const { n, offset } = this.conductor.nearestBeat(judgedTime);
     if (n >= 0 && n === this.consumedBeat) {
       return { type: 'ignored', reason: 'consumed' };
     }
@@ -132,7 +147,7 @@ export class ComboSystem {
     if (btn === this.pattern[beatIdx]) {
       this.consumedBeat = n;
       this.addCorrectInputProgress(2);
-      return { type: 'correct', beatIdx, globalBeat: n };
+      return { type: 'correct', beatIdx, globalBeat: n, rawTimingOffset: rawNearest.offset };
     }
 
     this.consumedBeat = n;

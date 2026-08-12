@@ -5,8 +5,13 @@ import type { BeatKey } from './weapons';
 const BAR_CENTER_X = 640;
 const BAR_Y = 668;
 const PANEL_WIDTH = 780;
-const METER_X = BAR_CENTER_X - 470;
+// Combo 环半径为 22px，向右移动自身宽度的一半，即 22px。
+const METER_X = BAR_CENTER_X - 448;
 const STATE_X = BAR_CENTER_X + 400;
+const HP_X = 20;
+// 与 ComboMeter 同一基线放在左下：缩短至不压住圆环。
+const HP_Y = BAR_Y;
+const HP_WIDTH = 124;
 /** 预览未来 3 拍（旧版 2 拍的 1.5 倍），相邻拍间距 120px；到达中心即拍点。 */
 const LOOKAHEAD_BEATS = 3;
 const NOTE_SPACING = 120;
@@ -35,8 +40,11 @@ export class HUD {
   private notes = new Map<number, NoteView>();
   private measureDividers = new Map<number, MeasureDividerView>();
   private pattern: BeatKey[] = ['L', 'L', 'L', 'L'];
+  private weaponName = '';
+  private beatGuideVisible = false;
 
   private centerMark: Phaser.GameObjects.Arc;
+  private centerLine: Phaser.GameObjects.Line;
   private meterGfx: Phaser.GameObjects.Graphics;
   private meterText: Phaser.GameObjects.Text;
   private hpBarBg: Phaser.GameObjects.Rectangle;
@@ -68,7 +76,10 @@ export class HUD {
       .circle(BAR_CENTER_X, BAR_Y, 16)
       .setStrokeStyle(3, 0xffffff, 0.9)
       .setDepth(11);
-    scene.add.line(0, 0, BAR_CENTER_X, BAR_Y - 26, BAR_CENTER_X, BAR_Y + 26, 0xffffff, 0.35).setOrigin(0).setDepth(10);
+    this.centerLine = scene.add
+      .line(0, 0, BAR_CENTER_X, BAR_Y - 26, BAR_CENTER_X, BAR_Y + 26, 0xffffff, 0.35)
+      .setOrigin(0)
+      .setDepth(10);
 
     this.feverText = scene.add
       .text(METER_X, BAR_Y - 42, 'ComboMeter', {
@@ -89,14 +100,14 @@ export class HUD {
 
     // HP
     this.hpBarBg = scene.add
-      .rectangle(20, 24, 204, 18, 0x0f172a, 0.8)
+      .rectangle(HP_X, HP_Y, HP_WIDTH + 4, 18, 0x0f172a, 0.8)
       .setOrigin(0, 0.5)
       .setStrokeStyle(1, 0x334155)
       .setDepth(10);
-    this.hpBar = scene.add.rectangle(22, 24, 200, 14, 0x4ade80).setOrigin(0, 0.5).setDepth(10);
+    this.hpBar = scene.add.rectangle(HP_X + 2, HP_Y, HP_WIDTH, 14, 0x4ade80).setOrigin(0, 0.5).setDepth(10);
     this.hpText = scene.add
-      .text(232, 24, '100 / 100', { fontFamily: 'Arial', fontSize: '14px', color: '#e2e8f0' })
-      .setOrigin(0, 0.5)
+      .text(HP_X + HP_WIDTH / 2 + 2, HP_Y, '100 / 100', { fontFamily: 'Arial', fontSize: '13px', color: '#e2e8f0' })
+      .setOrigin(0.5)
       .setDepth(10);
 
     this.waveText = scene.add
@@ -133,6 +144,7 @@ export class HUD {
       .setAlpha(0);
 
     this.setCombo(0, 0);
+    this.setBeatGuideVisible(false);
   }
 
   // ---------- 节奏块（两侧向中心汇聚） ----------
@@ -143,6 +155,7 @@ export class HUD {
     const now = this.conductor.now();
     const bf = this.conductor.beatFloatAt(now);
     this.updateHpAnticipation(now, bf);
+    if (!this.beatGuideVisible) return;
 
     // 补充未来 LOOKAHEAD 内的节奏块
     const first = Math.max(0, Math.ceil(bf));
@@ -239,6 +252,7 @@ export class HUD {
 
   /** 成功命中：对应节奏块在中心合并爆闪 */
   flashSuccess(globalBeat: number): void {
+    if (!this.beatGuideVisible) return;
     const note = this.notes.get(globalBeat);
     if (note && !note.consumed) {
       note.consumed = true;
@@ -268,33 +282,68 @@ export class HUD {
 
   /** 错误输入只提供瞬时反馈，不再锁定本小节。 */
   flashError(): void {
-    this.centerMark.setStrokeStyle(3, 0xef4444, 0.9);
+    if (this.beatGuideVisible) this.centerMark.setStrokeStyle(3, 0xef4444, 0.9);
     this.scene.cameras.main.shake(100, 0.003);
-    this.scene.time.delayedCall(180, () => this.centerMark.setStrokeStyle(3, 0xffffff, 0.9));
+    if (this.beatGuideVisible) {
+      this.scene.time.delayedCall(180, () => this.centerMark.setStrokeStyle(3, 0xffffff, 0.9));
+    }
   }
 
   setPattern(pattern: BeatKey[], weaponName: string): void {
     this.pattern = pattern;
+    this.weaponName = weaponName;
     // 已生成的节奏块按旧连段显示，直接清掉按新连段重新生成
     for (const n of [...this.notes.keys()]) this.killNote(n);
-    this.weaponText.setText(`${weaponName}　${pattern.map((k) => (k === 'L' ? '轻' : '重')).join(' → ')}`);
+    this.refreshWeaponText();
+  }
+
+  /** 上下节拍提示只在教学中显示；正式游戏仅保留武器名和 ComboMeter。 */
+  setBeatGuideVisible(visible: boolean): void {
+    this.beatGuideVisible = visible;
+    this.panel.setVisible(visible);
+    this.centerMark.setVisible(visible);
+    this.centerLine.setVisible(visible);
+    this.refreshWeaponText();
+
+    if (visible) return;
+    for (const note of this.notes.values()) {
+      note.left.destroy();
+      note.right.destroy();
+    }
+    this.notes.clear();
+    for (const divider of this.measureDividers.values()) {
+      divider.left.destroy(true);
+      divider.right.destroy(true);
+    }
+    this.measureDividers.clear();
+  }
+
+  private refreshWeaponText(): void {
+    if (!this.weaponName) {
+      this.weaponText.setText('');
+      return;
+    }
+    const patternText = this.pattern.map((key) => (key === 'L' ? '轻' : '重')).join(' → ');
+    this.weaponText.setText(this.beatGuideVisible ? `${this.weaponName}　${patternText}` : this.weaponName);
   }
 
   onBeat(beatInMeasure: number): void {
-    // 中心点随节拍脉冲
-    this.centerMark.setScale(1.35);
-    this.scene.tweens.add({ targets: this.centerMark, scaleX: 1, scaleY: 1, duration: 160 });
+    if (this.beatGuideVisible) {
+      // 教学中的底部中心点随节拍脉冲
+      this.centerMark.setScale(1.35);
+      this.scene.tweens.add({ targets: this.centerMark, scaleX: 1, scaleY: 1, duration: 160 });
+    }
 
     const heavy = this.pattern[beatInMeasure] === 'H';
     this.scene.tweens.killTweensOf([this.hpBarBg, this.hpBar]);
-    this.hpPulseUntil = this.scene.time.now + (heavy ? 220 : 170);
-    this.hpBarBg.scaleY = heavy ? 1.32 : 1.15;
-    this.hpBar.scaleY = heavy ? 1.32 : 1.15;
+    this.hpPulseUntil = this.scene.time.now + (heavy ? 250 : 195);
+    this.hpBarBg.scaleY = heavy ? 1.5 : 1.26;
+    this.hpBar.scaleY = heavy ? 1.5 : 1.26;
     this.hpBar.setFillStyle(this.shiftColor(this.hpBaseColor, heavy ? 5 : 3, heavy ? 5 : 3));
     this.scene.tweens.add({
       targets: [this.hpBarBg, this.hpBar],
       scaleY: 1,
-      duration: heavy ? 220 : 170,
+      duration: heavy ? 250 : 195,
       ease: 'Back.easeOut',
       onComplete: () => this.hpBar.setFillStyle(this.hpBaseColor)
     });
@@ -309,7 +358,7 @@ export class HUD {
     const nextBeat = Math.floor(beatFloat) + 1;
     const beatInMeasure = ((nextBeat % 4) + 4) % 4;
     const heavy = this.pattern[beatInMeasure] === 'H';
-    const compressedScale = heavy ? 0.72 : 0.9;
+    const compressedScale = heavy ? 0.62 : 0.84;
     const scaleY = Phaser.Math.Linear(1, compressedScale, eased);
     this.hpBarBg.scaleY = scaleY;
     this.hpBar.scaleY = scaleY;
@@ -358,7 +407,7 @@ export class HUD {
       duration: fever ? 400 : 300,
       onComplete: () => ring.destroy()
     });
-    if (fever) {
+    if (fever && this.beatGuideVisible) {
       this.panel.setStrokeStyle(3, 0xf97316, 1);
       this.scene.tweens.add({
         targets: this.feverText,
@@ -422,7 +471,7 @@ export class HUD {
   setFever(active: boolean): void {
     this.feverMode = active;
     if (!active) {
-      this.panel.setStrokeStyle(1, 0x334155);
+      if (this.beatGuideVisible) this.panel.setStrokeStyle(1, 0x334155);
       this.feverText.setColor('#facc15');
       this.meterText.setColor('#facc15');
     } else {

@@ -33,6 +33,7 @@ export class Conductor extends Phaser.Events.EventEmitter {
 
   private startTime = 0;
   private _started = false;
+  private pausedAt: number | null = null;
   private lastEmittedBeat = -1;
   private nextClickBeat = 0;
   private cuePattern: [BeatCue, BeatCue, BeatCue, BeatCue] = ['L', 'L', 'L', 'H'];
@@ -56,6 +57,10 @@ export class Conductor extends Phaser.Events.EventEmitter {
     return this._started;
   }
 
+  get paused(): boolean {
+    return this.pausedAt !== null;
+  }
+
   now(): number {
     return this.ctx ? this.ctx.currentTime : performance.now() / 1000;
   }
@@ -64,7 +69,20 @@ export class Conductor extends Phaser.Events.EventEmitter {
     this.startTime = this.now() + 0.2;
     this.lastEmittedBeat = -1;
     this.nextClickBeat = 0;
+    this.pausedAt = null;
     this._started = true;
+  }
+
+  /** 暂停时冻结节拍相位；恢复后把暂停时长补回起点，避免音乐与判定跳拍。 */
+  pause(): void {
+    if (!this._started || this.pausedAt !== null) return;
+    this.pausedAt = this.now();
+  }
+
+  resume(): void {
+    if (this.pausedAt === null) return;
+    this.startTime += this.now() - this.pausedAt;
+    this.pausedAt = null;
   }
 
   /**
@@ -76,7 +94,7 @@ export class Conductor extends Phaser.Events.EventEmitter {
   }
 
   update(): void {
-    if (!this._started) return;
+    if (!this._started || this.pausedAt !== null) return;
     const t = this.now();
 
     // 提前调度节拍器音效，保证发声时刻精确

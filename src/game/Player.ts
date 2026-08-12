@@ -33,6 +33,8 @@ export class Player {
   readonly maxStamina = MAX_STAMINA;
   weapon: WeaponDef = GLOWSTICKS;
   aimAngle = 0;
+  /** 未经辅助瞄准修正的原始指向，供纯视觉观察窗使用。 */
+  rawAimAngle = 0;
   isDodging = false;
 
   private gfx: Phaser.GameObjects.Graphics;
@@ -206,6 +208,16 @@ export class Player {
     }
   }
 
+  /** Fever Time 的正确输入恢复生命，不超过最大生命。 */
+  heal(amount: number): void {
+    if (this.dead || amount <= 0) return;
+    const previousHp = this.hp;
+    this.hp = Math.min(this.maxHp, this.hp + amount);
+    if (this.hp === previousHp) return;
+    this.scene.hud.setHp(this.hp, this.maxHp);
+    this.flash(0x86efac);
+  }
+
   /** 战败：倒地姿势并隐藏手持武器 */
   die(): void {
     this.dead = true;
@@ -269,6 +281,7 @@ export class Player {
     const rawAngle = this.gamepadAimActive
       ? this.gamepadAimAngle
       : Phaser.Math.Angle.Between(this.x, this.y, pointer.worldX, pointer.worldY);
+    this.rawAimAngle = rawAngle;
     this.aimAngle = this.scene.getAssistedAimAngle(rawAngle);
   }
 
