@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { MainScene } from './scenes/MainScene';
+import { FpvScene } from './scenes/FpvScene';
 
 const config: Phaser.Types.Core.GameConfig = {
   type: Phaser.AUTO,
@@ -21,7 +22,8 @@ const config: Phaser.Types.Core.GameConfig = {
   input: {
     gamepad: true
   },
-  scene: [MainScene]
+  // FpvScene 不自动启动，由 MainScene 在分屏模式下 launch（实验：docs/split-coop-fpv.md）
+  scene: [MainScene, FpvScene]
 };
 
 const game = new Phaser.Game(config);

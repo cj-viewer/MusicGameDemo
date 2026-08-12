@@ -91,6 +91,11 @@ export class MainScene extends Phaser.Scene {
   private debugHitboxes = false;
   private debugGfx!: Phaser.GameObjects.Graphics;
 
+  /** 实验：V 键双人分屏（左=俯视移动位，右=FPV 节奏射击位），见 docs/split-coop-fpv.md */
+  private splitMode = false;
+  /** 主相机基准缩放：全屏 1，分屏 0.5；踩拍特效的相机推拉以此为基准 */
+  private baseZoom = 1;
+
   // 连段面板（教学模式含说明与进度，游戏模式只保留节拍块，随武器连段重建）
   private patternPanel?: Phaser.GameObjects.Container;
   private patternIcons: Phaser.GameObjects.Shape[] = [];
@@ -206,6 +211,8 @@ export class MainScene extends Phaser.Scene {
     this.conductor.on('beat', this.onBeat, this);
 
     this.setupInput();
+    // R 重开会重建相机，分屏状态需要重新应用
+    this.applyCameraLayout();
     this.showTitle();
   }
 
@@ -272,6 +279,12 @@ export class MainScene extends Phaser.Scene {
     // 调试：B 键切换判定框显示
     this.input.keyboard!.on('keydown-B', () => {
       this.debugHitboxes = !this.debugHitboxes;
+    });
+
+    // 实验：V 键切换双人分屏
+    this.input.keyboard!.on('keydown-V', () => {
+      this.splitMode = !this.splitMode;
+      this.applyCameraLayout();
     });
 
     // 原型调试键：F 直接充满 ComboMeter，便于快速验证 Fever Time
@@ -997,11 +1010,49 @@ export class MainScene extends Phaser.Scene {
       });
     }
 
-    // 相机微推拉：轻拍几乎不可察觉的顿挫，重拍稍强
+    // 相机微推拉：轻拍几乎不可察觉的顿挫，重拍稍强（以 baseZoom 为基准，兼容分屏）
     const cam = this.cameras.main;
     this.tweens.killTweensOf(cam);
-    cam.setZoom(1);
-    this.tweens.add({ targets: cam, zoom: heavy ? 1.03 : 1.015, duration: 60, yoyo: true, ease: 'Quad.easeOut' });
+    cam.setZoom(this.baseZoom);
+    this.tweens.add({
+      targets: cam,
+      zoom: this.baseZoom * (heavy ? 1.03 : 1.015),
+      duration: 60,
+      yoyo: true,
+      ease: 'Quad.easeOut'
+    });
+  }
+
+  // ---------- 实验：双人分屏（docs/split-coop-fpv.md） ----------
+
+  /** 应用当前显示布局：分屏时主相机缩进左半屏并启动 FPV 场景，全屏时还原 */
+  private applyCameraLayout(): void {
+    const cam = this.cameras.main;
+    this.tweens.killTweensOf(cam);
+    if (this.splitMode) {
+      this.baseZoom = 0.5;
+      cam.setViewport(0, 0, 640, 720);
+      if (!this.scene.isActive('FpvScene')) this.scene.launch('FpvScene');
+    } else {
+      this.baseZoom = 1;
+      cam.setViewport(0, 0, 1280, 720);
+      if (this.scene.isActive('FpvScene')) this.scene.stop('FpvScene');
+    }
+    cam.setZoom(this.baseZoom);
+    cam.centerOn(640, 360);
+  }
+
+  // FPV 场景的只读访问器，不改变任何游戏逻辑
+  get fpvEnemies(): readonly Enemy[] {
+    return this.enemies;
+  }
+
+  get fpvEnemyBullets(): Phaser.GameObjects.GameObject[] {
+    return this.bullets ? this.bullets.getChildren() : [];
+  }
+
+  get fpvPlayerBullets(): Phaser.GameObjects.GameObject[] {
+    return this.playerBullets ? this.playerBullets.getChildren() : [];
   }
 
   /**
