@@ -2,8 +2,9 @@ import Phaser from 'phaser';
 import { GLOWSTICKS, type WeaponDef } from './weapons';
 import { applyStickDeadzone } from './GamepadControls';
 import type { MainScene } from '../scenes/MainScene';
+import { worldDepth, worldSize } from './visualScale';
 
-export const PLAYER_RADIUS = 16;
+export const PLAYER_RADIUS = worldSize(16);
 const MOVE_SPEED = 260;
 const MOVE_ACCELERATION = 1050;
 const MOVE_DECELERATION = 720;
@@ -16,6 +17,8 @@ const DODGE_COST_ONBEAT = 15;
 /** 闪避踩拍判定窗口：拍点前后各 0.12 秒 */
 const DODGE_BEAT_WINDOW = 0.12;
 const SHOCKWAVE_RADIUS = 60;
+const WEAPON_SWING_DURATION_MS = 200;
+const BATON_SIDE_OFFSET = worldSize(17);
 
 export class Player {
   scene: MainScene;
@@ -46,7 +49,7 @@ export class Player {
 
   constructor(scene: MainScene, x: number, y: number) {
     this.scene = scene;
-    this.go = scene.add.image(x, y, 'player').setDisplaySize(54, 82).setDepth(5);
+    this.go = scene.add.image(x, y, 'player').setDisplaySize(worldSize(54), worldSize(82)).setDepth(5);
     scene.physics.add.existing(this.go);
     this.body = this.go.body as Phaser.Physics.Arcade.Body;
     // 受击判定使用默认全帧矩形：刚好包裹整张图片，且随图片缩放自动同步（body 世界尺寸 = 源帧尺寸 × scale）
@@ -54,8 +57,8 @@ export class Player {
 
     this.gfx = scene.add.graphics().setDepth(6);
     this.weaponBars = [
-      scene.add.rectangle(x, y, 20, 5, 0xef4444).setOrigin(0, 0.5).setDepth(7),
-      scene.add.rectangle(x, y, 20, 5, 0xef4444).setOrigin(0, 0.5).setDepth(7)
+      scene.add.rectangle(x, y, worldSize(20), worldSize(5), 0xef4444).setOrigin(0, 0.5).setDepth(7),
+      scene.add.rectangle(x, y, worldSize(20), worldSize(5), 0xef4444).setOrigin(0, 0.5).setDepth(7)
     ];
     this.keys = scene.input.keyboard!.addKeys('W,A,S,D') as Record<
       'W' | 'A' | 'S' | 'D',
@@ -88,6 +91,10 @@ export class Player {
     // 瞄准
     this.updateAim();
 
+    const playerDepth = worldDepth(this.y + this.body.halfHeight);
+    this.go.setDepth(playerDepth);
+    this.gfx.setDepth(playerDepth + 0.001);
+    this.weaponBars.forEach((bar) => bar.setDepth(playerDepth + 0.002));
     this.updateWeaponVisual();
     this.drawOverlay(timeMs);
   }
@@ -98,13 +105,10 @@ export class Player {
     this.weaponSwingActive = true;
     this.weaponSwingDirection = Math.cos(aimAngle) >= 0 ? 1 : -1;
 
-    const beatFloat = this.scene.conductor.beatFloatAt(this.scene.conductor.now());
-    const nextBeat = Math.floor(beatFloat) + 1;
-    const duration = Math.max(1, (nextBeat - beatFloat) * this.scene.conductor.beatDur * 1000);
     this.scene.tweens.add({
       targets: this.weaponSwing,
       progress: 1,
-      duration,
+      duration: WEAPON_SWING_DURATION_MS,
       ease: 'Sine.easeOut',
       onComplete: () => {
         this.weaponSwingActive = false;
@@ -183,11 +187,11 @@ export class Player {
   errorFlash(): void {
     this.flash(0xef4444);
     const glitch = this.scene.add.graphics().setDepth(7);
-    glitch.lineStyle(3, 0xef4444, 0.9);
-    glitch.lineBetween(this.x - 25, this.y - 9, this.x + 18, this.y - 4);
-    glitch.lineBetween(this.x - 14, this.y + 7, this.x + 27, this.y + 12);
-    glitch.lineStyle(2, 0xffffff, 0.7);
-    glitch.lineBetween(this.x - 20, this.y + 2, this.x + 10, this.y + 2);
+    glitch.lineStyle(worldSize(3), 0xef4444, 0.9);
+    glitch.lineBetween(this.x - worldSize(25), this.y - worldSize(9), this.x + worldSize(18), this.y - worldSize(4));
+    glitch.lineBetween(this.x - worldSize(14), this.y + worldSize(7), this.x + worldSize(27), this.y + worldSize(12));
+    glitch.lineStyle(worldSize(2), 0xffffff, 0.7);
+    glitch.lineBetween(this.x - worldSize(20), this.y + worldSize(2), this.x + worldSize(10), this.y + worldSize(2));
     this.scene.tweens.add({ targets: glitch, alpha: 0, duration: 180, onComplete: () => glitch.destroy() });
   }
 
@@ -260,21 +264,22 @@ export class Player {
         this.weaponBars[0]
           .setVisible(true)
           .setFillStyle(0xef4444)
-          .setDisplaySize(30, 7.5)
-          .setPosition(this.x - 17, this.y + 20)
+          .setDisplaySize(worldSize(30), worldSize(7.5))
+          .setPosition(this.x - worldSize(17), this.y + worldSize(20))
           .setRotation(-Math.PI / 2);
         this.weaponBars[1]
           .setVisible(true)
           .setFillStyle(0xef4444)
-          .setDisplaySize(30, 7.5)
-          .setPosition(this.x + 17, this.y + 20)
+          .setDisplaySize(worldSize(30), worldSize(7.5))
+          .setPosition(this.x + worldSize(17), this.y + worldSize(20))
           .setRotation(-Math.PI / 2);
       } else {
+        const batonSide = Math.cos(this.aimAngle) >= 0 ? 1 : -1;
         this.weaponBars[0]
           .setVisible(true)
           .setFillStyle(0xa855f7)
-          .setDisplaySize(51, 9)
-          .setPosition(this.x, this.y + 30.5)
+          .setDisplaySize(worldSize(51), worldSize(9))
+          .setPosition(this.x + batonSide * BATON_SIDE_OFFSET, this.y + worldSize(30.5))
           .setRotation(-Math.PI / 2);
         this.weaponBars[1].setVisible(false);
       }
@@ -287,20 +292,21 @@ export class Player {
 
     if (this.weapon.id === 'glowsticks') {
       for (let i = 0; i < this.weaponBars.length; i++) {
-        const pivotX = this.x + (i === 0 ? -17 : 17);
+        const pivotX = this.x + worldSize(i === 0 ? -17 : 17);
         this.weaponBars[i]
           .setVisible(true)
           .setFillStyle(0xef4444)
-          .setDisplaySize(30, 7.5)
-          .setPosition(pivotX, this.y + 20)
+          .setDisplaySize(worldSize(30), worldSize(7.5))
+          .setPosition(pivotX, this.y + worldSize(20))
           .setRotation(angle);
       }
     } else {
+      const batonSide = Math.cos(this.aimAngle) >= 0 ? 1 : -1;
       this.weaponBars[0]
         .setVisible(true)
         .setFillStyle(0xa855f7)
-        .setDisplaySize(51, 9)
-        .setPosition(this.x, this.y + 30.5)
+        .setDisplaySize(worldSize(51), worldSize(9))
+        .setPosition(this.x + batonSide * BATON_SIDE_OFFSET, this.y + worldSize(30.5))
         .setRotation(angle);
       this.weaponBars[1].setVisible(false);
     }
@@ -310,14 +316,14 @@ export class Player {
     this.gfx.clear();
 
     // 瞄准短线
-    const fromX = this.x + Math.cos(this.aimAngle) * (PLAYER_RADIUS + 4);
-    const fromY = this.y + Math.sin(this.aimAngle) * (PLAYER_RADIUS + 4);
-    this.gfx.lineStyle(3, 0xffffff, 0.9);
+    const fromX = this.x + Math.cos(this.aimAngle) * (PLAYER_RADIUS + worldSize(4));
+    const fromY = this.y + Math.sin(this.aimAngle) * (PLAYER_RADIUS + worldSize(4));
+    this.gfx.lineStyle(worldSize(3), 0xffffff, 0.9);
     this.gfx.lineBetween(
       fromX,
       fromY,
-      fromX + Math.cos(this.aimAngle) * 14,
-      fromY + Math.sin(this.aimAngle) * 14
+      fromX + Math.cos(this.aimAngle) * worldSize(14),
+      fromY + Math.sin(this.aimAngle) * worldSize(14)
     );
 
     // 受击无敌闪烁
@@ -334,8 +340,8 @@ export class Player {
     }
     const low = this.stamina < 30;
     const ratio = this.stamina / this.maxStamina;
-    const ringR = PLAYER_RADIUS + 8;
-    this.gfx.lineStyle(4, low ? 0x991b1b : 0xfacc15, 0.9);
+    const ringR = PLAYER_RADIUS + worldSize(8);
+    this.gfx.lineStyle(worldSize(4), low ? 0x991b1b : 0xfacc15, 0.9);
     this.gfx.beginPath();
     this.gfx.arc(this.x, this.y, ringR, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio, false);
     this.gfx.strokePath();

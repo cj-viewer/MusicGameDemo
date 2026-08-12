@@ -4,10 +4,13 @@ import type { BeatKey } from './weapons';
 
 const BAR_CENTER_X = 640;
 const BAR_Y = 668;
-const METER_X = BAR_CENTER_X - 300;
-/** 节奏块提前量（拍）与移动距离（px）：块在拍点前 2 拍从两侧出现，到达中心即拍点 */
-const LOOKAHEAD_BEATS = 2;
-const TRAVEL_DIST = 210;
+const PANEL_WIDTH = 780;
+const METER_X = BAR_CENTER_X - 470;
+const STATE_X = BAR_CENTER_X + 400;
+/** 预览未来 3 拍（旧版 2 拍的 1.5 倍），相邻拍间距 120px；到达中心即拍点。 */
+const LOOKAHEAD_BEATS = 3;
+const NOTE_SPACING = 120;
+const TRAVEL_DIST = LOOKAHEAD_BEATS * NOTE_SPACING;
 
 interface NoteView {
   left: Phaser.GameObjects.Shape;
@@ -36,6 +39,7 @@ export class HUD {
   private centerMark: Phaser.GameObjects.Arc;
   private meterGfx: Phaser.GameObjects.Graphics;
   private meterText: Phaser.GameObjects.Text;
+  private hpBarBg: Phaser.GameObjects.Rectangle;
   private hpBar: Phaser.GameObjects.Rectangle;
   private hpText: Phaser.GameObjects.Text;
   private waveText: Phaser.GameObjects.Text;
@@ -46,6 +50,8 @@ export class HUD {
   private panel: Phaser.GameObjects.Rectangle;
   private feverText: Phaser.GameObjects.Text;
   private feverMode = false;
+  private hpBaseColor = 0x4ade80;
+  private hpPulseUntil = 0;
 
   constructor(scene: Phaser.Scene, conductor: Conductor) {
     this.scene = scene;
@@ -53,7 +59,7 @@ export class HUD {
 
     // 判定条背板
     this.panel = scene.add
-      .rectangle(BAR_CENTER_X, BAR_Y, 480, 60, 0x0f172a, 0.75)
+      .rectangle(BAR_CENTER_X, BAR_Y, PANEL_WIDTH, 60, 0x0f172a, 0.75)
       .setStrokeStyle(1, 0x334155)
       .setDepth(10);
 
@@ -65,7 +71,7 @@ export class HUD {
     scene.add.line(0, 0, BAR_CENTER_X, BAR_Y - 26, BAR_CENTER_X, BAR_Y + 26, 0xffffff, 0.35).setOrigin(0).setDepth(10);
 
     this.feverText = scene.add
-      .text(METER_X, BAR_Y - 42, 'FEVER', {
+      .text(METER_X, BAR_Y - 42, 'ComboMeter', {
         fontFamily: 'Arial',
         fontSize: '16px',
         fontStyle: 'bold',
@@ -73,7 +79,7 @@ export class HUD {
       })
       .setOrigin(0.5)
       .setDepth(11)
-      .setVisible(false);
+      .setVisible(true);
 
     this.meterGfx = scene.add.graphics().setDepth(10);
     this.meterText = scene.add
@@ -82,7 +88,11 @@ export class HUD {
       .setDepth(11);
 
     // HP
-    scene.add.rectangle(20, 24, 204, 18, 0x0f172a, 0.8).setOrigin(0, 0.5).setStrokeStyle(1, 0x334155).setDepth(10);
+    this.hpBarBg = scene.add
+      .rectangle(20, 24, 204, 18, 0x0f172a, 0.8)
+      .setOrigin(0, 0.5)
+      .setStrokeStyle(1, 0x334155)
+      .setDepth(10);
     this.hpBar = scene.add.rectangle(22, 24, 200, 14, 0x4ade80).setOrigin(0, 0.5).setDepth(10);
     this.hpText = scene.add
       .text(232, 24, '100 / 100', { fontFamily: 'Arial', fontSize: '14px', color: '#e2e8f0' })
@@ -100,7 +110,7 @@ export class HUD {
       .setDepth(10);
 
     this.stateText = scene.add
-      .text(BAR_CENTER_X + 260, BAR_Y, '', { fontFamily: 'Arial', fontSize: '15px', color: '#fbbf24' })
+      .text(STATE_X, BAR_Y, '', { fontFamily: 'Arial', fontSize: '15px', color: '#fbbf24' })
       .setOrigin(0, 0.5)
       .setDepth(10);
 
@@ -132,6 +142,7 @@ export class HUD {
     if (!this.conductor.started) return;
     const now = this.conductor.now();
     const bf = this.conductor.beatFloatAt(now);
+    this.updateHpAnticipation(now, bf);
 
     // 补充未来 LOOKAHEAD 内的节奏块
     const first = Math.max(0, Math.ceil(bf));
@@ -269,10 +280,61 @@ export class HUD {
     this.weaponText.setText(`${weaponName}　${pattern.map((k) => (k === 'L' ? '轻' : '重')).join(' → ')}`);
   }
 
-  onBeat(_beatInMeasure: number): void {
+  onBeat(beatInMeasure: number): void {
     // 中心点随节拍脉冲
     this.centerMark.setScale(1.35);
     this.scene.tweens.add({ targets: this.centerMark, scaleX: 1, scaleY: 1, duration: 160 });
+
+    const heavy = this.pattern[beatInMeasure] === 'H';
+    this.scene.tweens.killTweensOf([this.hpBarBg, this.hpBar]);
+    this.hpPulseUntil = this.scene.time.now + (heavy ? 220 : 170);
+    this.hpBarBg.scaleY = heavy ? 1.32 : 1.15;
+    this.hpBar.scaleY = heavy ? 1.32 : 1.15;
+    this.hpBar.setFillStyle(this.shiftColor(this.hpBaseColor, heavy ? 5 : 3, heavy ? 5 : 3));
+    this.scene.tweens.add({
+      targets: [this.hpBarBg, this.hpBar],
+      scaleY: 1,
+      duration: heavy ? 220 : 170,
+      ease: 'Back.easeOut',
+      onComplete: () => this.hpBar.setFillStyle(this.hpBaseColor)
+    });
+  }
+
+  private updateHpAnticipation(now: number, beatFloat: number): void {
+    if (this.scene.time.now < this.hpPulseUntil) return;
+    const timeToBeat = this.conductor.timeToNextBeat(now);
+    const anticipationWindow = this.conductor.beatDur * 0.42;
+    const progress = Phaser.Math.Clamp(1 - timeToBeat / anticipationWindow, 0, 1);
+    const eased = progress * progress;
+    const nextBeat = Math.floor(beatFloat) + 1;
+    const beatInMeasure = ((nextBeat % 4) + 4) % 4;
+    const heavy = this.pattern[beatInMeasure] === 'H';
+    const compressedScale = heavy ? 0.72 : 0.9;
+    const scaleY = Phaser.Math.Linear(1, compressedScale, eased);
+    this.hpBarBg.scaleY = scaleY;
+    this.hpBar.scaleY = scaleY;
+    const targetColor = this.shiftColor(this.hpBaseColor, heavy ? 5 : 3, heavy ? 5 : 3);
+    this.hpBar.setFillStyle(this.interpolateRgb(this.hpBaseColor, targetColor, eased));
+  }
+
+  private shiftColor(colorValue: number, lighten: number, desaturate: number): number {
+    const color = Phaser.Display.Color.ValueToColor(colorValue);
+    color.lighten(lighten);
+    color.desaturate(desaturate);
+    return color.color;
+  }
+
+  private interpolateRgb(from: number, to: number, amount: number): number {
+    const fromR = (from >> 16) & 0xff;
+    const fromG = (from >> 8) & 0xff;
+    const fromB = from & 0xff;
+    const toR = (to >> 16) & 0xff;
+    const toG = (to >> 8) & 0xff;
+    const toB = to & 0xff;
+    const r = Math.round(Phaser.Math.Linear(fromR, toR, amount));
+    const g = Math.round(Phaser.Math.Linear(fromG, toG, amount));
+    const b = Math.round(Phaser.Math.Linear(fromB, toB, amount));
+    return (r << 16) | (g << 8) | b;
   }
 
   // ---------- ComboMeter / Fever ----------
@@ -359,11 +421,12 @@ export class HUD {
 
   setFever(active: boolean): void {
     this.feverMode = active;
-    this.feverText.setVisible(active);
     if (!active) {
       this.panel.setStrokeStyle(1, 0x334155);
+      this.feverText.setColor('#facc15');
       this.meterText.setColor('#facc15');
     } else {
+      this.feverText.setColor('#f97316');
       this.meterText.setColor('#f97316');
     }
   }
@@ -416,7 +479,8 @@ export class HUD {
 
   setHp(hp: number, maxHp: number): void {
     this.hpBar.scaleX = Math.max(0, hp / maxHp);
-    this.hpBar.fillColor = hp <= 30 ? 0xef4444 : 0x4ade80;
+    this.hpBaseColor = hp <= 30 ? 0xef4444 : 0x4ade80;
+    if (this.scene.time.now >= this.hpPulseUntil) this.hpBar.setFillStyle(this.hpBaseColor);
     this.hpText.setText(`${hp} / ${maxHp}`);
   }
 

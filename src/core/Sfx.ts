@@ -1,9 +1,11 @@
 /** 战斗反馈使用 WebAudio 合成；轻重节拍喊声由 Conductor 播放外部采样。 */
 export class Sfx {
   private ctx: AudioContext | null;
+  private destination: AudioNode | null;
 
-  constructor(ctx: AudioContext | null) {
+  constructor(ctx: AudioContext | null, destination: AudioNode | null = null) {
     this.ctx = ctx;
+    this.destination = destination;
   }
 
   private tone(
@@ -26,7 +28,7 @@ export class Sfx {
     gain.gain.setValueAtTime(gainVal, t0);
     gain.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
     osc.connect(gain);
-    gain.connect(this.ctx.destination);
+    gain.connect(this.destination ?? this.ctx.destination);
     osc.start(t0);
     osc.stop(t0 + dur + 0.02);
   }

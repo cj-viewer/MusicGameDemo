@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import type { BeatInfo } from '../core/Conductor';
 import type { MainScene } from '../scenes/MainScene';
 import { FAN_ATTACK_DURATION_MS, FAN_HURT_ROLL_DURATION_MS, playFanAnimation } from './fanAnimation';
+import { worldDepth, worldSize } from './visualScale';
 
 export type EnemyKind = 'smallGuard' | 'midGuard' | 'fan';
 
@@ -35,8 +36,8 @@ export abstract class Enemy {
     // 新增角色一律沿用此默认，不要再手动 setCircle/setSize。
     this.go.body.setCollideWorldBounds(true);
 
-    this.hpBarBg = scene.add.rectangle(go.x, go.y, 28, 4, 0x1f2937).setDepth(3).setOrigin(0, 0.5);
-    this.hpBar = scene.add.rectangle(go.x, go.y, 28, 4, 0x86efac).setDepth(3).setOrigin(0, 0.5);
+    this.hpBarBg = scene.add.rectangle(go.x, go.y, worldSize(28), worldSize(4), 0x1f2937).setDepth(3).setOrigin(0, 0.5);
+    this.hpBar = scene.add.rectangle(go.x, go.y, worldSize(28), worldSize(4), 0x86efac).setDepth(3).setOrigin(0, 0.5);
   }
 
   get x(): number {
@@ -60,8 +61,12 @@ export abstract class Enemy {
     } else {
       this.move(dtMs);
     }
-    const bx = this.go.x - 14;
-    const by = this.go.y - this.radius - 12;
+    const bx = this.go.x - worldSize(14);
+    const by = this.go.y - this.radius - worldSize(12);
+    const characterDepth = worldDepth(this.go.y + this.go.body.halfHeight);
+    this.go.setDepth(characterDepth);
+    this.hpBarBg.setDepth(characterDepth + 0.001);
+    this.hpBar.setDepth(characterDepth + 0.002);
     this.hpBarBg.setPosition(bx, by);
     this.hpBar.setPosition(bx, by);
     this.hpBar.scaleX = this.hp / this.maxHp;
@@ -107,7 +112,8 @@ export abstract class Enemy {
     this.scene.tweens.add({
       targets: this.go,
       alpha: 0,
-      scale: 1.6,
+      scaleX: this.go.scaleX * 1.6,
+      scaleY: this.go.scaleY * 1.6,
       duration: 200,
       onComplete: () => this.go.destroy()
     });
@@ -183,7 +189,7 @@ export class SmallGuard extends Enemy {
   private movementAngle = 0;
 
   constructor(scene: MainScene, x: number, y: number) {
-    super(scene, scene.add.image(x, y, 'guard').setDisplaySize(46, 70), 40, 0xffffff);
+    super(scene, scene.add.image(x, y, 'guard').setDisplaySize(worldSize(46), worldSize(70)), 40, 0xffffff);
     this.chooseMovementAngle();
   }
 
@@ -221,7 +227,7 @@ export class MidGuard extends Enemy {
   private laserGfx: Phaser.GameObjects.Graphics;
 
   constructor(scene: MainScene, x: number, y: number) {
-    super(scene, scene.add.image(x, y, 'guard').setDisplaySize(52, 78), 60, 0xffffff);
+    super(scene, scene.add.image(x, y, 'guard').setDisplaySize(worldSize(52), worldSize(78)), 60, 0xffffff);
     this.lockedAngle = this.angleToPlayer();
     this.laserGfx = scene.add.graphics().setDepth(2);
   }

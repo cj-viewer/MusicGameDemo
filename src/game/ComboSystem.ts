@@ -2,8 +2,8 @@ import Phaser from 'phaser';
 import type { Conductor, BeatInfo } from '../core/Conductor';
 import type { BeatKey } from './weapons';
 
-/** 攻击输入判定窗口：拍点前后各 0.2 秒 */
-export const INPUT_WINDOW = 0.2;
+/** 攻击输入判定窗口：拍点前后各 0.1 秒 */
+export const INPUT_WINDOW = 0.1;
 
 export type InputResult =
   | { type: 'correct'; beatIdx: number; globalBeat: number }
