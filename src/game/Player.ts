@@ -19,18 +19,8 @@ const DODGE_COST_ONBEAT = 15;
 const DODGE_BEAT_WINDOW = 0.12;
 const SHOCKWAVE_RADIUS = 60;
 const WEAPON_SWING_DURATION_MS = 200;
-/**
- * 手部锚点（角色朝右时相对角色中心；翻转时 X 取反）。
- * 由 idle 帧目测标定：持手在面向侧躯干边缘，内容坐标约 (18, 24)，
- * 相对内容中心 (10.5, 27.5) 偏移 (7.5, -3.5)px，乘 1.156 显示缩放。
- */
-const HAND_OFFSET_X = worldSize(11);
-const HAND_OFFSET_Y = -worldSize(5);
-/** 双持荧光棒在手中的扇形夹角（弧度，两棒各偏一半） */
-const GLOWSTICK_FAN = 0.26;
-/** 武器握持前倾角（弧度，向面朝方向倾斜，避免竖直棒身遮脸） */
-const GLOWSTICK_LEAN = 0.42;
-const BATON_LEAN = 0.55;
+/** 握把到角色中心的距离：与瞄准线起点一致，使武器与白色瞄准短线重合 */
+const WEAPON_GRIP_DIST = PLAYER_RADIUS + worldSize(4);
 
 export class Player {
   scene: MainScene;
@@ -314,39 +304,27 @@ export class Player {
   }
 
   /**
-   * 武器示意绑定在角色手部锚点：底端（握把）为旋转轴，随角色朝向换手。
-   * 待机不跟随鼠标角度旋转；挥击时围绕手部在 200ms 内完成摆动。
+   * 武器示意跟随鼠标：握把固定在瞄准线起点、棒身指向瞄准方向，与白色瞄准短线重合。
+   * 挥击时从偏转角在 200ms 内收敛回瞄准线（朝指向劈下的观感），无结束跳变。
    */
   private updateWeaponVisual(): void {
-    const handSide = this.go.flipX ? -1 : 1;
-    const handX = this.x + handSide * HAND_OFFSET_X;
-    const handY = this.y + HAND_OFFSET_Y;
+    const gripX = this.x + Math.cos(this.aimAngle) * WEAPON_GRIP_DIST;
+    const gripY = this.y + Math.sin(this.aimAngle) * WEAPON_GRIP_DIST;
     const swingDegrees = this.weapon.id === 'baton' ? 50 : 30;
     const swingAngle = this.weaponSwingActive
-      ? this.weaponSwingDirection * Phaser.Math.DegToRad(swingDegrees) * this.weaponSwing.progress
+      ? this.weaponSwingDirection * Phaser.Math.DegToRad(swingDegrees) * (1 - this.weaponSwing.progress)
       : 0;
+    const baseAngle = this.aimAngle + swingAngle;
 
-    if (this.weapon.id === 'glowsticks') {
-      // 双棒同握一手，向面朝方向前倾并呈扇形展开
-      const lean = handSide * GLOWSTICK_LEAN;
-      for (let i = 0; i < this.weaponBars.length; i++) {
-        const fan = (i === 0 ? -0.5 : 0.5) * GLOWSTICK_FAN * handSide;
-        this.weaponBars[i]
-          .setVisible(true)
-          .setFillStyle(0xef4444)
-          .setDisplaySize(worldSize(30), worldSize(7.5))
-          .setPosition(handX + (i === 1 ? handSide * worldSize(2) : 0), handY + (i === 1 ? worldSize(1.5) : 0))
-          .setRotation(-Math.PI / 2 + lean + fan + swingAngle);
-      }
-    } else {
-      this.weaponBars[0]
-        .setVisible(true)
-        .setFillStyle(0xa855f7)
-        .setDisplaySize(worldSize(51), worldSize(9))
-        .setPosition(handX, handY)
-        .setRotation(-Math.PI / 2 + handSide * BATON_LEAN + swingAngle);
-      this.weaponBars[1].setVisible(false);
-    }
+    // 两种武器都显示为握在瞄准线上的单根短棒，只在颜色和长度上区分
+    const isBaton = this.weapon.id === 'baton';
+    this.weaponBars[0]
+      .setVisible(true)
+      .setFillStyle(isBaton ? 0xa855f7 : 0xef4444)
+      .setDisplaySize(worldSize(isBaton ? 51 : 30), worldSize(isBaton ? 9 : 7.5))
+      .setPosition(gripX, gripY)
+      .setRotation(baseAngle);
+    this.weaponBars[1].setVisible(false);
   }
 
   private drawOverlay(timeMs: number): void {
