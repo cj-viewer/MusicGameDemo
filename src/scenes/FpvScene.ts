@@ -20,8 +20,14 @@ const EYE_HEIGHT = 46;
 const NEAR_CLIP = 24;
 const ENEMY_POOL = 40;
 const BULLET_POOL = 80;
-/** 每帧视角最大转动（弧度），平滑跟随瞄准角 */
-const VIEW_TURN_STEP = 0.18;
+/** 场地边界（与 MainScene 的 ARENA 一致） */
+const ARENA_LEFT = 12;
+const ARENA_RIGHT = 1268;
+const ARENA_TOP = 12;
+const ARENA_BOTTOM = 708;
+/** 边界立柱间距与地面网格步长（世界单位） */
+const POST_SPACING = 157;
+const FLOOR_GRID_STEP = 140;
 
 interface Projected {
   screenX: number;
@@ -39,6 +45,18 @@ export class FpvScene extends Phaser.Scene {
   private freeBulletSprites: Phaser.GameObjects.Rectangle[] = [];
   private beatRing!: Phaser.GameObjects.Arc;
   private viewAngle = 0;
+
+  // 参照物：边界立柱与地面网格标记（世界坐标固定，按索引稳定绑定显示对象）
+  private postPositions: { x: number; y: number }[] = [];
+  private postMarkers: Phaser.GameObjects.Rectangle[] = [];
+  private floorPositions: { x: number; y: number }[] = [];
+  private floorMarkers: Phaser.GameObjects.Rectangle[] = [];
+  // 顶部罗盘：每 30° 一格刻度 + 四向字母
+  private compassTicks: Phaser.GameObjects.Rectangle[] = [];
+  private compassLabels: { angle: number; text: Phaser.GameObjects.Text }[] = [];
+  // 节奏点条（分屏时从左侧移过来）
+  private patternIcons: Phaser.GameObjects.Shape[] = [];
+  private patternKey = '';
 
   constructor() {
     super('FpvScene');
@@ -76,6 +94,49 @@ export class FpvScene extends Phaser.Scene {
       this.freeBulletSprites.push(this.add.rectangle(0, 0, 8, 8, 0xffffff).setVisible(false));
     }
 
+    // 参照物：沿场地边界的立柱 + 场内地面网格点，转身/移动时产生视差，让旋转可感知
+    this.postPositions = [];
+    for (let x = ARENA_LEFT; x <= ARENA_RIGHT; x += POST_SPACING) {
+      this.postPositions.push({ x, y: ARENA_TOP }, { x, y: ARENA_BOTTOM });
+    }
+    for (let y = ARENA_TOP + POST_SPACING; y <= ARENA_BOTTOM - 100; y += POST_SPACING) {
+      this.postPositions.push({ x: ARENA_LEFT, y }, { x: ARENA_RIGHT, y });
+    }
+    this.postMarkers = this.postPositions.map(() =>
+      this.add.rectangle(0, 0, 8, 60, 0x64748b).setOrigin(0.5, 1).setVisible(false)
+    );
+
+    this.floorPositions = [];
+    for (let x = ARENA_LEFT + 70; x < ARENA_RIGHT; x += FLOOR_GRID_STEP) {
+      for (let y = ARENA_TOP + 70; y < ARENA_BOTTOM; y += FLOOR_GRID_STEP) {
+        this.floorPositions.push({ x, y });
+      }
+    }
+    this.floorMarkers = this.floorPositions.map(() =>
+      this.add.rectangle(0, 0, 10, 3, 0x475569).setVisible(false)
+    );
+
+    // 顶部罗盘：转身时刻度平移，是最直接的旋转反馈
+    this.compassTicks = [];
+    for (let i = 0; i < 12; i++) {
+      this.compassTicks.push(this.add.rectangle(0, 58, 2, 10, 0x94a3b8).setDepth(9000).setVisible(false));
+    }
+    this.compassLabels = (
+      [
+        ['E', 0],
+        ['S', Math.PI / 2],
+        ['W', Math.PI],
+        ['N', -Math.PI / 2]
+      ] as [string, number][]
+    ).map(([label, angle]) => ({
+      angle,
+      text: this.add
+        .text(0, 44, label, { fontFamily: 'Arial', fontSize: '14px', color: '#cbd5e1' })
+        .setOrigin(0.5)
+        .setDepth(9000)
+        .setVisible(false)
+    }));
+
     // 准星 + 节拍环（射击位的独立节奏提示）
     const crosshair = this.add.graphics().setDepth(9000);
     crosshair.lineStyle(2, 0xffffff, 0.9);
@@ -99,7 +160,8 @@ export class FpvScene extends Phaser.Scene {
     }
 
     const player = main.player;
-    this.viewAngle = Phaser.Math.Angle.RotateTo(this.viewAngle, player.aimAngle, VIEW_TURN_STEP);
+    // 视角与瞄准 1:1 同步：平滑滞后会产生"画面漂移"的眩晕感，去掉后转向即时可感
+    this.viewAngle = player.aimAngle;
 
     // 节拍环：向拍点收缩，踩拍时最小最亮
     const conductor = main.conductor;
@@ -112,8 +174,88 @@ export class FpvScene extends Phaser.Scene {
       this.beatRing.setVisible(false);
     }
 
+    this.drawReferenceMarkers(player.x, player.y);
+    this.drawCompass();
+    this.updatePatternStrip(main);
     this.drawEnemies(main, player.x, player.y);
     this.drawBullets(main, player.x, player.y);
+  }
+
+  /** 边界立柱与地面网格：按索引稳定绑定，无重分配 */
+  private drawReferenceMarkers(px: number, py: number): void {
+    for (let i = 0; i < this.postPositions.length; i++) {
+      const pos = this.postPositions[i];
+      const marker = this.postMarkers[i];
+      const p = this.project(px, py, pos.x, pos.y, 10, 84);
+      if (!p) {
+        marker.setVisible(false);
+        continue;
+      }
+      marker
+        .setVisible(true)
+        .setPosition(p.screenX, p.bottomY)
+        .setDisplaySize(Math.max(2, p.width), Math.max(8, p.height))
+        .setDepth(-p.dist - 0.5);
+    }
+    for (let i = 0; i < this.floorPositions.length; i++) {
+      const pos = this.floorPositions[i];
+      const marker = this.floorMarkers[i];
+      const p = this.project(px, py, pos.x, pos.y, 18, 5);
+      if (!p) {
+        marker.setVisible(false);
+        continue;
+      }
+      marker
+        .setVisible(true)
+        .setPosition(p.screenX, p.bottomY)
+        .setDisplaySize(Math.max(3, p.width), Math.max(2, p.height))
+        .setDepth(-p.dist - 1);
+    }
+  }
+
+  /** 顶部罗盘：刻度与四向字母随视角平移 */
+  private drawCompass(): void {
+    const place = (angle: number, obj: Phaser.GameObjects.Rectangle | Phaser.GameObjects.Text): void => {
+      const rel = Phaser.Math.Angle.Wrap(angle - this.viewAngle);
+      if (Math.abs(rel) > FOV / 2) {
+        obj.setVisible(false);
+        return;
+      }
+      obj.setVisible(true);
+      obj.x = PANEL_W / 2 + FOCAL * Math.tan(rel);
+    };
+    for (let i = 0; i < this.compassTicks.length; i++) {
+      place(Phaser.Math.Angle.Wrap((i * Math.PI) / 6), this.compassTicks[i]);
+    }
+    for (const label of this.compassLabels) {
+      place(label.angle, label.text);
+    }
+  }
+
+  /** 节奏点条：显示当前武器连段（○轻 ◆重），当前拍随节拍脉冲；连段变化时重建 */
+  private updatePatternStrip(main: MainScene): void {
+    const pattern = main.combo.pattern;
+    const key = pattern.join('');
+    if (key !== this.patternKey) {
+      this.patternKey = key;
+      for (const icon of this.patternIcons) icon.destroy();
+      this.patternIcons = pattern.map((k, i) => {
+        const x = PANEL_W / 2 + (i - 1.5) * 56;
+        return k === 'L'
+          ? (this.add.circle(x, 96, 11).setStrokeStyle(3, 0x67e8f9).setDepth(9000) as Phaser.GameObjects.Shape)
+          : (this.add.rectangle(x, 96, 18, 18, 0xfbbf24).setAngle(45).setDepth(9000) as Phaser.GameObjects.Shape);
+      });
+    }
+    const conductor = main.conductor;
+    if (!conductor.started) return;
+    const beatFloat = conductor.beatFloatAt(conductor.now());
+    const current = ((Math.floor(beatFloat) % 4) + 4) % 4;
+    const frac = beatFloat - Math.floor(beatFloat);
+    this.patternIcons.forEach((icon, i) => {
+      const active = beatFloat >= 0 && i === current;
+      icon.setScale(active ? 1.45 - 0.45 * frac : 1);
+      icon.setAlpha(active ? 1 : 0.65);
+    });
   }
 
   /** 针孔投影：世界坐标 → 面板坐标；不可见（视野外/过近）返回 null */
@@ -216,6 +358,11 @@ export class FpvScene extends Phaser.Scene {
       this.bulletBillboards.delete(entity);
       this.freeBulletSprites.push(sprite);
     }
+    for (const marker of this.postMarkers) marker.setVisible(false);
+    for (const marker of this.floorMarkers) marker.setVisible(false);
+    for (const tick of this.compassTicks) tick.setVisible(false);
+    for (const label of this.compassLabels) label.text.setVisible(false);
+    for (const icon of this.patternIcons) icon.setVisible(false);
     if (this.beatRing) this.beatRing.setVisible(false);
   }
 }

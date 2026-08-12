@@ -99,6 +99,7 @@ export class MainScene extends Phaser.Scene {
   // 连段面板（教学模式含说明与进度，游戏模式只保留节拍块，随武器连段重建）
   private patternPanel?: Phaser.GameObjects.Container;
   private patternIcons: Phaser.GameObjects.Shape[] = [];
+  private patternPanelTutorial = false;
 
   // 教学状态
   private tutorialStreakText?: Phaser.GameObjects.Text;
@@ -255,7 +256,9 @@ export class MainScene extends Phaser.Scene {
       const btn = pointer.rightButtonDown() ? 'H' : pointer.leftButtonDown() ? 'L' : null;
       if (!btn) return;
       // 分屏时左半屏归移动位，点击不触发射击；只有指针在右半屏才响应
-      if (this.splitMode && pointer.x < 640) return;
+      if (this.splitMode && !this.input.mouse?.locked && pointer.x < 640) return;
+      // 点击右半屏进入指针锁定（隐藏鼠标，FPS 式相对移动观察；Esc 退出）
+      if (this.splitMode && !this.input.mouse?.locked) this.input.mouse?.requestPointerLock();
       this.handleAttackInput(btn);
     });
 
@@ -522,6 +525,7 @@ export class MainScene extends Phaser.Scene {
     this.patternPanel?.destroy();
     this.patternIcons = [];
     this.tutorialStreakText = undefined;
+    this.patternPanelTutorial = tutorial;
 
     const ui = this.add.container(640, 0).setDepth(15);
     if (tutorial) {
@@ -563,6 +567,7 @@ export class MainScene extends Phaser.Scene {
       ui.add(this.tutorialStreakText);
     }
     this.patternPanel = ui;
+    this.updatePatternPanelVisibility();
   }
 
   /** 每拍高亮当前拍的节拍块（教学与游戏通用） */
@@ -1039,9 +1044,16 @@ export class MainScene extends Phaser.Scene {
       this.baseZoom = 1;
       cam.setViewport(0, 0, 1280, 720);
       if (this.scene.isActive('FpvScene')) this.scene.stop('FpvScene');
+      this.input.mouse?.releasePointerLock();
     }
     cam.setZoom(this.baseZoom);
     cam.centerOn(640, 360);
+    this.updatePatternPanelVisibility();
+  }
+
+  /** 分屏时节奏点移到右侧 FPV 面板显示，左侧紧凑连段面板隐藏；教学面板始终显示 */
+  private updatePatternPanelVisibility(): void {
+    this.patternPanel?.setVisible(!this.splitMode || this.patternPanelTutorial);
   }
 
   get isSplitMode(): boolean {

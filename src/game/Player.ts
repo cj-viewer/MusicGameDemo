@@ -24,6 +24,8 @@ const FPV_TURN_SPEED = 3.2;
 const FPV_PANEL_LEFT = 640;
 const FPV_PANEL_CENTER_X = 960;
 const FPV_PANEL_HALF_W = 320;
+/** 指针锁定后的鼠标观察灵敏度（弧度/像素） */
+const FPV_LOOK_SENSITIVITY = 0.0032;
 
 export class Player {
   scene: MainScene;
@@ -51,6 +53,8 @@ export class Player {
   private gamepadAimAngle = 0;
   private lastPointerX = 0;
   private lastPointerY = 0;
+  /** 指针锁定期间累积的鼠标横向位移，按帧消费 */
+  private fpvLookDeltaX = 0;
 
   constructor(scene: MainScene, x: number, y: number) {
     this.scene = scene;
@@ -71,6 +75,11 @@ export class Player {
     >;
     this.lastPointerX = scene.input.activePointer.x;
     this.lastPointerY = scene.input.activePointer.y;
+
+    // 指针锁定（分屏 FPV 鼠标观察）期间收集相对位移
+    scene.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
+      if (scene.input.mouse?.locked) this.fpvLookDeltaX += pointer.movementX;
+    });
   }
 
   get x(): number {
@@ -248,10 +257,20 @@ export class Player {
   }
 
   /**
-   * 分屏 FPV 瞄准：只响应右半屏内的指针。指针偏离面板中心越远转向越快（平方响应，
-   * 中心带小死区便于稳定持向），不做辅助瞄准以保证 FPV 视角平稳。
+   * 分屏 FPV 瞄准，两种模式：
+   * - 指针锁定（点击右半屏后进入，鼠标隐藏）：FPS 式相对移动观察，1:1 手感；
+   * - 未锁定回退：指针在右半屏偏离面板中心越远转向越快（平方响应+中心死区）。
+   * 均不做辅助瞄准以保证 FPV 视角平稳。
    */
   private updateFpvAim(dtMs: number): void {
+    if (this.scene.input.mouse?.locked) {
+      if (this.fpvLookDeltaX !== 0) {
+        this.aimAngle = Phaser.Math.Angle.Wrap(this.aimAngle + this.fpvLookDeltaX * FPV_LOOK_SENSITIVITY);
+        this.fpvLookDeltaX = 0;
+      }
+      return;
+    }
+    this.fpvLookDeltaX = 0;
     const pointer = this.scene.input.activePointer;
     if (pointer.x < FPV_PANEL_LEFT) return;
     const offset = Phaser.Math.Clamp((pointer.x - FPV_PANEL_CENTER_X) / FPV_PANEL_HALF_W, -1, 1);
