@@ -78,6 +78,8 @@ export class MainScene extends Phaser.Scene {
   private enemyGroup!: Phaser.Physics.Arcade.Group;
   private bullets!: Phaser.Physics.Arcade.Group;
   private playerBullets!: Phaser.Physics.Arcade.Group;
+  private enemyBulletHitboxes!: Phaser.Physics.Arcade.Group;
+  private playerBulletHitboxes!: Phaser.Physics.Arcade.Group;
   private pickups: Pickup[] = [];
   private state: GameState = 'title';
   private waveIdx = -1;
@@ -181,17 +183,23 @@ export class MainScene extends Phaser.Scene {
     this.enemyGroup = this.physics.add.group();
     this.bullets = this.physics.add.group();
     this.playerBullets = this.physics.add.group();
+    this.enemyBulletHitboxes = this.physics.add.group();
+    this.playerBulletHitboxes = this.physics.add.group();
 
     this.physics.add.collider(this.player.go, this.enemyGroup);
     this.physics.add.collider(this.enemyGroup, this.enemyGroup);
-    this.physics.add.overlap(this.player.go, this.bullets, (_playerGO, bulletGO) => {
+    this.physics.add.overlap(this.player.go, this.enemyBulletHitboxes, (_playerGO, hitboxGO) => {
       if (this.state !== 'playing') return;
-      const bullet = bulletGO as Phaser.GameObjects.Rectangle;
+      const hitbox = hitboxGO as Phaser.GameObjects.Rectangle;
+      const bullet = hitbox.getData('ownerBullet') as Phaser.GameObjects.Rectangle | undefined;
+      if (!bullet?.active) return;
       this.player.takeDamage(bullet.getData('damage') as number);
       this.destroyEnemyBullet(bullet);
     });
-    this.physics.add.overlap(this.playerBullets, this.enemyGroup, (bulletGO, enemyGO) => {
-      const bullet = bulletGO as Phaser.GameObjects.Rectangle;
+    this.physics.add.overlap(this.playerBulletHitboxes, this.enemyGroup, (hitboxGO, enemyGO) => {
+      const hitbox = hitboxGO as Phaser.GameObjects.Rectangle;
+      const bullet = hitbox.getData('ownerBullet') as Phaser.GameObjects.Rectangle | undefined;
+      if (!bullet?.active) return;
       const enemy = this.enemies.find((candidate) => candidate.go === enemyGO);
       if (enemy && !enemy.dead) {
         enemy.takeDamage(
@@ -215,16 +223,20 @@ export class MainScene extends Phaser.Scene {
     this.updateRhythmEdgeAnticipation();
     if (this.combo.updateFever()) this.endFever();
     this.handleGamepadInput();
-    this.drawDebugHitboxes();
 
-    if (this.state === 'over' || this.state === 'title') return;
+    if (this.state === 'over' || this.state === 'title') {
+      this.drawDebugHitboxes();
+      return;
+    }
 
     this.player.update(this.time.now, delta);
     for (const enemy of this.enemies) enemy.update(delta);
     this.updateEnemyBulletMotion();
+    this.updateStraightBulletHitboxes();
     this.updateBulletTrails(delta);
     this.cleanupBullets();
     this.checkPickups();
+    this.drawDebugHitboxes();
 
     if (this.combo.feverActive()) {
       this.hud.setFeverCountdown(this.combo.feverRemainRatio());
@@ -812,7 +824,7 @@ export class MainScene extends Phaser.Scene {
     }
 
     this.debugGfx.lineStyle(2, 0x00ff00, 0.9);
-    for (const group of [this.playerBullets, this.bullets]) {
+    for (const group of [this.playerBulletHitboxes, this.enemyBulletHitboxes]) {
       for (const obj of group.getChildren()) {
         this.strokeDebugBody((obj as Phaser.GameObjects.Rectangle).body as Phaser.Physics.Arcade.Body);
       }
@@ -827,6 +839,88 @@ export class MainScene extends Phaser.Scene {
     } else {
       this.debugGfx.strokeRect(body.x, body.y, body.width, body.height);
     }
+  }
+
+  private createBulletHitboxes(
+    bullet: Phaser.GameObjects.Rectangle,
+    group: Phaser.Physics.Arcade.Group,
+    size: number
+  ): Phaser.GameObjects.Rectangle[] {
+    const hitboxes = Array.from({ length: 3 }, () => {
+      const hitbox = this.add.rectangle(bullet.x, bullet.y, size, size, 0xffffff, 0);
+      group.add(hitbox);
+      const body = hitbox.body as Phaser.Physics.Arcade.Body;
+      body.setSize(size, size, true);
+      hitbox.setData('ownerBullet', bullet);
+      return hitbox;
+    });
+    bullet.setData('hitboxes', hitboxes);
+    return hitboxes;
+  }
+
+  private positionStraightBulletHitboxes(
+    bullet: Phaser.GameObjects.Rectangle,
+    length: number,
+    size: number,
+    angle: number
+  ): void {
+    const hitboxes = bullet.getData('hitboxes') as Phaser.GameObjects.Rectangle[] | undefined;
+    if (!hitboxes) return;
+    const offset = Math.max(0, (length - size) * 0.5);
+    const offsets = [-offset, 0, offset];
+    const bulletBody = bullet.body as Phaser.Physics.Arcade.Body;
+    hitboxes.forEach((hitbox, index) => {
+      if (!hitbox.active) return;
+      const x = bullet.x + Math.cos(angle) * offsets[index];
+      const y = bullet.y + Math.sin(angle) * offsets[index];
+      hitbox.setPosition(x, y);
+      const body = hitbox.body as Phaser.Physics.Arcade.Body;
+      body.reset(x, y);
+      body.setVelocity(bulletBody.velocity.x, bulletBody.velocity.y);
+    });
+  }
+
+  private positionArcBulletHitboxes(
+    bullet: Phaser.GameObjects.Rectangle,
+    originX: number,
+    originY: number,
+    radius: number,
+    angle: number,
+    halfArcAngle: number
+  ): void {
+    const hitboxes = bullet.getData('hitboxes') as Phaser.GameObjects.Rectangle[] | undefined;
+    if (!hitboxes) return;
+    const sampleAngles = [angle - halfArcAngle, angle, angle + halfArcAngle];
+    hitboxes.forEach((hitbox, index) => {
+      if (!hitbox.active) return;
+      const x = originX + Math.cos(sampleAngles[index]) * radius;
+      const y = originY + Math.sin(sampleAngles[index]) * radius;
+      hitbox.setPosition(x, y);
+      (hitbox.body as Phaser.Physics.Arcade.Body).reset(x, y);
+    });
+  }
+
+  private updateStraightBulletHitboxes(): void {
+    for (const group of [this.bullets, this.playerBullets]) {
+      for (const obj of group.getChildren()) {
+        const bullet = obj as Phaser.GameObjects.Rectangle;
+        if (bullet.getData('hitboxMode') !== 'straight') continue;
+        this.positionStraightBulletHitboxes(
+          bullet,
+          bullet.getData('hitboxLength') as number,
+          bullet.getData('hitboxSize') as number,
+          bullet.getData('hitboxAngle') as number
+        );
+      }
+    }
+  }
+
+  private destroyBulletHitboxes(bullet: Phaser.GameObjects.Rectangle): void {
+    const hitboxes = bullet.getData('hitboxes') as Phaser.GameObjects.Rectangle[] | undefined;
+    for (const hitbox of hitboxes ?? []) {
+      if (hitbox.active) hitbox.destroy();
+    }
+    bullet.setData('hitboxes', undefined);
   }
 
   private flashMessage(text: string): void {
@@ -1099,7 +1193,7 @@ export class MainScene extends Phaser.Scene {
       .setDepth(4);
     this.bullets.add(bullet);
     const body = bullet.body as Phaser.Physics.Arcade.Body;
-    body.setSize(ENEMY_BULLET_LENGTH, ENEMY_BULLET_THICKNESS);
+    body.setSize(ENEMY_BULLET_THICKNESS, ENEMY_BULLET_THICKNESS, true);
     body.setVelocity(0, 0);
     bullet.setData('damage', damage);
     bullet.setData('angle', angle);
@@ -1107,6 +1201,12 @@ export class MainScene extends Phaser.Scene {
     bullet.setData('trailColor', color);
     bullet.setData('trailThickness', ENEMY_BULLET_THICKNESS);
     bullet.setData('bursting', false);
+    bullet.setData('hitboxMode', 'straight');
+    bullet.setData('hitboxLength', ENEMY_BULLET_LENGTH);
+    bullet.setData('hitboxSize', ENEMY_BULLET_THICKNESS);
+    bullet.setData('hitboxAngle', angle);
+    this.createBulletHitboxes(bullet, this.enemyBulletHitboxes, ENEMY_BULLET_THICKNESS);
+    this.positionStraightBulletHitboxes(bullet, ENEMY_BULLET_LENGTH, ENEMY_BULLET_THICKNESS, angle);
     this.createHeldEnemyTrail(bullet);
   }
 
@@ -1147,7 +1247,7 @@ export class MainScene extends Phaser.Scene {
       if (onBeat) bullet.setStrokeStyle(2, 0xffffff, 0.95);
       this.playerBullets.add(bullet);
       const body = bullet.body as Phaser.Physics.Arcade.Body;
-      body.setSize(PLAYER_BULLET_LENGTH, BULLET_THICKNESS);
+      body.setSize(BULLET_THICKNESS, BULLET_THICKNESS, true);
       const velocity = this.physics.velocityFromRotation(shotAngle, PLAYER_BULLET_SPEED);
       body.setVelocity(velocity.x, velocity.y);
       bullet.setData('damage', damage);
@@ -1156,6 +1256,12 @@ export class MainScene extends Phaser.Scene {
       bullet.setData('trailThickness', BULLET_THICKNESS);
       bullet.setData('knockbackAngle', shotAngle);
       bullet.setData('knockbackSpeed', GLOWSTICK_KNOCKBACK_SPEED);
+      bullet.setData('hitboxMode', 'straight');
+      bullet.setData('hitboxLength', PLAYER_BULLET_LENGTH);
+      bullet.setData('hitboxSize', BULLET_THICKNESS);
+      bullet.setData('hitboxAngle', shotAngle);
+      this.createBulletHitboxes(bullet, this.playerBulletHitboxes, BULLET_THICKNESS);
+      this.positionStraightBulletHitboxes(bullet, PLAYER_BULLET_LENGTH, BULLET_THICKNESS, shotAngle);
     }
   }
 
@@ -1196,6 +1302,8 @@ export class MainScene extends Phaser.Scene {
       bullet.setData('batonVisual', visual);
       bullet.setData('trailThickness', BULLET_THICKNESS + 4);
       bullet.setData('knockbackSpeed', BATON_KNOCKBACK_SPEED);
+      bullet.setData('hitboxMode', 'arc');
+      this.createBulletHitboxes(bullet, this.playerBulletHitboxes, BULLET_THICKNESS);
       return { bullet, visual, radius, halfArcAngle };
     });
 
@@ -1206,8 +1314,10 @@ export class MainScene extends Phaser.Scene {
         if (!bullet.active) continue;
         const x = originX + Math.cos(angle) * radius;
         const y = originY + Math.sin(angle) * radius;
-        bullet.setPosition(x, y).setRotation(angle + Math.PI / 2);
+        const bodyAngle = angle + Math.PI / 2;
+        bullet.setPosition(x, y).setRotation(bodyAngle);
         (bullet.body as Phaser.Physics.Arcade.Body).reset(x, y);
+        this.positionArcBulletHitboxes(bullet, originX, originY, radius, angle, halfArcAngle);
         bullet.setData('knockbackAngle', angle + (clockwise ? Math.PI / 2 : -Math.PI / 2));
         visual.clear();
         // 踩拍扫击带白色光晕底层
@@ -1289,6 +1399,7 @@ export class MainScene extends Phaser.Scene {
   private destroyPlayerBullet(bullet: Phaser.GameObjects.Rectangle): void {
     const visual = bullet.getData('batonVisual') as Phaser.GameObjects.Graphics | undefined;
     if (visual?.active) visual.destroy();
+    this.destroyBulletHitboxes(bullet);
     if (bullet.active) bullet.destroy();
   }
 
@@ -1316,6 +1427,7 @@ export class MainScene extends Phaser.Scene {
   private destroyEnemyBullet(bullet: Phaser.GameObjects.Rectangle): void {
     const heldTrail = bullet.getData('heldTrail') as Phaser.GameObjects.Rectangle | undefined;
     if (heldTrail?.active) heldTrail.destroy();
+    this.destroyBulletHitboxes(bullet);
     if (bullet.active) bullet.destroy();
   }
 
