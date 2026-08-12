@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 import { GLOWSTICKS, type WeaponDef } from './weapons';
 import { applyStickDeadzone } from './GamepadControls';
+import { PLAYER_SPRITE_SCALE, playPlayerAnimation, type PlayerAction } from './playerAnimation';
 import type { MainScene } from '../scenes/MainScene';
 import { worldDepth, worldSize } from './visualScale';
 
@@ -22,7 +23,7 @@ const BATON_SIDE_OFFSET = worldSize(17);
 
 export class Player {
   scene: MainScene;
-  go: Phaser.GameObjects.Image;
+  go: Phaser.GameObjects.Sprite;
   body: Phaser.Physics.Arcade.Body;
 
   hp = 100;
@@ -46,13 +47,16 @@ export class Player {
   private gamepadAimAngle = 0;
   private lastPointerX = 0;
   private lastPointerY = 0;
+  private action: PlayerAction = 'idle';
+  private dead = false;
 
   constructor(scene: MainScene, x: number, y: number) {
     this.scene = scene;
-    this.go = scene.add.image(x, y, 'player').setDisplaySize(worldSize(54), worldSize(82)).setDepth(5);
+    this.go = scene.add.sprite(x, y, 'player-idle-1').setDepth(5);
+    playPlayerAnimation(this.go, 'idle');
     scene.physics.add.existing(this.go);
     this.body = this.go.body as Phaser.Physics.Arcade.Body;
-    // 受击判定使用默认全帧矩形：刚好包裹整张图片，且随图片缩放自动同步（body 世界尺寸 = 源帧尺寸 × scale）
+    // 受击判定使用默认全帧矩形：刚好包裹裁切后的角色内容，且随缩放自动同步（body 世界尺寸 = 源帧尺寸 × scale）
     this.body.setCollideWorldBounds(true);
 
     this.gfx = scene.add.graphics().setDepth(6);
@@ -77,6 +81,8 @@ export class Player {
   }
 
   update(timeMs: number, dtMs: number): void {
+    if (this.dead) return;
+
     // 移动（闪避期间由 tween 控制位移）
     if (!this.isDodging) {
       const dir = this.moveDir();
@@ -90,6 +96,11 @@ export class Player {
 
     // 瞄准
     this.updateAim();
+
+    // 朝向与走/停动画：素材只绘制朝右版本，瞄准左侧时水平翻转（与武器持有侧一致）
+    this.go.setFlipX(Math.cos(this.aimAngle) < 0);
+    const moving = this.isDodging || this.body.velocity.length() > 20;
+    this.setAction(moving ? 'run' : 'idle');
 
     const playerDepth = worldDepth(this.y + this.body.halfHeight);
     this.go.setDepth(playerDepth);
@@ -118,10 +129,21 @@ export class Player {
 
   onBeat(): void {
     this.stamina = Math.min(this.maxStamina, this.stamina + STAMINA_REGEN_PER_BEAT);
+
+    // 踩拍律动：轻微蹲弹，与场边律动带、HP 血条的节拍呼吸保持一致
+    if (!this.dead && !this.isDodging) {
+      this.scene.tweens.add({
+        targets: this.go,
+        scaleX: { from: PLAYER_SPRITE_SCALE * 1.06, to: PLAYER_SPRITE_SCALE },
+        scaleY: { from: PLAYER_SPRITE_SCALE * 0.95, to: PLAYER_SPRITE_SCALE },
+        duration: 150,
+        ease: 'Sine.easeOut'
+      });
+    }
   }
 
   tryDodge(): boolean {
-    if (this.isDodging) return false;
+    if (this.isDodging || this.dead) return false;
     const conductor = this.scene.conductor;
     if (!conductor.started) return false;
 
@@ -171,7 +193,7 @@ export class Player {
 
   takeDamage(amount: number): void {
     const now = this.scene.time.now;
-    if (this.isDodging || now < this.invulnUntil) return;
+    if (this.isDodging || this.dead || now < this.invulnUntil) return;
     this.hp = Math.max(0, this.hp - amount);
     this.invulnUntil = now + 600;
     this.scene.queueBeatSfx('playerHurt');
@@ -181,6 +203,17 @@ export class Player {
     if (this.hp <= 0) {
       this.scene.onPlayerDied();
     }
+  }
+
+  /** 战败：倒地姿势并隐藏手持武器 */
+  die(): void {
+    this.dead = true;
+    this.body.setVelocity(0, 0);
+    this.setAction('down');
+    this.go.clearTint();
+    this.go.setAlpha(0.85);
+    this.gfx.clear();
+    this.weaponBars.forEach((bar) => bar.setVisible(false));
   }
 
   /** 输入错误的噪音反馈 */
@@ -243,13 +276,24 @@ export class Player {
     return current + Math.sign(target - current) * maxChange;
   }
 
+  /** 动作切换（同动作直接返回，避免每帧重置动画与缩放） */
+  private setAction(action: PlayerAction): void {
+    if (this.action === action) return;
+    this.action = action;
+    playPlayerAnimation(this.go, action);
+  }
+
   private spawnTrail(): void {
     const now = this.scene.time.now;
     if (now - this.lastTrailAt < 50) return;
     this.lastTrailAt = now;
     const trail = this.scene.add
-      .circle(this.go.x, this.go.y, PLAYER_RADIUS, 0x4ade80, 0.7)
-      .setDepth(4);
+      .sprite(this.go.x, this.go.y, this.go.texture.key)
+      .setScale(this.go.scaleX, this.go.scaleY)
+      .setFlipX(this.go.flipX)
+      .setAlpha(0.55)
+      .setTint(0x9be8ff)
+      .setDepth(this.go.depth - 0.0005);
     this.scene.tweens.add({
       targets: trail,
       alpha: 0,

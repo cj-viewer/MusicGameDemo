@@ -4,6 +4,7 @@ import { Sfx } from '../core/Sfx';
 import { ComboSystem } from '../game/ComboSystem';
 import { HUD } from '../game/HUD';
 import { Player, PLAYER_RADIUS } from '../game/Player';
+import { registerPlayerAnimations } from '../game/playerAnimation';
 import { BATON, GLOWSTICKS, getAttackSpec, type WeaponDef } from '../game/weapons';
 import { Enemy, FanEnemy, SmallGuard } from '../game/enemies';
 import { GAMEPAD_BUTTON, rumbleParameters, type RumbleKind } from '../game/GamepadControls';
@@ -123,7 +124,13 @@ export class MainScene extends Phaser.Scene {
         this.load.image(`fan-${animation}-${index}`, asset(`images/characters/fan/${animation}/${animation}-${frame}.png`));
       }
     }
-    this.load.image('player', asset('images/characters/player.png'));
+    for (let index = 1; index <= 2; index++) {
+      this.load.image(`player-idle-${index}`, asset(`images/characters/player/idle/idle-0${index}.png`));
+    }
+    for (let index = 1; index <= 4; index++) {
+      this.load.image(`player-run-${index}`, asset(`images/characters/player/run/run-0${index}.png`));
+    }
+    this.load.image('player-down-1', asset('images/characters/player/down/down-01.png'));
     this.load.audio('beat-light', asset('audio/sfx/sfx-beat-light.mp3'));
     this.load.audio('beat-heavy', asset('audio/sfx/sfx-beat-heavy.mp3'));
     this.load.audio('bgm', asset('audio/music/bgm3.mp3'));
@@ -151,6 +158,7 @@ export class MainScene extends Phaser.Scene {
     this.suppressAttackUntil = 0;
     this.countdownRemaining = -1;
     this.createFanAnimations();
+    registerPlayerAnimations(this);
 
     this.physics.world.setBounds(ARENA.x, ARENA.y, ARENA.width, ARENA.height);
     const border = this.add.graphics().setDepth(1);
@@ -785,7 +793,7 @@ export class MainScene extends Phaser.Scene {
 
   onPlayerDied(): void {
     this.state = 'over';
-    this.player.go.setAlpha(0.3);
+    this.player.die();
     this.hud.message('FAILED...\n\n按 R 重新开始');
   }
 
