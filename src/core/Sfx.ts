@@ -2,10 +2,15 @@
 export class Sfx {
   private ctx: AudioContext | null;
   private destination: AudioNode | null;
+  private volume = 1;
 
   constructor(ctx: AudioContext | null, destination: AudioNode | null = null) {
     this.ctx = ctx;
     this.destination = destination;
+  }
+
+  setVolume(volume: number): void {
+    this.volume = Math.max(0, volume);
   }
 
   private tone(
@@ -17,6 +22,8 @@ export class Sfx {
     startDelay = 0
   ): void {
     if (!this.ctx) return;
+    const outputGain = gainVal * this.volume;
+    if (outputGain <= 0) return;
     const t0 = this.ctx.currentTime + startDelay;
     const osc = this.ctx.createOscillator();
     const gain = this.ctx.createGain();
@@ -25,7 +32,7 @@ export class Sfx {
     if (freqTo !== freqFrom) {
       osc.frequency.exponentialRampToValueAtTime(Math.max(freqTo, 1), t0 + dur);
     }
-    gain.gain.setValueAtTime(gainVal, t0);
+    gain.gain.setValueAtTime(outputGain, t0);
     gain.gain.exponentialRampToValueAtTime(0.001, t0 + dur);
     osc.connect(gain);
     gain.connect(this.destination ?? this.ctx.destination);
@@ -68,11 +75,6 @@ export class Sfx {
   /** Enemy hit, deliberately lighter than player damage. */
   enemyHurt(): void {
     this.tone(520, 260, 0.1, 'triangle', 0.1);
-  }
-
-  /** 踩拍闪避的震荡波 */
-  shockwave(): void {
-    this.tone(880, 220, 0.2, 'sine', 0.16);
   }
 
   /** 敌人死亡 */

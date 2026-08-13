@@ -11,6 +11,14 @@ import { GAMEPAD_BUTTON, rumbleParameters, type RumbleKind } from '../game/Gamep
 import { WORLD_OBJECT_SCALE, worldDepth, worldSize } from '../game/visualScale';
 import type { FpvMiniScene } from './FpvMiniScene';
 import { TuningEditor } from '../game/TuningEditor';
+import {
+  MAIN_CAMERA_BASE_ZOOM,
+  MAIN_CAMERA_LOOK_DAMPING_MS,
+  MAIN_CAMERA_LOOK_DEAD_ZONE,
+  MAIN_CAMERA_LOOK_MAX_X,
+  MAIN_CAMERA_LOOK_MAX_Y,
+  screenLayerOffset
+} from '../game/cameraConfig';
 
 // bgm3.mp3 的实测节拍：对全曲 onset 包络做自相关 + 网格相位搜索得出 BPM，首拍在文件内 0.026s 处。
 interface BgmTrack {
@@ -30,14 +38,21 @@ const DEFAULT_TUTORIAL_BGM_SLOT = 3;
 const DEFAULT_LEVEL_BGM_SLOT = 0;
 const BPM = BGM_TRACKS[DEFAULT_TUTORIAL_BGM_SLOT].bpm;
 
-const BGM_VOLUME = 0.3;
+/** BGM 通道对外仍以 100% 为默认值；内部基础混音衰减到旧版 0.3 的三分之一。 */
+const BGM_VOLUME = 0.05;
 
 const DEFAULT_MASTER_VOLUME = 1.5;
 const MAX_MASTER_VOLUME = 3;
+const DEFAULT_BGM_CHANNEL_VOLUME = 1;
+const DEFAULT_SFX_CHANNEL_VOLUME = 1;
+const MAX_CHANNEL_VOLUME = 2;
 const VOLUME_TRACK_X = 440;
 const VOLUME_TRACK_WIDTH = 400;
 const VIEW_WIDTH = 1280;
 const VIEW_HEIGHT = 720;
+/** 主场景轻微拉远，并按角色靠近场地边缘的程度做 Cinemachine 风格前探。 */
+const CAMERA_BASE_SCROLL_X = screenLayerOffset(VIEW_WIDTH);
+const CAMERA_BASE_SCROLL_Y = screenLayerOffset(VIEW_HEIGHT);
 const ARENA_MARGIN = 12;
 const RHYTHM_EDGE_BAND = 82;
 const ARENA = {
@@ -62,7 +77,10 @@ const ENEMY_BULLET_LENGTH = worldSize(36 * 0.75);
 const BULLET_THICKNESS = worldSize(10);
 const ENEMY_BULLET_THICKNESS = BULLET_THICKNESS * 0.75;
 const DEFAULT_PLAYER_BULLET_SPEED = 360;
-const DEFAULT_ENEMY_BULLET_SPEED = 180;
+/** 敌方弹幕基础速度由旧版 180 px/s 下调为 0.8 倍。 */
+const DEFAULT_ENEMY_BULLET_SPEED = 180 * 0.8;
+/** 每拍前 0.2 秒以归一化 easeInExpo 重分配位移，总行程仍为基础速度 × 0.2 秒。 */
+const ENEMY_BULLET_BEAT_SURGE_WINDOW = 0.2;
 const PLAYER_BULLET_COLOR = 0xef4444;
 const BATON_BULLET_COLOR = 0xa855f7;
 const GLOWSTICK_KNOCKBACK_SPEED = 150;
@@ -91,22 +109,32 @@ export class MainScene extends Phaser.Scene {
   hud!: HUD;
   player!: Player;
 
-  private bgm!: Phaser.Sound.BaseSound;
+  private bgm!: Phaser.Sound.WebAudioSound | Phaser.Sound.HTML5AudioSound;
   private bgmFirstBeat = 0;
   private currentBgmTrack: BgmTrack = BGM_TRACKS[DEFAULT_TUTORIAL_BGM_SLOT];
   private tuningEditor!: TuningEditor;
   private masterVolume = DEFAULT_MASTER_VOLUME;
+  private bgmChannelVolume = DEFAULT_BGM_CHANNEL_VOLUME;
+  private sfxChannelVolume = DEFAULT_SFX_CHANNEL_VOLUME;
   private volumePanel!: Phaser.GameObjects.Container;
   private volumeFill!: Phaser.GameObjects.Rectangle;
   private volumeThumb!: Phaser.GameObjects.Arc;
   private volumeValueText!: Phaser.GameObjects.Text;
+  private bgmVolumeFill!: Phaser.GameObjects.Rectangle;
+  private bgmVolumeThumb!: Phaser.GameObjects.Arc;
+  private bgmVolumeValueText!: Phaser.GameObjects.Text;
+  private sfxVolumeFill!: Phaser.GameObjects.Rectangle;
+  private sfxVolumeThumb!: Phaser.GameObjects.Arc;
+  private sfxVolumeValueText!: Phaser.GameObjects.Text;
   private volumePanelVisible = false;
-  private volumeDragging = false;
+  private volumeDragging: 'master' | 'bgm' | 'sfx' | null = null;
   private fpvWindowEnabled = true;
   private fpvToggleButton!: Phaser.GameObjects.Rectangle;
   private fpvToggleText!: Phaser.GameObjects.Text;
   /** ESC 设置打开时，主场景和观察窗都保持在同一帧。 */
   private gamePaused = false;
+  private cameraLookX = 0;
+  private cameraLookY = 0;
 
   private enemies: Enemy[] = [];
   private enemyGroup!: Phaser.Physics.Arcade.Group;
@@ -117,6 +145,8 @@ export class MainScene extends Phaser.Scene {
   private pickups: Pickup[] = [];
   private state: GameState = 'title';
   private waveIdx = -1;
+  private displayedWaveNumber = 0;
+  private victoryAchieved = false;
   private lastComboLevel = 0;
   private arenaBorder!: Phaser.GameObjects.Rectangle;
   private arenaBeatCues: Phaser.GameObjects.Rectangle[] = [];
@@ -143,6 +173,8 @@ export class MainScene extends Phaser.Scene {
   private tutorialCalibrationBeats = new Set<number>();
   private tutorialCalibratedOffset = 0;
   private confirmUi?: Phaser.GameObjects.Container;
+  /** 教学场地上的操作图，位于底图之上、角色之下。 */
+  private tutorialControlGuide?: Phaser.GameObjects.Container;
   /** 确认按钮点击后短暂屏蔽攻击输入，避免同一次点击又触发挥击 */
   private suppressAttackUntil = 0;
   /** 进入游戏的节拍倒计时（每小节减一），-1 表示未激活 */
@@ -185,6 +217,8 @@ export class MainScene extends Phaser.Scene {
     this.pickups = [];
     this.state = 'title';
     this.waveIdx = -1;
+    this.displayedWaveNumber = 0;
+    this.victoryAchieved = false;
     this.lastComboLevel = 0;
     this.rhythmBlocks = [];
     this.rhythmPulseUntil = 0;
@@ -193,12 +227,16 @@ export class MainScene extends Phaser.Scene {
     this.patternPanel = undefined;
     this.patternIcons = [];
     this.confirmUi = undefined;
+    this.tutorialControlGuide = undefined;
     this.tutorialStreakText = undefined;
     this.tutorialStreak = 0;
     this.tutorialHitBeats.clear();
     this.tutorialFailedMeasures.clear();
     this.suppressAttackUntil = 0;
     this.countdownRemaining = -1;
+    this.cameraLookX = 0;
+    this.cameraLookY = 0;
+    this.cameras.main.setZoom(MAIN_CAMERA_BASE_ZOOM).setScroll(CAMERA_BASE_SCROLL_X, CAMERA_BASE_SCROLL_Y);
     this.createFanAnimations();
     registerPlayerAnimations(this);
 
@@ -235,8 +273,13 @@ export class MainScene extends Phaser.Scene {
     soundManager.masterVolumeNode.gain.setValueAtTime(this.masterVolume, soundManager.context.currentTime);
     this.conductor = new Conductor(this, BPM);
     this.sfx = new Sfx(this.conductor.ctx, soundManager.destination);
+    this.conductor.setSfxVolume(this.sfxChannelVolume);
+    this.sfx.setVolume(this.sfxChannelVolume);
     this.currentBgmTrack = BGM_TRACKS[DEFAULT_TUTORIAL_BGM_SLOT];
-    this.bgm = this.sound.add(this.currentBgmTrack.key, { loop: false, volume: BGM_VOLUME });
+    this.bgm = this.sound.add(this.currentBgmTrack.key, {
+      loop: false,
+      volume: BGM_VOLUME * this.bgmChannelVolume
+    }) as Phaser.Sound.WebAudioSound | Phaser.Sound.HTML5AudioSound;
     this.bgm.on(Phaser.Sound.Events.COMPLETE, this.onBgmComplete, this);
     this.combo = new ComboSystem(this.conductor, GLOWSTICKS.pattern);
     this.hud = new HUD(this, this.conductor);
@@ -245,6 +288,7 @@ export class MainScene extends Phaser.Scene {
     this.hud.setPattern(GLOWSTICKS.pattern, GLOWSTICKS.name);
     this.conductor.setCuePattern(GLOWSTICKS.pattern);
     this.hud.setHp(this.player.hp, this.player.maxHp);
+    this.hud.setVictoryVisible(false);
     this.createSettingsPanel();
     this.tuningEditor = new TuningEditor(this, BGM_TRACKS.map((track) => track.label));
     this.tuningEditor.playerBulletSpeed = DEFAULT_PLAYER_BULLET_SPEED;
@@ -289,7 +333,8 @@ export class MainScene extends Phaser.Scene {
     // 独立 Scene 只投影主场景数据，不参与主场景的控制、物理或判定。
     if (this.scene.isActive('FpvMiniScene')) this.scene.stop('FpvMiniScene');
     this.scene.launch('FpvMiniScene');
-    this.showTitle();
+    // 直接进入教学，不再用全屏标题遮罩等待点击。
+    this.startGame();
   }
 
   update(_time: number, delta: number): void {
@@ -300,6 +345,7 @@ export class MainScene extends Phaser.Scene {
     this.updateRhythmEdgeAnticipation();
     if (this.combo.updateFever()) this.endFever();
     this.handleGamepadInput();
+    this.updateCameraLookAhead(delta);
 
     if (this.state === 'over' || this.state === 'title') {
       this.drawDebugHitboxes();
@@ -308,6 +354,7 @@ export class MainScene extends Phaser.Scene {
 
     this.player.update(this.time.now, delta);
     for (const enemy of this.enemies) enemy.update(delta);
+    this.updateEnemyBulletBeatSurge(delta);
     this.updateStraightBulletHitboxes();
     this.updateBulletTrails(delta);
     this.cleanupBullets();
@@ -347,22 +394,45 @@ export class MainScene extends Phaser.Scene {
 
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       if (this.gamePaused || this.volumePanelVisible || this.tuningEditor.visible) return;
+      const btn = pointer.rightButtonDown() ? 'H' : pointer.leftButtonDown() ? 'L' : null;
       if (this.state === 'title') {
         this.startGame();
         return;
       }
-      if (this.state === 'over' || this.state === 'tutorialConfirm') return;
+      if (this.state === 'tutorialConfirm') {
+        // 点击确认页按钮时由按钮自身决定进入或重练，避免全屏左键轻攻击先行吞掉按钮语义。
+        if (this.input.hitTestPointer(pointer).length > 0) return;
+        if (btn) this.handleTutorialConfirmInput(btn);
+        return;
+      }
+      if (this.state === 'over') return;
       if (this.time.now < this.suppressAttackUntil) return;
 
-      const btn = pointer.rightButtonDown() ? 'H' : pointer.leftButtonDown() ? 'L' : null;
-      if (!btn) return;
-      this.handleAttackInput(btn);
+      if (btn) this.handleAttackInput(btn);
     });
 
-    this.input.keyboard!.on('keydown-SHIFT', () => {
-      if (this.gamePaused) return;
-      if (this.state === 'playing' || this.state === 'intermission' || this.state === 'tutorial') {
-        this.player.tryDodge();
+    this.input.keyboard!.on('keydown', (event: KeyboardEvent) => {
+      if (event.repeat || this.gamePaused || this.volumePanelVisible || this.tuningEditor.visible) return;
+
+      if (event.code === 'Quote' || event.code === 'Enter') {
+        event.preventDefault();
+        if (this.state === 'title') {
+          this.startGame();
+          return;
+        }
+        const btn = event.code === 'Quote' ? 'L' : 'H';
+        if (this.state === 'tutorialConfirm') {
+          this.handleTutorialConfirmInput(btn);
+          return;
+        }
+        if (this.state === 'over' || this.time.now < this.suppressAttackUntil) return;
+        this.handleAttackInput(btn);
+        return;
+      }
+
+      if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
+        event.preventDefault();
+        this.tryKeyboardDodge();
       }
     });
 
@@ -396,6 +466,45 @@ export class MainScene extends Phaser.Scene {
     });
   }
 
+  /**
+   * 角色位于场地中央死区时镜头保持居中；越靠近上下左右或四角，越向同方向前探。
+   * 指数阻尼使帧率变化时仍保持相近的缓入缓出手感，不修改任何世界坐标或玩法判定。
+   */
+  private updateCameraLookAhead(deltaMs: number): void {
+    if (!this.player) return;
+    const centerX = ARENA.x + ARENA.width / 2;
+    const centerY = ARENA.y + ARENA.height / 2;
+    const normalizedX = Phaser.Math.Clamp((this.player.x - centerX) / (ARENA.width / 2), -1, 1);
+    const normalizedY = Phaser.Math.Clamp((this.player.y - centerY) / (ARENA.height / 2), -1, 1);
+    const edgeAmount = (normalized: number): number => {
+      const magnitude = Math.abs(normalized);
+      if (magnitude <= MAIN_CAMERA_LOOK_DEAD_ZONE) return 0;
+      const t = Phaser.Math.Clamp(
+        (magnitude - MAIN_CAMERA_LOOK_DEAD_ZONE) / (1 - MAIN_CAMERA_LOOK_DEAD_ZONE),
+        0,
+        1
+      );
+      const smooth = t * t * (3 - 2 * t);
+      return Math.sign(normalized) * smooth;
+    };
+    const targetX = edgeAmount(normalizedX) * MAIN_CAMERA_LOOK_MAX_X;
+    const targetY = edgeAmount(normalizedY) * MAIN_CAMERA_LOOK_MAX_Y;
+    const damping = 1 - Math.exp(-Math.max(0, deltaMs) / MAIN_CAMERA_LOOK_DAMPING_MS);
+    this.cameraLookX = Phaser.Math.Linear(this.cameraLookX, targetX, damping);
+    this.cameraLookY = Phaser.Math.Linear(this.cameraLookY, targetY, damping);
+    this.cameras.main.setScroll(
+      CAMERA_BASE_SCROLL_X + this.cameraLookX,
+      CAMERA_BASE_SCROLL_Y + this.cameraLookY
+    );
+  }
+
+  private tryKeyboardDodge(): void {
+    if (this.gamePaused) return;
+    if (this.state === 'playing' || this.state === 'intermission' || this.state === 'tutorial') {
+      this.player.tryDodge();
+    }
+  }
+
   private handleAttackInput(btn: 'L' | 'H', pad?: Phaser.Input.Gamepad.Gamepad): void {
     if (this.gamePaused) return;
     if (this.state === 'tutorial') this.recordTutorialCalibrationCandidate(btn);
@@ -424,6 +533,12 @@ export class MainScene extends Phaser.Scene {
     }
   }
 
+  private handleTutorialConfirmInput(btn: 'L' | 'H'): void {
+    this.suppressAttackUntil = this.time.now + 200;
+    if (btn === 'L') this.finishTutorial();
+    else this.retryTutorial();
+  }
+
   private handleGamepadInput(): void {
     const pad = this.input.gamepad?.pad1;
     if (!pad) {
@@ -450,8 +565,8 @@ export class MainScene extends Phaser.Scene {
       return;
     }
     if (this.state === 'tutorialConfirm') {
-      if (pressed.attack) this.finishTutorial();
-      else if (pressed.dodge) this.retryTutorial();
+      if (pressed.attack) this.handleTutorialConfirmInput('L');
+      else if (pressed.dodge) this.handleTutorialConfirmInput('H');
       return;
     }
     if (this.state !== 'playing' && this.state !== 'intermission' && this.state !== 'tutorial') return;
@@ -498,16 +613,7 @@ export class MainScene extends Phaser.Scene {
 
   // ---------- 流程 ----------
 
-  private showTitle(): void {
-    this.add.rectangle(640, 360, 1280, 720, 0x000000, 0.6).setDepth(19).setName('titleOverlay');
-    this.hud.message(
-      '音乐弹幕原型\n\n' +
-        'WASD 移动 · 鼠标瞄准\n左键=轻攻击 · 右键=重攻击（按节拍连段）\nShift=沿移动方向冲刺（踩拍消耗减半并清弹）\nB=显示判定框（调试）\n\n点击开始'
-    );
-  }
-
   private startGame(): void {
-    this.children.getByName('titleOverlay')?.destroy();
     this.hud.message('');
     this.switchBgmTrack(BGM_TRACKS[this.tuningEditor.tutorialBgmSlot], false);
     this.conductor.start();
@@ -538,7 +644,10 @@ export class MainScene extends Phaser.Scene {
     this.bgm?.destroy();
     this.currentBgmTrack = track;
     this.conductor.retune(track.bpm);
-    this.bgm = this.sound.add(track.key, { loop: false, volume: BGM_VOLUME });
+    this.bgm = this.sound.add(track.key, {
+      loop: false,
+      volume: BGM_VOLUME * this.bgmChannelVolume
+    }) as Phaser.Sound.WebAudioSound | Phaser.Sound.HTML5AudioSound;
     this.bgm.on(Phaser.Sound.Events.COMPLETE, this.onBgmComplete, this);
     if (playNow && this.conductor.started) {
       this.bgmFirstBeat = Math.max(0, Math.ceil(this.conductor.beatFloatAt(this.conductor.now())));
@@ -546,42 +655,55 @@ export class MainScene extends Phaser.Scene {
     }
   }
   private createSettingsPanel(): void {
-    this.add
-      .text(1250, 24, 'ESC  设置', { fontFamily: 'Arial', fontSize: '14px', color: '#94a3b8' })
-      .setOrigin(1, 0.5)
-      .setDepth(10);
-
     const shade = this.add.rectangle(640, 360, 1280, 720, 0x000000, 0.55);
-    const panel = this.add.rectangle(640, 350, 600, 292, 0x0f172a, 0.96).setStrokeStyle(2, 0x67e8f9, 0.9);
+    const panel = this.add.rectangle(640, 360, 600, 440, 0x0f172a, 0.96).setStrokeStyle(2, 0x67e8f9, 0.9);
     const title = this.add
-      .text(640, 235, '设置（游戏已暂停）', { fontFamily: 'Arial', fontSize: '26px', fontStyle: 'bold', color: '#ffffff' })
+      .text(640, 170, '设置（游戏已暂停）', { fontFamily: 'Arial', fontSize: '26px', fontStyle: 'bold', color: '#ffffff' })
       .setOrigin(0.5);
     const volumeLabel = this.add
-      .text(390, 290, '主音量', { fontFamily: 'Arial', fontSize: '17px', color: '#cbd5e1' })
+      .text(390, 220, '主音量', { fontFamily: 'Arial', fontSize: '17px', color: '#cbd5e1' })
+      .setOrigin(0, 0.5);
+    const bgmVolumeLabel = this.add
+      .text(390, 305, 'BGM 音量', { fontFamily: 'Arial', fontSize: '17px', color: '#cbd5e1' })
+      .setOrigin(0, 0.5);
+    const sfxVolumeLabel = this.add
+      .text(390, 390, '音效音量', { fontFamily: 'Arial', fontSize: '17px', color: '#cbd5e1' })
       .setOrigin(0, 0.5);
     const hint = this.add
-      .text(640, 462, '按 Esc 关闭并继续游戏', { fontFamily: 'Arial', fontSize: '14px', color: '#94a3b8' })
+      .text(640, 555, '按 Esc 关闭并继续游戏', { fontFamily: 'Arial', fontSize: '14px', color: '#94a3b8' })
       .setOrigin(0.5);
     const track = this.add
-      .rectangle(640, 330, VOLUME_TRACK_WIDTH, 12, 0x334155)
+      .rectangle(640, 260, VOLUME_TRACK_WIDTH, 12, 0x334155)
       .setStrokeStyle(1, 0x64748b)
       .setInteractive({ useHandCursor: true });
-    this.volumeFill = this.add.rectangle(VOLUME_TRACK_X, 330, VOLUME_TRACK_WIDTH, 12, 0x67e8f9).setOrigin(0, 0.5);
-    this.volumeThumb = this.add.circle(VOLUME_TRACK_X + VOLUME_TRACK_WIDTH, 330, 13, 0xffffff)
+    this.volumeFill = this.add.rectangle(VOLUME_TRACK_X, 260, VOLUME_TRACK_WIDTH, 12, 0x67e8f9).setOrigin(0, 0.5);
+    this.volumeThumb = this.add.circle(VOLUME_TRACK_X + VOLUME_TRACK_WIDTH, 260, 13, 0xffffff)
       .setStrokeStyle(3, 0x67e8f9)
       .setInteractive({ useHandCursor: true });
     this.volumeValueText = this.add
-      .text(845, 290, '', { fontFamily: 'Arial', fontSize: '17px', color: '#67e8f9' })
+      .text(845, 220, '', { fontFamily: 'Arial', fontSize: '17px', color: '#67e8f9' })
       .setOrigin(0.5);
+    const bgmTrack = this.add.rectangle(640, 345, VOLUME_TRACK_WIDTH, 12, 0x334155)
+      .setStrokeStyle(1, 0x64748b).setInteractive({ useHandCursor: true });
+    this.bgmVolumeFill = this.add.rectangle(VOLUME_TRACK_X, 345, VOLUME_TRACK_WIDTH, 12, 0xa78bfa).setOrigin(0, 0.5);
+    this.bgmVolumeThumb = this.add.circle(VOLUME_TRACK_X + VOLUME_TRACK_WIDTH, 345, 13, 0xffffff)
+      .setStrokeStyle(3, 0xa78bfa).setInteractive({ useHandCursor: true });
+    this.bgmVolumeValueText = this.add.text(845, 305, '', { fontFamily: 'Arial', fontSize: '17px', color: '#a78bfa' }).setOrigin(0.5);
+    const sfxTrack = this.add.rectangle(640, 430, VOLUME_TRACK_WIDTH, 12, 0x334155)
+      .setStrokeStyle(1, 0x64748b).setInteractive({ useHandCursor: true });
+    this.sfxVolumeFill = this.add.rectangle(VOLUME_TRACK_X, 430, VOLUME_TRACK_WIDTH, 12, 0xf9a8d4).setOrigin(0, 0.5);
+    this.sfxVolumeThumb = this.add.circle(VOLUME_TRACK_X + VOLUME_TRACK_WIDTH, 430, 13, 0xffffff)
+      .setStrokeStyle(3, 0xf9a8d4).setInteractive({ useHandCursor: true });
+    this.sfxVolumeValueText = this.add.text(845, 390, '', { fontFamily: 'Arial', fontSize: '17px', color: '#f9a8d4' }).setOrigin(0.5);
     const fpvLabel = this.add
-      .text(390, 395, '右下 FPV 观察窗', { fontFamily: 'Arial', fontSize: '17px', color: '#cbd5e1' })
+      .text(390, 500, '右下 FPV 观察窗', { fontFamily: 'Arial', fontSize: '17px', color: '#cbd5e1' })
       .setOrigin(0, 0.5);
     this.fpvToggleButton = this.add
-      .rectangle(765, 395, 152, 42, 0x0f766e)
+      .rectangle(765, 500, 152, 42, 0x0f766e)
       .setStrokeStyle(2, 0x67e8f9, 0.95)
       .setInteractive({ useHandCursor: true });
     this.fpvToggleText = this.add
-      .text(765, 395, '', { fontFamily: 'Arial', fontSize: '16px', fontStyle: 'bold', color: '#ecfeff' })
+      .text(765, 500, '', { fontFamily: 'Arial', fontSize: '16px', fontStyle: 'bold', color: '#ecfeff' })
       .setOrigin(0.5);
 
     this.volumePanel = this.add.container(0, 0, [
@@ -589,30 +711,47 @@ export class MainScene extends Phaser.Scene {
       panel,
       title,
       volumeLabel,
+      bgmVolumeLabel,
+      sfxVolumeLabel,
       hint,
       track,
       this.volumeFill,
       this.volumeThumb,
       this.volumeValueText,
+      bgmTrack,
+      this.bgmVolumeFill,
+      this.bgmVolumeThumb,
+      this.bgmVolumeValueText,
+      sfxTrack,
+      this.sfxVolumeFill,
+      this.sfxVolumeThumb,
+      this.sfxVolumeValueText,
       fpvLabel,
       this.fpvToggleButton,
       this.fpvToggleText
     ])
       .setDepth(30)
+      .setPosition(CAMERA_BASE_SCROLL_X, CAMERA_BASE_SCROLL_Y)
+      .setScale(1 / MAIN_CAMERA_BASE_ZOOM)
+      .setScrollFactor(0)
       .setVisible(false);
 
-    const beginDrag = (pointer: Phaser.Input.Pointer): void => {
-      this.volumeDragging = true;
-      this.updateVolumeFromPointer(pointer.x);
+    const beginDrag = (channel: 'master' | 'bgm' | 'sfx', pointer: Phaser.Input.Pointer): void => {
+      this.volumeDragging = channel;
+      this.updateVolumeFromPointer(channel, pointer.x);
     };
-    track.on('pointerdown', beginDrag);
-    this.volumeThumb.on('pointerdown', beginDrag);
+    track.on('pointerdown', (pointer: Phaser.Input.Pointer) => beginDrag('master', pointer));
+    this.volumeThumb.on('pointerdown', (pointer: Phaser.Input.Pointer) => beginDrag('master', pointer));
+    bgmTrack.on('pointerdown', (pointer: Phaser.Input.Pointer) => beginDrag('bgm', pointer));
+    this.bgmVolumeThumb.on('pointerdown', (pointer: Phaser.Input.Pointer) => beginDrag('bgm', pointer));
+    sfxTrack.on('pointerdown', (pointer: Phaser.Input.Pointer) => beginDrag('sfx', pointer));
+    this.sfxVolumeThumb.on('pointerdown', (pointer: Phaser.Input.Pointer) => beginDrag('sfx', pointer));
     this.fpvToggleButton.on('pointerdown', () => this.setFpvWindowEnabled(!this.fpvWindowEnabled));
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
-      if (this.volumeDragging && this.volumePanelVisible) this.updateVolumeFromPointer(pointer.x);
+      if (this.volumeDragging && this.volumePanelVisible) this.updateVolumeFromPointer(this.volumeDragging, pointer.x);
     });
     this.input.on('pointerup', () => {
-      this.volumeDragging = false;
+      this.volumeDragging = null;
     });
     this.refreshVolumeControl();
     this.refreshFpvToggle();
@@ -620,7 +759,7 @@ export class MainScene extends Phaser.Scene {
 
   private setVolumePanelVisible(visible: boolean): void {
     this.volumePanelVisible = visible;
-    this.volumeDragging = false;
+    this.volumeDragging = null;
     this.volumePanel.setVisible(visible);
     if (visible) {
       this.gamePaused = true;
@@ -691,11 +830,20 @@ export class MainScene extends Phaser.Scene {
     return this.scene.isActive('FpvMiniScene') ? (this.scene.get('FpvMiniScene') as FpvMiniScene) : undefined;
   }
 
-  private updateVolumeFromPointer(pointerX: number): void {
+  private updateVolumeFromPointer(channel: 'master' | 'bgm' | 'sfx', pointerX: number): void {
     const ratio = Phaser.Math.Clamp((pointerX - VOLUME_TRACK_X) / VOLUME_TRACK_WIDTH, 0, 1);
-    this.masterVolume = ratio * MAX_MASTER_VOLUME;
     const soundManager = this.sound as Phaser.Sound.WebAudioSoundManager;
-    soundManager.masterVolumeNode.gain.setTargetAtTime(this.masterVolume, soundManager.context.currentTime, 0.01);
+    if (channel === 'master') {
+      this.masterVolume = ratio * MAX_MASTER_VOLUME;
+      soundManager.masterVolumeNode.gain.setTargetAtTime(this.masterVolume, soundManager.context.currentTime, 0.01);
+    } else if (channel === 'bgm') {
+      this.bgmChannelVolume = ratio * MAX_CHANNEL_VOLUME;
+      this.bgm.setVolume(BGM_VOLUME * this.bgmChannelVolume);
+    } else {
+      this.sfxChannelVolume = ratio * MAX_CHANNEL_VOLUME;
+      this.conductor.setSfxVolume(this.sfxChannelVolume);
+      this.sfx.setVolume(this.sfxChannelVolume);
+    }
     this.refreshVolumeControl();
   }
 
@@ -704,6 +852,14 @@ export class MainScene extends Phaser.Scene {
     this.volumeFill.displayWidth = VOLUME_TRACK_WIDTH * ratio;
     this.volumeThumb.x = VOLUME_TRACK_X + VOLUME_TRACK_WIDTH * ratio;
     this.volumeValueText.setText(`${Math.round(this.masterVolume * 100)}%`);
+    const bgmRatio = this.bgmChannelVolume / MAX_CHANNEL_VOLUME;
+    this.bgmVolumeFill.displayWidth = VOLUME_TRACK_WIDTH * bgmRatio;
+    this.bgmVolumeThumb.x = VOLUME_TRACK_X + VOLUME_TRACK_WIDTH * bgmRatio;
+    this.bgmVolumeValueText.setText(`${Math.round(this.bgmChannelVolume * 100)}%`);
+    const sfxRatio = this.sfxChannelVolume / MAX_CHANNEL_VOLUME;
+    this.sfxVolumeFill.displayWidth = VOLUME_TRACK_WIDTH * sfxRatio;
+    this.sfxVolumeThumb.x = VOLUME_TRACK_X + VOLUME_TRACK_WIDTH * sfxRatio;
+    this.sfxVolumeValueText.setText(`${Math.round(this.sfxChannelVolume * 100)}%`);
   }
 
   /** bgm3 长度不是整拍；每 616 拍按 Conductor 重新开始，避免 Phaser 原生循环累计漂移。 */
@@ -728,36 +884,80 @@ export class MainScene extends Phaser.Scene {
     this.hud.setBeatGuideVisible(false);
     this.arenaBeatCues.forEach((cue) => cue.setVisible(false));
     this.buildPatternPanel(true);
+    this.createTutorialControlGuide();
     this.updateTutorialStreakText();
     this.hud.setWave('教学中');
     this.flashMessage('跟随节拍！');
   }
 
-  /**
-   * 重建顶部连段面板：按当前武器连段生成节拍块（○轻 ◆重）。
-   * tutorial=true 时附带教学说明与连击进度；游戏模式为紧凑版。武器切换时以新连段重建。
-   */
+  /** 在教学场地的地面层绘制键位卡，不参与碰撞、输入或 TopDown 排序。 */
+  private createTutorialControlGuide(): void {
+    this.tutorialControlGuide?.destroy(true);
+    const guide = this.add.container(320, 430).setDepth(1.5).setAlpha(0.82);
+    const panel = this.add.rectangle(0, 0, 390, 238, 0x0b1026, 0.62).setStrokeStyle(2, 0x6b3b70, 0.72);
+    const title = this.add
+      .text(-168, -92, '基础操作', { fontFamily: 'Arial', fontSize: '22px', fontStyle: 'bold', color: '#f5d0fe' })
+      .setOrigin(0, 0.5);
+    const divider = this.add.rectangle(0, -68, 336, 1, 0x6b3b70, 0.65);
+
+    const keycap = (x: number, y: number, label: string, width = 42): Phaser.GameObjects.Container => {
+      const cap = this.add.rectangle(0, 0, width, 32, 0x1e293b, 0.92).setStrokeStyle(1.5, 0xe879f9, 0.82);
+      const text = this.add
+        .text(0, 0, label, { fontFamily: 'Arial', fontSize: '14px', fontStyle: 'bold', color: '#ffffff' })
+        .setOrigin(0.5);
+      return this.add.container(x, y, [cap, text]);
+    };
+    const description = (x: number, y: number, text: string): Phaser.GameObjects.Text =>
+      this.add.text(x, y, text, { fontFamily: 'Arial', fontSize: '14px', color: '#e2e8f0' }).setOrigin(0, 0.5);
+
+    const movementKeys = [
+      keycap(-120, -40, 'W'),
+      keycap(-162, -4, 'A'),
+      keycap(-120, -4, 'S'),
+      keycap(-78, -4, 'D')
+    ];
+    const quoteKey = keycap(58, -40, '" / 左键', 94);
+    const enterKey = keycap(58, 2, 'Enter / 右键', 116);
+    const shiftKey = keycap(-120, 70, 'L / R Shift', 116);
+    const escKey = keycap(58, 70, 'Esc', 54);
+
+    guide.add([
+      panel,
+      title,
+      divider,
+      ...movementKeys,
+      description(-54, -22, '移动'),
+      quoteKey,
+      description(122, -40, '轻攻击'),
+      enterKey,
+      description(122, 2, '重攻击'),
+      shiftKey,
+      description(-54, 70, '冲刺'),
+      escKey,
+      description(94, 70, '设置')
+    ]);
+    this.tutorialControlGuide = guide;
+  }
+
+  /** 教学关专用的顶部连段面板；正式关调用时只负责彻底清除。 */
   private buildPatternPanel(tutorial: boolean): void {
-    this.patternPanel?.destroy();
+    this.patternPanel?.destroy(true);
+    this.patternPanel = undefined;
     this.patternIcons = [];
     this.tutorialStreakText = undefined;
+    if (!tutorial) return;
 
-    const ui = this.add.container(640, 0).setDepth(15);
-    if (tutorial) {
-      ui.add(this.add.rectangle(0, 122, 560, 180, 0x0f172a, 0.72).setStrokeStyle(1, 0x334155));
-      ui.add(
-        this.add
-          .text(0, 56, '教学 · 按节拍打出连段', { fontFamily: 'Arial', fontSize: '22px', color: '#e2e8f0' })
-          .setOrigin(0.5)
-      );
-      ui.add(
-        this.add
-          .text(0, 86, '左键 = 轻（○）　右键 = 重（◆）', { fontFamily: 'Arial', fontSize: '15px', color: '#94a3b8' })
-          .setOrigin(0.5)
-      );
-    } else {
-      ui.add(this.add.rectangle(0, 144, 350, 96, 0x0f172a, 0.55).setStrokeStyle(1, 0x334155));
-    }
+    const ui = this.add
+      .container(CAMERA_BASE_SCROLL_X + 640 / MAIN_CAMERA_BASE_ZOOM, CAMERA_BASE_SCROLL_Y)
+      .setDepth(15)
+      .setScale(1 / MAIN_CAMERA_BASE_ZOOM)
+      .setScrollFactor(0);
+    ui.add(this.add.rectangle(0, 126, 560, 154, 0x0f172a, 0.72).setStrokeStyle(1, 0x334155));
+    ui.add(
+      this.add
+        .text(0, 62, '教学 · 按节拍打出连段', { fontFamily: 'Arial', fontSize: '22px', color: '#e2e8f0' })
+        .setOrigin(0.5)
+    );
 
     const xs = [-108, -36, 36, 108];
     this.combo.pattern.forEach((key, i) => {
@@ -775,12 +975,10 @@ export class MainScene extends Phaser.Scene {
       this.patternIcons.push(icon);
     });
 
-    if (tutorial) {
-      this.tutorialStreakText = this.add
-        .text(0, 192, '', { fontFamily: 'Arial', fontSize: '17px', color: '#facc15' })
-        .setOrigin(0.5);
-      ui.add(this.tutorialStreakText);
-    }
+    this.tutorialStreakText = this.add
+      .text(0, 192, '', { fontFamily: 'Arial', fontSize: '17px', color: '#facc15' })
+      .setOrigin(0.5);
+    ui.add(this.tutorialStreakText);
     this.patternPanel = ui;
   }
 
@@ -905,7 +1103,11 @@ export class MainScene extends Phaser.Scene {
 
   private showTutorialConfirm(): void {
     this.state = 'tutorialConfirm';
-    const ui = this.add.container(640, 360).setDepth(21);
+    const ui = this.add
+      .container(CAMERA_BASE_SCROLL_X + 640 / MAIN_CAMERA_BASE_ZOOM, CAMERA_BASE_SCROLL_Y + 360 / MAIN_CAMERA_BASE_ZOOM)
+      .setDepth(21)
+      .setScale(1 / MAIN_CAMERA_BASE_ZOOM)
+      .setScrollFactor(0);
     const overlay = this.add.rectangle(0, 0, 1280, 720, 0x000000, 0.55);
     const title = this.add
       .text(0, -90, '教学完成！', {
@@ -918,15 +1120,15 @@ export class MainScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
     const sub = this.add
-      .text(0, -34, `连续 ${TUTORIAL_TARGET_STREAK} 个小节全部命中，节奏感不错！`, {
+      .text(0, -34, `连续 ${TUTORIAL_TARGET_STREAK} 个小节全部命中 · 轻攻击进入 · 重攻击重练`, {
         fontFamily: 'Arial',
         fontSize: '20px',
         color: '#e2e8f0'
       })
       .setOrigin(0.5);
     ui.add([overlay, title, sub]);
-    ui.add(this.createConfirmButton(-130, 60, '进入游戏', 0x16a34a, () => this.finishTutorial()));
-    ui.add(this.createConfirmButton(130, 60, '重新教学', 0x475569, () => this.retryTutorial()));
+    ui.add(this.createConfirmButton(-150, 60, '轻攻击：进入游戏', 0x16a34a, () => this.finishTutorial()));
+    ui.add(this.createConfirmButton(150, 60, '重攻击：重新教学', 0x475569, () => this.retryTutorial()));
     this.confirmUi = ui;
   }
 
@@ -937,17 +1139,26 @@ export class MainScene extends Phaser.Scene {
     color: number,
     onClick: () => void
   ): Phaser.GameObjects.GameObject[] {
-    const rect = this.add.rectangle(x, y, 210, 58, color, 0.95).setStrokeStyle(2, 0xffffff, 0.85);
+    const rect = this.add.rectangle(x, y, 260, 58, color, 0.95).setStrokeStyle(2, 0xffffff, 0.85);
     const text = this.add
       .text(x, y, label, { fontFamily: 'Arial', fontSize: '24px', color: '#ffffff' })
       .setOrigin(0.5);
     rect.setInteractive({ useHandCursor: true });
     rect.on('pointerover', () => rect.setScale(1.05));
     rect.on('pointerout', () => rect.setScale(1));
-    rect.on('pointerdown', () => {
-      this.suppressAttackUntil = this.time.now + 200;
-      onClick();
-    });
+    rect.on(
+      'pointerdown',
+      (
+        _pointer: Phaser.Input.Pointer,
+        _localX: number,
+        _localY: number,
+        event: Phaser.Types.Input.EventData
+      ) => {
+        event.stopPropagation();
+        this.suppressAttackUntil = this.time.now + 200;
+        onClick();
+      }
+    );
     return [rect, text];
   }
 
@@ -960,8 +1171,9 @@ export class MainScene extends Phaser.Scene {
   private finishTutorial(): void {
     this.confirmUi?.destroy();
     this.confirmUi = undefined;
-    // 正式游戏删除上下节拍提示，改由场地扩散框承担拍点预告。
-    // 正式关保留顶部节奏 UI，但不显示教学说明和练习进度。
+    this.tutorialControlGuide?.destroy(true);
+    this.tutorialControlGuide = undefined;
+    // 正式游戏彻底移除顶部连段面板与上下节拍提示，改由场地扩散框承担拍点预告。
     this.buildPatternPanel(false);
     this.hud.setBeatGuideVisible(false);
     // 教学期间积累的 Fever 能量清零，正式开局从零开始
@@ -988,8 +1200,17 @@ export class MainScene extends Phaser.Scene {
       })
       .setOrigin(0.5)
       .setDepth(20)
-      .setScale(1.5);
-    this.tweens.add({ targets: text, scale: 1, duration: 120, ease: 'Back.easeOut' });
+      .setPosition(CAMERA_BASE_SCROLL_X + 640 / MAIN_CAMERA_BASE_ZOOM, CAMERA_BASE_SCROLL_Y + 300 / MAIN_CAMERA_BASE_ZOOM)
+      .setScale(1 / MAIN_CAMERA_BASE_ZOOM)
+      .setScrollFactor(0)
+      .setScale(1.5 / MAIN_CAMERA_BASE_ZOOM);
+    this.tweens.add({
+      targets: text,
+      scaleX: 1 / MAIN_CAMERA_BASE_ZOOM,
+      scaleY: 1 / MAIN_CAMERA_BASE_ZOOM,
+      duration: 120,
+      ease: 'Back.easeOut'
+    });
     this.tweens.add({
       targets: text,
       alpha: 0,
@@ -1002,9 +1223,10 @@ export class MainScene extends Phaser.Scene {
   private startWave(idx: number): void {
     if (this.state === 'over') return;
     this.waveIdx = idx;
+    this.displayedWaveNumber++;
     this.state = 'playing';
-    this.hud.setWave(`Wave ${idx + 1} / ${WAVE_ENEMY_COUNTS.length}`);
-    this.flashMessage(`WAVE ${idx + 1}`);
+    this.hud.setWave(`Wave ${this.displayedWaveNumber}`);
+    this.flashMessage(`WAVE ${this.displayedWaveNumber}`);
 
     const enemyCount = WAVE_ENEMY_COUNTS[idx];
     for (let i = 0; i < enemyCount; i++) {
@@ -1028,8 +1250,14 @@ export class MainScene extends Phaser.Scene {
 
     if (this.enemies.length === 0 && this.state === 'playing') {
       if (this.waveIdx >= WAVE_ENEMY_COUNTS.length - 1) {
-        this.state = 'over';
-        this.hud.message('VICTORY!\n\n按 R 重新开始');
+        if (!this.victoryAchieved) {
+          this.victoryAchieved = true;
+          this.hud.setVictoryVisible(true);
+        }
+        this.state = 'intermission';
+        this.time.delayedCall(2000, () => {
+          if (this.state !== 'over') this.startWave(WAVE_ENEMY_COUNTS.length - 1);
+        });
       } else {
         this.state = 'intermission';
         this.time.delayedCall(2000, () => startNext(this));
@@ -1067,25 +1295,49 @@ export class MainScene extends Phaser.Scene {
     this.hud.message('FAILED...\n\n按 R 重新开始');
   }
 
-  getAssistedAimAngle(mouseAngle: number): number {
+  getAutoAimAngle(moveAngle: number): number {
     let nearest: Enemy | undefined;
-    let nearestDistance = Infinity;
-    const halfAssistCone = Math.PI / 4;
+    let bestScore = Infinity;
+    let bestIsInMovementCone = false;
+    const halfPriorityCone = Phaser.Math.DegToRad(22.5);
 
     for (const enemy of this.enemies) {
       if (enemy.dead) continue;
       const enemyAngle = Phaser.Math.Angle.Between(this.player.x, this.player.y, enemy.x, enemy.y);
-      if (Math.abs(Phaser.Math.Angle.Wrap(enemyAngle - mouseAngle)) > halfAssistCone) continue;
       const distance = Phaser.Math.Distance.Between(this.player.x, this.player.y, enemy.x, enemy.y);
-      if (distance < nearestDistance) {
+      const inMovementCone = Math.abs(Phaser.Math.Angle.Wrap(enemyAngle - moveAngle)) <= halfPriorityCone;
+      const score = distance / (inMovementCone ? 2 : 1);
+      if (score < bestScore || (score === bestScore && inMovementCone && !bestIsInMovementCone)) {
         nearest = enemy;
-        nearestDistance = distance;
+        bestScore = score;
+        bestIsInMovementCone = inMovementCone;
       }
     }
 
     return nearest
       ? Phaser.Math.Angle.Between(this.player.x, this.player.y, nearest.x, nearest.y)
-      : mouseAngle;
+      : moveAngle;
+  }
+
+  /** 当前帧在整拍归一化 easeInExpo 位移曲线上的平均速度倍率。 */
+  getNormalizedBeatMovementMultiplier(deltaMs: number): number {
+    const dt = Math.max(0, deltaMs) / 1000;
+    if (dt <= 0) return 1;
+    const beatDuration = this.conductor.beatDur;
+    const easeInExpo = (t: number): number => (t <= 0 ? 0 : 2 ** (10 * t - 10));
+    let remaining = dt;
+    let cursorToBeat = this.conductor.timeToNextBeat(this.conductor.now());
+    let normalizedTravelSeconds = 0;
+    while (remaining > 0.000001) {
+      const segment = Math.min(remaining, cursorToBeat);
+      const from = Phaser.Math.Clamp(1 - cursorToBeat / beatDuration, 0, 1);
+      const to = Phaser.Math.Clamp(from + segment / beatDuration, 0, 1);
+      normalizedTravelSeconds += beatDuration * (easeInExpo(to) - easeInExpo(from));
+      remaining -= segment;
+      cursorToBeat -= segment;
+      if (cursorToBeat <= 0.000001) cursorToBeat = beatDuration;
+    }
+    return normalizedTravelSeconds / dt;
   }
 
   // ---------- 调试 ----------
@@ -1217,6 +1469,7 @@ export class MainScene extends Phaser.Scene {
 
     this.player.onBeat();
     this.hud.onBeat(info.beatInMeasure);
+    this.getFpvMiniScene()?.onBeat(this.combo.pattern[info.beatInMeasure] === 'H');
     const heavyBeat = this.combo.pattern[info.beatInMeasure] === 'H';
     this.pulseRhythmEdgeBlocks(heavyBeat);
     this.pulseArenaBeatJudgement(heavyBeat);
@@ -1375,8 +1628,14 @@ export class MainScene extends Phaser.Scene {
     // 相机微推拉：轻拍几乎不可察觉的顿挫，重拍稍强
     const cam = this.cameras.main;
     this.tweens.killTweensOf(cam);
-    cam.setZoom(1);
-    this.tweens.add({ targets: cam, zoom: heavy ? 1.015 : 1.0075, duration: 60, yoyo: true, ease: 'Quad.easeOut' });
+    cam.setZoom(MAIN_CAMERA_BASE_ZOOM);
+    this.tweens.add({
+      targets: cam,
+      zoom: MAIN_CAMERA_BASE_ZOOM * (heavy ? 1.015 : 1.0075),
+      duration: 60,
+      yoyo: true,
+      ease: 'Quad.easeOut'
+    });
   }
 
   /**
@@ -1478,6 +1737,7 @@ export class MainScene extends Phaser.Scene {
     body.setVelocity(Math.cos(angle) * this.tuningEditor.enemyBulletSpeed, Math.sin(angle) * this.tuningEditor.enemyBulletSpeed);
     bullet.setData('damage', damage);
     bullet.setData('angle', angle);
+    bullet.setData('baseSpeed', this.tuningEditor.enemyBulletSpeed);
     bullet.setData('despawnBeat', Math.floor(this.conductor.beatFloatAt(this.conductor.now())) + 8);
     bullet.setData('trailColor', color);
     bullet.setData('trailThickness', ENEMY_BULLET_THICKNESS);
@@ -1488,6 +1748,60 @@ export class MainScene extends Phaser.Scene {
     bullet.setData('hitboxAngle', angle);
     this.createBulletHitboxes(bullet, this.enemyBulletHitboxes, ENEMY_BULLET_THICKNESS);
     this.positionStraightBulletHitboxes(bullet, ENEMY_BULLET_LENGTH, ENEMY_BULLET_THICKNESS, angle);
+  }
+
+  /**
+   * 将每拍前 0.2 秒的匀速路程按 easeInExpo 的累计曲线重新分配。
+   * 速度倍率是归一化曲线的区间平均斜率，因此无论帧率如何，窗口总位移都严格等于 baseSpeed × 0.2s。
+   */
+  private updateEnemyBulletBeatSurge(deltaMs: number): void {
+    const now = this.conductor.now();
+    const dt = Math.max(0, deltaMs) / 1000;
+    const beatDuration = this.conductor.beatDur;
+    const timeToBeat = this.conductor.timeToNextBeat(now);
+    const easeInExpo = (t: number): number => (t <= 0 ? 0 : 2 ** (10 * t - 10));
+    let remaining = dt;
+    let cursorToBeat = timeToBeat;
+    let normalizedTravelSeconds = 0;
+
+    // 对本帧覆盖的时间区间分段积分；跨入窗口或跨过拍点时也不丢失路程。
+    while (remaining > 0.000001) {
+      if (cursorToBeat > ENEMY_BULLET_BEAT_SURGE_WINDOW) {
+        const baseSegment = Math.min(remaining, cursorToBeat - ENEMY_BULLET_BEAT_SURGE_WINDOW);
+        normalizedTravelSeconds += baseSegment;
+        remaining -= baseSegment;
+        cursorToBeat -= baseSegment;
+      } else {
+        const surgeSegment = Math.min(remaining, cursorToBeat);
+        const from = Phaser.Math.Clamp(
+          (ENEMY_BULLET_BEAT_SURGE_WINDOW - cursorToBeat) / ENEMY_BULLET_BEAT_SURGE_WINDOW,
+          0,
+          1
+        );
+        const to = Phaser.Math.Clamp(from + surgeSegment / ENEMY_BULLET_BEAT_SURGE_WINDOW, 0, 1);
+        normalizedTravelSeconds += ENEMY_BULLET_BEAT_SURGE_WINDOW * (easeInExpo(to) - easeInExpo(from));
+        remaining -= surgeSegment;
+        cursorToBeat -= surgeSegment;
+        if (cursorToBeat <= 0.000001) cursorToBeat = beatDuration;
+      }
+    }
+
+    const normalizedSpeedMultiplier = dt > 0 ? normalizedTravelSeconds / dt : 1;
+    const touchesSurgeWindow = timeToBeat <= ENEMY_BULLET_BEAT_SURGE_WINDOW
+      || timeToBeat - dt <= ENEMY_BULLET_BEAT_SURGE_WINDOW;
+
+    for (const obj of this.bullets.getChildren()) {
+      const bullet = obj as Phaser.GameObjects.Rectangle;
+      const body = bullet.body as Phaser.Physics.Arcade.Body;
+      const angle = bullet.getData('angle') as number;
+      const baseSpeed = this.tuningEditor.enemyBulletSpeed;
+      bullet.setData('baseSpeed', baseSpeed);
+      const speed = this.tuningEditor.enemyBulletBeatSurgeEnabled
+        ? baseSpeed * normalizedSpeedMultiplier
+        : baseSpeed;
+      body.setVelocity(Math.cos(angle) * speed, Math.sin(angle) * speed);
+      bullet.setData('bursting', this.tuningEditor.enemyBulletBeatSurgeEnabled && touchesSurgeWindow);
+    }
   }
 
   spawnEnemyProjectile(x: number, y: number, angle: number, damage: number, color: number): void {
@@ -1940,27 +2254,10 @@ export class MainScene extends Phaser.Scene {
     }
   }
 
-  /** 踩拍闪避的清弹震荡波 */
-  triggerShockwave(x: number, y: number, radius: number): void {
-    this.sfx.shockwave();
-    for (const obj of this.bullets.getChildren().slice()) {
-      const bullet = obj as Phaser.GameObjects.Rectangle;
-      if (Phaser.Math.Distance.Between(x, y, bullet.x, bullet.y) <= radius) {
-        this.destroyEnemyBullet(bullet);
-      }
-    }
-    const shockwaveBaseRadius = worldSize(12);
-    const ring = this.add
-      .circle(x, y, shockwaveBaseRadius)
-      .setStrokeStyle(worldSize(3), 0xffffff, 0.9)
-      .setDepth(6);
-    this.tweens.add({
-      targets: ring,
-      scale: radius / shockwaveBaseRadius,
-      alpha: 0,
-      duration: 250,
-      onComplete: () => ring.destroy()
-    });
+  /** 踩拍冲刺使用 Fever 全圆音波同款逻辑，仅把 190px 作用半径缩至一半。 */
+  triggerDodgeFeverWave(x: number, y: number): void {
+    this.sfx.feverWave();
+    this.spawnSoundWave(x, y, this.player.aimAngle, 180, 95, 14 * this.combo.damageMultiplier);
     this.combo.addProgress(1);
     this.refreshComboHUD();
   }

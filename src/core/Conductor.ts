@@ -39,6 +39,7 @@ export class Conductor extends Phaser.Events.EventEmitter {
   private cuePattern: [BeatCue, BeatCue, BeatCue, BeatCue] = ['L', 'L', 'L', 'H'];
   private scene: Phaser.Scene;
   private customBeatAudioReady: boolean;
+  private sfxVolume = 1;
 
   constructor(scene: Phaser.Scene, bpm: number) {
     super();
@@ -114,6 +115,11 @@ export class Conductor extends Phaser.Events.EventEmitter {
     this.cuePattern = [...pattern];
   }
 
+  /** 独立音效音量：同时作用于之后调度的轻重拍提示采样。 */
+  setSfxVolume(volume: number): void {
+    this.sfxVolume = Math.max(0, volume);
+  }
+
   update(): void {
     if (!this._started || this.pausedAt !== null) return;
     const t = this.now();
@@ -178,7 +184,8 @@ export class Conductor extends Phaser.Events.EventEmitter {
   private playCue(time: number, heavy: boolean): void {
     if (!this.customBeatAudioReady) return;
     const key = heavy ? 'beat-heavy' : 'beat-light';
-    const sound = this.scene.sound.add(key, { volume: CUE_GAIN }) as Phaser.Sound.WebAudioSound;
+    const cueGain = CUE_GAIN * this.sfxVolume;
+    const sound = this.scene.sound.add(key, { volume: cueGain }) as Phaser.Sound.WebAudioSound;
     sound.once(Phaser.Sound.Events.COMPLETE, () => {
       sound.destroy();
     });
@@ -187,14 +194,14 @@ export class Conductor extends Phaser.Events.EventEmitter {
     const cueLead = heavy ? HEAVY_CUE_LEAD : LIGHT_CUE_LEAD;
     const cueStartTime = time - cueLead;
     const delay = Math.max(0, cueStartTime - this.now());
-    sound.play({ delay, volume: CUE_GAIN });
+    sound.play({ delay, volume: cueGain });
 
     // 重拍素材尾音原本会跨过下一拍；在素材时间 330~360ms 做短淡出。
     if (heavy && this.ctx) {
       const actualStartTime = this.now() + delay;
       const gain = sound.volumeNode.gain;
       gain.cancelScheduledValues(actualStartTime + HEAVY_CUE_FADE_START);
-      gain.setValueAtTime(CUE_GAIN, actualStartTime + HEAVY_CUE_FADE_START);
+      gain.setValueAtTime(cueGain, actualStartTime + HEAVY_CUE_FADE_START);
       gain.linearRampToValueAtTime(0, actualStartTime + HEAVY_CUE_FADE_END);
     }
   }

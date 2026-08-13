@@ -4,7 +4,7 @@ import type { Enemy } from '../game/enemies';
 
 /**
  * 右下角的只读 FPV 观察窗：沿用实验分支的针孔投影，但不改变主场景相机、
- * HUD、鼠标、输入或判定。它只是同一战场的第二种观看方式。
+ * HUD、输入或判定。它只是同一战场的第二种观看方式。
  */
 // 锚定屏幕右下角，而非战斗区：仅保留 20px 外边距。
 const PANEL_X = 1020;
@@ -85,6 +85,26 @@ export class FpvMiniScene extends Phaser.Scene {
     this.cameras.main.setVisible(this.enabled && !paused);
   }
 
+  onBeat(heavy: boolean): void {
+    const inset = heavy ? 10 : 6;
+    this.cameras.main.setViewport(PANEL_X, PANEL_Y + inset, PANEL_W, PANEL_H - inset * 2);
+    this.tweens.addCounter({
+      from: inset,
+      to: 0,
+      duration: heavy ? 260 : 190,
+      ease: 'Back.easeOut',
+      onUpdate: (tween) => {
+        const currentInset = tween.getValue() ?? 0;
+        this.cameras.main.setViewport(
+          PANEL_X,
+          PANEL_Y + currentInset,
+          PANEL_W,
+          PANEL_H - currentInset * 2
+        );
+      }
+    });
+  }
+
   update(): void {
     const main = this.scene.get('MainScene') as MainScene | null;
     if (!this.enabled || !main || main.isGamePaused || !main.conductor?.started || main.isTitleScreen) {
@@ -94,7 +114,7 @@ export class FpvMiniScene extends Phaser.Scene {
     }
     this.cameras.main.setVisible(true);
     const player = main.player;
-    // 游戏本体仍使用辅助瞄准；观察窗只沿玩家实际鼠标/右摇杆指向观看，绝不锁到被辅助选中的敌人。
+    // 观察窗只读玩家的自动锁定方向，不参与选敌或修改主场景状态。
     const angle = player.rawAimAngle;
     const conductor = main.conductor;
     const remain = conductor.timeToNextBeat(conductor.now()) / conductor.beatDur;

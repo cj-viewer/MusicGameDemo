@@ -182,10 +182,9 @@ export abstract class Enemy {
 /** 小型保安：卡拍追击，每小节第 1 拍发射一枚直线弹。 */
 export class SmallGuard extends Enemy {
   readonly kind = 'smallGuard';
-  // 120 BPM 下每拍位移为 0.4s * 30 + 0.1s * 105 = 22.5px，平均速度为原 90px/s 的一半。
   private static readonly DRIFT_SPEED = 30;
   private static readonly BEAT_STEP_SPEED = 105;
-  private static readonly BEAT_STEP_WINDOW = 0.1;
+  private static readonly OLD_BEAT_STEP_WINDOW = 0.1;
   private movementAngle = 0;
 
   constructor(scene: MainScene, x: number, y: number) {
@@ -202,10 +201,12 @@ export class SmallGuard extends Enemy {
   }
 
   protected move(dtMs: number): void {
-    const stepping = this.scene.conductor.timeToNextBeat(this.scene.conductor.now()) <= SmallGuard.BEAT_STEP_WINDOW;
-    const speed = stepping ? SmallGuard.BEAT_STEP_SPEED : SmallGuard.DRIFT_SPEED;
+    const beatDuration = this.scene.conductor.beatDur;
+    const oldDistancePerBeat = SmallGuard.DRIFT_SPEED * Math.max(0, beatDuration - SmallGuard.OLD_BEAT_STEP_WINDOW)
+      + SmallGuard.BEAT_STEP_SPEED * Math.min(beatDuration, SmallGuard.OLD_BEAT_STEP_WINDOW);
+    const speed = (oldDistancePerBeat / beatDuration) * this.scene.getNormalizedBeatMovementMultiplier(dtMs);
     const v = this.scene.physics.velocityFromRotation(this.movementAngle, speed);
-    this.approachVelocity(v.x, v.y, dtMs, stepping ? 650 : 420);
+    this.go.body.setVelocity(v.x, v.y);
   }
 
   private chooseMovementAngle(): void {
@@ -291,10 +292,8 @@ export class MidGuard extends Enemy {
 export class FanEnemy extends Enemy {
   readonly kind = 'fan';
   private static readonly DRIFT_SPEED = 30;
-  // 0.1 秒节拍突进约为旧实现的两倍位移。
   private static readonly BEAT_STEP_SPEED = 210;
-  private static readonly BEAT_STEP_ACCELERATION = 1900;
-  private static readonly BEAT_STEP_WINDOW = 0.1;
+  private static readonly OLD_BEAT_STEP_WINDOW = 0.1;
   private readonly sprite: Phaser.GameObjects.Sprite;
   private movementAngle = 0;
   private attackUntil = 0;
@@ -326,10 +325,14 @@ export class FanEnemy extends Enemy {
   }
 
   protected move(dtMs: number): void {
-    const rolling = this.scene.conductor.timeToNextBeat(this.scene.conductor.now()) <= FanEnemy.BEAT_STEP_WINDOW;
-    const speed = rolling ? FanEnemy.BEAT_STEP_SPEED : FanEnemy.DRIFT_SPEED;
+    const progress = 1 - this.scene.conductor.timeToNextBeat(this.scene.conductor.now()) / this.scene.conductor.beatDur;
+    const rolling = progress >= 0.5;
+    const beatDuration = this.scene.conductor.beatDur;
+    const oldDistancePerBeat = FanEnemy.DRIFT_SPEED * Math.max(0, beatDuration - FanEnemy.OLD_BEAT_STEP_WINDOW)
+      + FanEnemy.BEAT_STEP_SPEED * Math.min(beatDuration, FanEnemy.OLD_BEAT_STEP_WINDOW);
+    const speed = (oldDistancePerBeat / beatDuration) * this.scene.getNormalizedBeatMovementMultiplier(dtMs);
     const v = this.scene.physics.velocityFromRotation(this.movementAngle, speed);
-    this.approachVelocity(v.x, v.y, dtMs, rolling ? FanEnemy.BEAT_STEP_ACCELERATION : 420);
+    this.go.body.setVelocity(v.x, v.y);
     this.updateFacing(v.x);
     this.updateAnimation(rolling);
   }
