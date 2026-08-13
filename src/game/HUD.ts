@@ -1,12 +1,14 @@
 import Phaser from 'phaser';
 import type { Conductor } from '../core/Conductor';
 import type { BeatKey } from './weapons';
+import { MAIN_CAMERA_BASE_ZOOM, screenLayerOffset } from './cameraConfig';
 
 const BAR_CENTER_X = 640;
 const BAR_Y = 668;
 const PANEL_WIDTH = 780;
 // Combo 环半径为 22px，向右移动自身宽度的一半，即 22px。
 const METER_X = BAR_CENTER_X - 448;
+const WEAPON_NAME_X = METER_X + 54;
 const STATE_X = BAR_CENTER_X + 400;
 const HP_X = 20;
 // 与 ComboMeter 同一基线放在左下：缩短至不压住圆环。
@@ -47,6 +49,7 @@ export class HUD {
   private centerLine: Phaser.GameObjects.Line;
   private meterGfx: Phaser.GameObjects.Graphics;
   private meterText: Phaser.GameObjects.Text;
+  private meterBeatRing: Phaser.GameObjects.Arc;
   private hpBarBg: Phaser.GameObjects.Rectangle;
   private hpBar: Phaser.GameObjects.Rectangle;
   private hpText: Phaser.GameObjects.Text;
@@ -54,12 +57,15 @@ export class HUD {
   private stateText: Phaser.GameObjects.Text;
   private weaponText: Phaser.GameObjects.Text;
   private messageText: Phaser.GameObjects.Text;
+  private victoryText: Phaser.GameObjects.Text;
+  private victoryBackdrop: Phaser.GameObjects.Rectangle;
   private staminaWarnText: Phaser.GameObjects.Text;
   private panel: Phaser.GameObjects.Rectangle;
   private feverText: Phaser.GameObjects.Text;
   private feverMode = false;
   private hpBaseColor = 0x4ade80;
   private hpPulseUntil = 0;
+  private screenLayer: Phaser.GameObjects.Container;
 
   constructor(scene: Phaser.Scene, conductor: Conductor) {
     this.scene = scene;
@@ -93,6 +99,11 @@ export class HUD {
       .setVisible(true);
 
     this.meterGfx = scene.add.graphics().setDepth(10);
+    this.meterBeatRing = scene.add
+      .circle(METER_X, BAR_Y, 22)
+      .setStrokeStyle(3, 0xfacc15, 0.85)
+      .setFillStyle(0, 0)
+      .setDepth(10);
     this.meterText = scene.add
       .text(METER_X, BAR_Y, '0', { fontFamily: 'Arial', fontSize: '22px', color: '#facc15' })
       .setOrigin(0.5)
@@ -116,8 +127,15 @@ export class HUD {
       .setDepth(10);
 
     this.weaponText = scene.add
-      .text(BAR_CENTER_X, BAR_Y - 46, '', { fontFamily: 'Arial', fontSize: '15px', color: '#94a3b8' })
-      .setOrigin(0.5)
+      .text(WEAPON_NAME_X, BAR_Y, '', {
+        fontFamily: 'Arial',
+        fontSize: '22px',
+        fontStyle: 'bold',
+        color: '#67e8f9',
+        stroke: '#0f172a',
+        strokeThickness: 3
+      })
+      .setOrigin(0, 0.5)
       .setDepth(10);
 
     this.stateText = scene.add
@@ -137,11 +155,54 @@ export class HUD {
       .setOrigin(0.5)
       .setDepth(20);
 
+    this.victoryBackdrop = scene.add
+      .rectangle(640, 320, 430, 116, 0x34223f, 0.92)
+      .setStrokeStyle(2, 0x6b3b70, 0.7)
+      .setDepth(0.2)
+      .setVisible(false);
+    this.victoryText = scene.add
+      .text(640, 320, 'VICTORY', {
+        fontFamily: 'Arial',
+        fontSize: '64px',
+        fontStyle: 'bold',
+        color: '#d8b4fe',
+        stroke: '#2b1834',
+        strokeThickness: 5
+      })
+      .setOrigin(0.5)
+      .setDepth(0.21)
+      .setAlpha(0.82)
+      .setVisible(false);
+
     this.staminaWarnText = scene.add
       .text(BAR_CENTER_X, BAR_Y - 70, '体力不足！', { fontFamily: 'Arial', fontSize: '16px', color: '#f87171' })
       .setOrigin(0.5)
       .setDepth(10)
       .setAlpha(0);
+
+    // 主场景镜头会做轻微前探和拉远；用独立屏幕层抵消 scroll 与 zoom，保留旧 HUD 像素布局。
+    this.screenLayer = scene.add
+      .container(screenLayerOffset(1280), screenLayerOffset(720))
+      .setDepth(10)
+      .setScale(1 / MAIN_CAMERA_BASE_ZOOM)
+      .setScrollFactor(0);
+    this.screenLayer.add([
+      this.panel,
+      this.centerMark,
+      this.centerLine,
+      this.feverText,
+      this.meterGfx,
+      this.meterBeatRing,
+      this.meterText,
+      this.hpBarBg,
+      this.hpBar,
+      this.hpText,
+      this.waveText,
+      this.weaponText,
+      this.stateText,
+      this.messageText,
+      this.staminaWarnText
+    ]);
 
     this.setCombo(0, 0);
     this.setBeatGuideVisible(false);
@@ -206,9 +267,12 @@ export class HUD {
     const key = this.pattern[n % 4];
     const make = (): Phaser.GameObjects.Shape =>
       key === 'L'
-        ? this.scene.add.circle(0, BAR_Y, 10).setStrokeStyle(3, 0x67e8f9).setDepth(11)
-        : this.scene.add.rectangle(0, BAR_Y, 16, 16, 0xfbbf24).setAngle(45).setDepth(11);
-    this.notes.set(n, { left: make(), right: make(), consumed: false });
+        ? this.scene.add.circle(0, BAR_Y, 10).setStrokeStyle(3, 0x67e8f9).setDepth(11).setScrollFactor(0)
+        : this.scene.add.rectangle(0, BAR_Y, 16, 16, 0xfbbf24).setAngle(45).setDepth(11).setScrollFactor(0);
+    const left = make();
+    const right = make();
+    this.screenLayer.add([left, right]);
+    this.notes.set(n, { left, right, consumed: false });
   }
 
   private killNote(n: number): void {
@@ -230,7 +294,9 @@ export class HUD {
     const make = (): Phaser.GameObjects.Container => {
       const lineA = this.scene.add.rectangle(-4, 0, 4, 44, 0xf472b6).setStrokeStyle(1, 0xffffff, 0.9);
       const lineB = this.scene.add.rectangle(4, 0, 4, 44, 0xa855f7).setStrokeStyle(1, 0xffffff, 0.9);
-      return this.scene.add.container(0, BAR_Y, [lineA, lineB]).setDepth(12);
+      const divider = this.scene.add.container(0, BAR_Y, [lineA, lineB]).setDepth(12);
+      this.screenLayer.add(divider);
+      return divider;
     };
     this.measureDividers.set(measure, { left: make(), right: make() });
   }
@@ -270,7 +336,11 @@ export class HUD {
         }
       });
     }
-    const burst = this.scene.add.circle(BAR_CENTER_X, BAR_Y, 16).setStrokeStyle(3, 0xffffff, 0.9).setDepth(11);
+    const burst = this.scene.add
+      .circle(BAR_CENTER_X, BAR_Y, 16)
+      .setStrokeStyle(3, 0xffffff, 0.9)
+      .setDepth(11);
+    this.screenLayer.add(burst);
     this.scene.tweens.add({
       targets: burst,
       scale: 2.2,
@@ -325,6 +395,7 @@ export class HUD {
     }
     const patternText = this.pattern.map((key) => (key === 'L' ? '轻' : '重')).join(' → ');
     this.weaponText.setText(this.beatGuideVisible ? `${this.weaponName}　${patternText}` : this.weaponName);
+    this.weaponText.setColor(this.weaponName === '警棍' ? '#c084fc' : '#67e8f9');
   }
 
   onBeat(beatInMeasure: number): void {
@@ -335,6 +406,20 @@ export class HUD {
     }
 
     const heavy = this.pattern[beatInMeasure] === 'H';
+    this.pulseVictory(heavy);
+    const pulseScale = heavy ? 1.16 : 1.1;
+    this.scene.tweens.killTweensOf([this.meterBeatRing, this.meterText, this.feverText, this.weaponText, this.waveText]);
+    this.meterBeatRing.setStrokeStyle(heavy ? 4 : 3, heavy ? 0xf97316 : 0xe879f9, 0.9);
+    for (const target of [this.meterBeatRing, this.meterText, this.feverText, this.weaponText, this.waveText]) {
+      target.setScale(pulseScale);
+    }
+    this.scene.tweens.add({
+      targets: [this.meterBeatRing, this.meterText, this.feverText, this.weaponText, this.waveText],
+      scaleX: 1,
+      scaleY: 1,
+      duration: heavy ? 260 : 190,
+      ease: 'Back.easeOut'
+    });
     this.scene.tweens.killTweensOf([this.hpBarBg, this.hpBar]);
     this.hpPulseUntil = this.scene.time.now + (heavy ? 250 : 195);
     this.hpBarBg.scaleY = heavy ? 1.5 : 1.26;
@@ -400,6 +485,7 @@ export class HUD {
       .circle(METER_X, BAR_Y, 22)
       .setStrokeStyle(fever ? 4 : 2 + level * 0.4, color, 0.9)
       .setDepth(10);
+    this.screenLayer.add(ring);
     this.scene.tweens.add({
       targets: ring,
       scale: fever ? 2.6 : 1.3 + level * 0.2,
@@ -434,6 +520,7 @@ export class HUD {
       .setDepth(20)
       .setScale(0.3)
       .setAlpha(0);
+    this.screenLayer.add(burst);
     this.scene.tweens.add({
       targets: burst,
       scale: 1,
@@ -457,6 +544,7 @@ export class HUD {
         .circle(METER_X, BAR_Y, 22)
         .setStrokeStyle(5, 0xf97316, 0.9)
         .setDepth(10);
+      this.screenLayer.add(ring);
       this.scene.tweens.add({
         targets: ring,
         scale: 4 + i * 2,
@@ -535,6 +623,36 @@ export class HUD {
 
   setWave(text: string): void {
     this.waveText.setText(text);
+  }
+
+  /** 胜利后让场景底层标记继续跟拍呼吸，但不改变其底层 depth。 */
+  private pulseVictory(heavy: boolean): void {
+    if (!this.victoryBackdrop.visible || !this.victoryText.visible) return;
+    this.scene.tweens.killTweensOf([this.victoryBackdrop, this.victoryText]);
+    this.victoryBackdrop.setScale(heavy ? 1.045 : 1.025).setAlpha(1);
+    this.victoryText.setScale(heavy ? 1.1 : 1.06).setAlpha(1);
+    this.scene.tweens.add({
+      targets: this.victoryBackdrop,
+      scaleX: 1,
+      scaleY: 1,
+      alpha: 0.92,
+      duration: heavy ? 320 : 240,
+      ease: 'Back.easeOut'
+    });
+    this.scene.tweens.add({
+      targets: this.victoryText,
+      scaleX: 1,
+      scaleY: 1,
+      alpha: 0.82,
+      duration: heavy ? 300 : 220,
+      ease: 'Back.easeOut'
+    });
+  }
+
+  setVictoryVisible(visible: boolean): void {
+    this.scene.tweens.killTweensOf([this.victoryBackdrop, this.victoryText]);
+    this.victoryBackdrop.setVisible(visible).setScale(1).setAlpha(0.92);
+    this.victoryText.setVisible(visible).setScale(1).setAlpha(0.82);
   }
 
   message(text: string): void {

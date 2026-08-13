@@ -10,14 +10,13 @@ const MOVE_SPEED = 260;
 const MOVE_ACCELERATION = 1050;
 const MOVE_DECELERATION = 720;
 const DODGE_DISTANCE = 80;
-const DODGE_DURATION_MS = 300;
+const DODGE_DURATION_MS = 200;
 const MAX_STAMINA = 90;
 const STAMINA_REGEN_PER_BEAT = 10;
 const DODGE_COST_OFFBEAT = 30;
 const DODGE_COST_ONBEAT = 15;
 /** 闪避踩拍判定窗口：拍点前后各 0.12 秒 */
 const DODGE_BEAT_WINDOW = 0.12;
-const SHOCKWAVE_RADIUS = 60;
 const WEAPON_SWING_DURATION_MS = 200;
 /** 握把到角色中心的距离：与瞄准线起点一致，使武器与白色瞄准短线重合 */
 const WEAPON_GRIP_DIST = PLAYER_RADIUS + worldSize(4);
@@ -33,7 +32,7 @@ export class Player {
   readonly maxStamina = MAX_STAMINA;
   weapon: WeaponDef = GLOWSTICKS;
   aimAngle = 0;
-  /** 未经辅助瞄准修正的原始指向，供纯视觉观察窗使用。 */
+  /** 当前自动锁定方向，供只读 FPV 观察窗使用。 */
   rawAimAngle = 0;
   isDodging = false;
 
@@ -46,10 +45,7 @@ export class Player {
   private invulnUntil = 0;
   private staminaFullSince = 0;
   private lastTrailAt = 0;
-  private gamepadAimActive = false;
-  private gamepadAimAngle = 0;
-  private lastPointerX = 0;
-  private lastPointerY = 0;
+  private lastMoveAngle = 0;
   private action: PlayerAction = 'idle';
   private dead = false;
 
@@ -71,8 +67,6 @@ export class Player {
       'W' | 'A' | 'S' | 'D',
       Phaser.Input.Keyboard.Key
     >;
-    this.lastPointerX = scene.input.activePointer.x;
-    this.lastPointerY = scene.input.activePointer.y;
   }
 
   get x(): number {
@@ -97,10 +91,10 @@ export class Player {
       );
     }
 
-    // 瞄准
-    this.updateAim();
+    // 自动瞄准：移动方向前方扇区内的目标享受两倍距离权重。
+    this.updateAutoAim();
 
-    // 朝向与走/停动画：素材只绘制朝右版本，瞄准左侧时水平翻转（与武器持有侧一致）
+    // 朝向与走/停动画：素材只绘制朝右版本，锁定方向在左侧时水平翻转（与武器持有侧一致）
     this.go.setFlipX(Math.cos(this.aimAngle) < 0);
     const moving = this.isDodging || this.body.velocity.length() > 20;
     this.setAction(moving ? 'run' : 'idle');
@@ -187,7 +181,7 @@ export class Player {
         this.body.enable = true;
         this.body.reset(this.go.x, this.go.y);
         if (onBeat) {
-          this.scene.triggerShockwave(this.go.x, this.go.y, SHOCKWAVE_RADIUS);
+          this.scene.triggerDodgeFeverWave(this.go.x, this.go.y);
         }
       }
     });
@@ -259,30 +253,11 @@ export class Player {
     return dir.lengthSq() > 0 ? dir.normalize() : dir;
   }
 
-  private updateAim(): void {
-    const pointer = this.scene.input.activePointer;
-    const pointerMoved = pointer.x !== this.lastPointerX || pointer.y !== this.lastPointerY;
-    this.lastPointerX = pointer.x;
-    this.lastPointerY = pointer.y;
-
-    const pad = this.scene.input.gamepad?.pad1;
-    if (pad) {
-      const stick = applyStickDeadzone(pad.rightStick.x, pad.rightStick.y);
-      if (stick.x !== 0 || stick.y !== 0) {
-        this.gamepadAimActive = true;
-        this.gamepadAimAngle = Math.atan2(stick.y, stick.x);
-      } else if (pointerMoved) {
-        this.gamepadAimActive = false;
-      }
-    } else {
-      this.gamepadAimActive = false;
-    }
-
-    const rawAngle = this.gamepadAimActive
-      ? this.gamepadAimAngle
-      : Phaser.Math.Angle.Between(this.x, this.y, pointer.worldX, pointer.worldY);
-    this.rawAimAngle = rawAngle;
-    this.aimAngle = this.scene.getAssistedAimAngle(rawAngle);
+  private updateAutoAim(): void {
+    const movement = this.moveDir();
+    if (movement.lengthSq() > 0) this.lastMoveAngle = Math.atan2(movement.y, movement.x);
+    this.aimAngle = this.scene.getAutoAimAngle(this.lastMoveAngle);
+    this.rawAimAngle = this.aimAngle;
   }
 
   private moveTowards(current: number, target: number, maxChange: number): number {
@@ -317,7 +292,7 @@ export class Player {
   }
 
   /**
-   * 武器示意跟随鼠标：握把固定在瞄准线起点、棒身指向瞄准方向，与白色瞄准短线重合。
+   * 武器示意跟随自动锁定方向：握把固定在瞄准线起点、棒身指向锁定方向，与白色瞄准短线重合。
    * 挥击时从偏转角在 200ms 内收敛回瞄准线（朝指向劈下的观感），无结束跳变。
    */
   private updateWeaponVisual(): void {
