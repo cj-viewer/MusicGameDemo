@@ -10,12 +10,28 @@ import { Enemy, FanEnemy, SmallGuard } from '../game/enemies';
 import { GAMEPAD_BUTTON, rumbleParameters, type RumbleKind } from '../game/GamepadControls';
 import { WORLD_OBJECT_SCALE, worldDepth, worldSize } from '../game/visualScale';
 import type { FpvMiniScene } from './FpvMiniScene';
+import { TuningEditor } from '../game/TuningEditor';
 
 // bgm3.mp3 的实测节拍：对全曲 onset 包络做自相关 + 网格相位搜索得出 BPM，首拍在文件内 0.026s 处。
-const BPM = 146.32;
-const BGM_FIRST_BEAT_OFFSET = 0.026;
+interface BgmTrack {
+  key: string;
+  label: string;
+  bpm: number;
+  firstBeatOffset: number;
+  loopBeats: number;
+}
+const BGM_TRACKS: readonly BgmTrack[] = [
+  { key: 'bgm-1', label: 'bgm1.mp3', bpm: 145, firstBeatOffset: 0.012, loopBeats: 498 },
+  { key: 'bgm-2', label: 'bgm2.mp3', bpm: 176.47, firstBeatOffset: 0.02, loopBeats: 624 },
+  { key: 'bgm-3', label: 'bgm3.mp3', bpm: 146.32, firstBeatOffset: 0.026, loopBeats: 616 },
+  { key: 'bgm-0', label: 'bgm0.mp3', bpm: 153.846, firstBeatOffset: 0.09, loopBeats: 438 }
+];
+const DEFAULT_TUTORIAL_BGM_SLOT = 3;
+const DEFAULT_LEVEL_BGM_SLOT = 0;
+const BPM = BGM_TRACKS[DEFAULT_TUTORIAL_BGM_SLOT].bpm;
+
 const BGM_VOLUME = 0.3;
-const BGM_LOOP_BEATS = 616;
+
 const DEFAULT_MASTER_VOLUME = 1.5;
 const MAX_MASTER_VOLUME = 3;
 const VOLUME_TRACK_X = 440;
@@ -45,10 +61,8 @@ const PLAYER_BULLET_LENGTH = worldSize(38);
 const ENEMY_BULLET_LENGTH = worldSize(36 * 0.75);
 const BULLET_THICKNESS = worldSize(10);
 const ENEMY_BULLET_THICKNESS = BULLET_THICKNESS * 0.75;
-const PLAYER_BULLET_SPEED = 360;
-const ENEMY_DRIFT_SPEED = 6;
-const ENEMY_BEAT_BURST_SPEED = 600;
-const ENEMY_BEAT_BURST_WINDOW = 0.1;
+const DEFAULT_PLAYER_BULLET_SPEED = 360;
+const DEFAULT_ENEMY_BULLET_SPEED = 180;
 const PLAYER_BULLET_COLOR = 0xef4444;
 const BATON_BULLET_COLOR = 0xa855f7;
 const GLOWSTICK_KNOCKBACK_SPEED = 150;
@@ -79,6 +93,8 @@ export class MainScene extends Phaser.Scene {
 
   private bgm!: Phaser.Sound.BaseSound;
   private bgmFirstBeat = 0;
+  private currentBgmTrack: BgmTrack = BGM_TRACKS[DEFAULT_TUTORIAL_BGM_SLOT];
+  private tuningEditor!: TuningEditor;
   private masterVolume = DEFAULT_MASTER_VOLUME;
   private volumePanel!: Phaser.GameObjects.Container;
   private volumeFill!: Phaser.GameObjects.Rectangle;
@@ -156,12 +172,15 @@ export class MainScene extends Phaser.Scene {
     this.load.image('player-down-1', asset('images/characters/player/down/down-01.png'));
     this.load.audio('beat-light', asset('audio/sfx/sfx-beat-light.mp3'));
     this.load.audio('beat-heavy', asset('audio/sfx/sfx-beat-heavy.mp3'));
-    this.load.audio('bgm', asset('audio/music/bgm3.mp3'));
+    this.load.audio('bgm-1', asset('audio/music/bgm1.mp3'));
+    this.load.audio('bgm-2', asset('audio/music/bgm2.mp3'));
+    this.load.audio('bgm-3', asset('audio/music/bgm3.mp3'));
+    this.load.audio('bgm-0', asset('audio/music/bgm0.mp3'));
   }
 
   create(): void {
     // 重开局（R 键）会在同一个 Scene 实例上重新执行 create()，先停掉旧的 bgm 避免叠放
-    this.sound.stopByKey('bgm');
+    for (const track of BGM_TRACKS) this.sound.stopByKey(track.key);
     this.enemies = [];
     this.pickups = [];
     this.state = 'title';
@@ -216,7 +235,8 @@ export class MainScene extends Phaser.Scene {
     soundManager.masterVolumeNode.gain.setValueAtTime(this.masterVolume, soundManager.context.currentTime);
     this.conductor = new Conductor(this, BPM);
     this.sfx = new Sfx(this.conductor.ctx, soundManager.destination);
-    this.bgm = this.sound.add('bgm', { loop: false, volume: BGM_VOLUME });
+    this.currentBgmTrack = BGM_TRACKS[DEFAULT_TUTORIAL_BGM_SLOT];
+    this.bgm = this.sound.add(this.currentBgmTrack.key, { loop: false, volume: BGM_VOLUME });
     this.bgm.on(Phaser.Sound.Events.COMPLETE, this.onBgmComplete, this);
     this.combo = new ComboSystem(this.conductor, GLOWSTICKS.pattern);
     this.hud = new HUD(this, this.conductor);
@@ -226,6 +246,11 @@ export class MainScene extends Phaser.Scene {
     this.conductor.setCuePattern(GLOWSTICKS.pattern);
     this.hud.setHp(this.player.hp, this.player.maxHp);
     this.createSettingsPanel();
+    this.tuningEditor = new TuningEditor(this, BGM_TRACKS.map((track) => track.label));
+    this.tuningEditor.playerBulletSpeed = DEFAULT_PLAYER_BULLET_SPEED;
+    this.tuningEditor.enemyBulletSpeed = DEFAULT_ENEMY_BULLET_SPEED;
+    this.tuningEditor.tutorialBgmSlot = DEFAULT_TUTORIAL_BGM_SLOT;
+    this.tuningEditor.levelBgmSlot = DEFAULT_LEVEL_BGM_SLOT;
 
     this.enemyGroup = this.physics.add.group();
     this.bullets = this.physics.add.group();
@@ -283,7 +308,6 @@ export class MainScene extends Phaser.Scene {
 
     this.player.update(this.time.now, delta);
     for (const enemy of this.enemies) enemy.update(delta);
-    this.updateEnemyBulletMotion();
     this.updateStraightBulletHitboxes();
     this.updateBulletTrails(delta);
     this.cleanupBullets();
@@ -322,7 +346,7 @@ export class MainScene extends Phaser.Scene {
     this.input.mouse?.disableContextMenu();
 
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-      if (this.gamePaused || this.volumePanelVisible) return;
+      if (this.gamePaused || this.volumePanelVisible || this.tuningEditor.visible) return;
       if (this.state === 'title') {
         this.startGame();
         return;
@@ -349,7 +373,11 @@ export class MainScene extends Phaser.Scene {
 
     this.input.keyboard!.on('keydown-ESC', (event: KeyboardEvent) => {
       event.preventDefault();
-      if (!event.repeat) this.setVolumePanelVisible(!this.volumePanelVisible);
+      if (!event.repeat && !this.tuningEditor.visible) this.setVolumePanelVisible(!this.volumePanelVisible);
+    });
+    this.input.keyboard!.on('keydown-P', (event: KeyboardEvent) => {
+      event.preventDefault();
+      if (!event.repeat && !this.volumePanelVisible) this.setTuningEditorVisible(!this.tuningEditor.visible);
     });
 
     // 调试：B 键切换判定框显示
@@ -481,6 +509,7 @@ export class MainScene extends Phaser.Scene {
   private startGame(): void {
     this.children.getByName('titleOverlay')?.destroy();
     this.hud.message('');
+    this.switchBgmTrack(BGM_TRACKS[this.tuningEditor.tutorialBgmSlot], false);
     this.conductor.start();
     this.bgmFirstBeat = 0;
     this.playBgmAlignedToBeat(this.bgmFirstBeat);
@@ -488,18 +517,34 @@ export class MainScene extends Phaser.Scene {
   }
 
   /**
-   * 让 bgm3.mp3 的首拍（文件内 BGM_FIRST_BEAT_OFFSET 秒处）与指定 Conductor 拍点对齐：
+   * 让 bgm3.mp3 的首拍（文件内 this.currentBgmTrack.firstBeatOffset 秒处）与指定 Conductor 拍点对齐：
    * 若倒数时间足够则用 delay 等到那一刻播放，否则直接以 seek 跳过已经过去的部分。
    */
   private playBgmAlignedToBeat(firstBeat: number): void {
     const delayToFirstBeat = this.conductor.timeOfBeat(firstBeat) - this.conductor.now();
-    if (delayToFirstBeat >= BGM_FIRST_BEAT_OFFSET) {
-      this.bgm.play({ delay: delayToFirstBeat - BGM_FIRST_BEAT_OFFSET });
+    if (delayToFirstBeat >= this.currentBgmTrack.firstBeatOffset) {
+      this.bgm.play({ delay: delayToFirstBeat - this.currentBgmTrack.firstBeatOffset });
     } else {
-      this.bgm.play({ seek: BGM_FIRST_BEAT_OFFSET - delayToFirstBeat });
+      this.bgm.play({ seek: this.currentBgmTrack.firstBeatOffset - delayToFirstBeat });
     }
   }
 
+  private switchBgmTrack(track: BgmTrack, playNow = true): void {
+    if (this.currentBgmTrack.key === track.key && this.bgm) {
+      this.conductor.retune(track.bpm);
+      return;
+    }
+    this.bgm?.stop();
+    this.bgm?.destroy();
+    this.currentBgmTrack = track;
+    this.conductor.retune(track.bpm);
+    this.bgm = this.sound.add(track.key, { loop: false, volume: BGM_VOLUME });
+    this.bgm.on(Phaser.Sound.Events.COMPLETE, this.onBgmComplete, this);
+    if (playNow && this.conductor.started) {
+      this.bgmFirstBeat = Math.max(0, Math.ceil(this.conductor.beatFloatAt(this.conductor.now())));
+      this.playBgmAlignedToBeat(this.bgmFirstBeat);
+    }
+  }
   private createSettingsPanel(): void {
     this.add
       .text(1250, 24, 'ESC  设置', { fontFamily: 'Arial', fontSize: '14px', color: '#94a3b8' })
@@ -613,6 +658,35 @@ export class MainScene extends Phaser.Scene {
     this.fpvToggleText.setText(this.fpvWindowEnabled ? '已开启' : '已关闭');
   }
 
+  private setTuningEditorVisible(visible: boolean): void {
+    this.tuningEditor.setVisible(visible);
+    if (visible) {
+      this.gamePaused = true;
+      this.conductor.pause();
+      this.sound.pauseAll();
+      this.physics.world.pause();
+      this.tweens.pauseAll();
+      this.anims.pauseAll();
+      this.time.paused = true;
+      this.getFpvMiniScene()?.setPanelPaused(true);
+      this.input.mouse?.releasePointerLock();
+      this.input.setDefaultCursor('default');
+      this.game.canvas.style.cursor = 'default';
+    } else {
+      this.time.paused = false;
+      this.physics.world.resume();
+      this.tweens.resumeAll();
+      this.anims.resumeAll();
+      this.conductor.resume();
+      this.sound.resumeAll();
+      this.gamePaused = false;
+      this.getFpvMiniScene()?.setPanelPaused(false);
+      const selected = this.state === 'title' || this.state === 'tutorial' || this.state === 'tutorialConfirm'
+        ? BGM_TRACKS[this.tuningEditor.tutorialBgmSlot]
+        : BGM_TRACKS[this.tuningEditor.levelBgmSlot];
+      this.switchBgmTrack(selected);
+    }
+  }
   private getFpvMiniScene(): FpvMiniScene | undefined {
     return this.scene.isActive('FpvMiniScene') ? (this.scene.get('FpvMiniScene') as FpvMiniScene) : undefined;
   }
@@ -635,7 +709,7 @@ export class MainScene extends Phaser.Scene {
   /** bgm3 长度不是整拍；每 616 拍按 Conductor 重新开始，避免 Phaser 原生循环累计漂移。 */
   private onBgmComplete(): void {
     if (!this.conductor.started) return;
-    this.bgmFirstBeat += BGM_LOOP_BEATS;
+    this.bgmFirstBeat += this.currentBgmTrack.loopBeats;
     this.playBgmAlignedToBeat(this.bgmFirstBeat);
   }
 
@@ -887,16 +961,15 @@ export class MainScene extends Phaser.Scene {
     this.confirmUi?.destroy();
     this.confirmUi = undefined;
     // 正式游戏删除上下节拍提示，改由场地扩散框承担拍点预告。
-    this.patternPanel?.destroy();
-    this.patternPanel = undefined;
-    this.patternIcons = [];
-    this.tutorialStreakText = undefined;
+    // 正式关保留顶部节奏 UI，但不显示教学说明和练习进度。
+    this.buildPatternPanel(false);
     this.hud.setBeatGuideVisible(false);
     // 教学期间积累的 Fever 能量清零，正式开局从零开始
     this.combo.progress = 0;
     this.lastComboLevel = 0;
     this.hud.setCombo(0, 0);
     this.state = 'intermission';
+    this.switchBgmTrack(BGM_TRACKS[this.tuningEditor.levelBgmSlot]);
     this.hud.setWave('准备…');
     // 节拍同步倒计时：每小节减一，5→1 后下一小节开波
     this.countdownRemaining = 5;
@@ -1402,20 +1475,19 @@ export class MainScene extends Phaser.Scene {
     this.bullets.add(bullet);
     const body = bullet.body as Phaser.Physics.Arcade.Body;
     body.setSize(ENEMY_BULLET_THICKNESS, ENEMY_BULLET_THICKNESS, true);
-    body.setVelocity(0, 0);
+    body.setVelocity(Math.cos(angle) * this.tuningEditor.enemyBulletSpeed, Math.sin(angle) * this.tuningEditor.enemyBulletSpeed);
     bullet.setData('damage', damage);
     bullet.setData('angle', angle);
     bullet.setData('despawnBeat', Math.floor(this.conductor.beatFloatAt(this.conductor.now())) + 8);
     bullet.setData('trailColor', color);
     bullet.setData('trailThickness', ENEMY_BULLET_THICKNESS);
-    bullet.setData('bursting', false);
+    bullet.setData('bursting', true);
     bullet.setData('hitboxMode', 'straight');
     bullet.setData('hitboxLength', ENEMY_BULLET_LENGTH);
     bullet.setData('hitboxSize', ENEMY_BULLET_THICKNESS);
     bullet.setData('hitboxAngle', angle);
     this.createBulletHitboxes(bullet, this.enemyBulletHitboxes, ENEMY_BULLET_THICKNESS);
     this.positionStraightBulletHitboxes(bullet, ENEMY_BULLET_LENGTH, ENEMY_BULLET_THICKNESS, angle);
-    this.createHeldEnemyTrail(bullet);
   }
 
   spawnEnemyProjectile(x: number, y: number, angle: number, damage: number, color: number): void {
@@ -1456,7 +1528,7 @@ export class MainScene extends Phaser.Scene {
       this.playerBullets.add(bullet);
       const body = bullet.body as Phaser.Physics.Arcade.Body;
       body.setSize(BULLET_THICKNESS, BULLET_THICKNESS, true);
-      const velocity = this.physics.velocityFromRotation(shotAngle, PLAYER_BULLET_SPEED);
+      const velocity = this.physics.velocityFromRotation(shotAngle, this.tuningEditor.playerBulletSpeed);
       body.setVelocity(velocity.x, velocity.y);
       bullet.setData('damage', damage);
       bullet.setData('despawnBeat', despawnBeat);
@@ -1611,26 +1683,6 @@ export class MainScene extends Phaser.Scene {
     if (bullet.active) bullet.destroy();
   }
 
-  private createHeldEnemyTrail(bullet: Phaser.GameObjects.Rectangle): void {
-    // 慢行阶段保持方向标记；下一次拍前快速移动开始时再清除。
-    const angle = bullet.getData('angle') as number;
-    const length = ENEMY_BULLET_LENGTH * 0.9;
-    const trail = this.add
-      .rectangle(0, 0, length, ENEMY_BULLET_THICKNESS * 0.55, bullet.fillColor, 0.16)
-      .setRotation(angle)
-      .setDepth(3);
-    bullet.setData('heldTrail', trail);
-    this.positionHeldEnemyTrail(bullet, trail);
-  }
-
-  private positionHeldEnemyTrail(
-    bullet: Phaser.GameObjects.Rectangle,
-    trail: Phaser.GameObjects.Rectangle
-  ): void {
-    const angle = bullet.getData('angle') as number;
-    const offset = ENEMY_BULLET_LENGTH * 0.35 + trail.width * 0.5;
-    trail.setPosition(bullet.x - Math.cos(angle) * offset, bullet.y - Math.sin(angle) * offset);
-  }
 
   private destroyEnemyBullet(bullet: Phaser.GameObjects.Rectangle): void {
     const heldTrail = bullet.getData('heldTrail') as Phaser.GameObjects.Rectangle | undefined;
@@ -1866,29 +1918,6 @@ export class MainScene extends Phaser.Scene {
     return (r << 16) | (g << 8) | b;
   }
 
-  private updateEnemyBulletMotion(): void {
-    const timeToBeat = this.conductor.timeToNextBeat(this.conductor.now());
-    const bursting = timeToBeat <= ENEMY_BEAT_BURST_WINDOW;
-    const speed = bursting ? ENEMY_BEAT_BURST_SPEED : ENEMY_DRIFT_SPEED;
-    for (const obj of this.bullets.getChildren()) {
-      const bullet = obj as Phaser.GameObjects.Rectangle;
-      const angle = bullet.getData('angle') as number;
-      const body = bullet.body as Phaser.Physics.Arcade.Body;
-      const wasBursting = Boolean(bullet.getData('bursting'));
-      if (bursting && !wasBursting) {
-        const heldTrail = bullet.getData('heldTrail') as Phaser.GameObjects.Rectangle | undefined;
-        if (heldTrail?.active) heldTrail.destroy();
-        bullet.setData('heldTrail', undefined);
-      } else if (!bursting && wasBursting) {
-        this.createHeldEnemyTrail(bullet);
-      }
-      bullet.setData('bursting', bursting);
-      const heldTrail = bullet.getData('heldTrail') as Phaser.GameObjects.Rectangle | undefined;
-      if (heldTrail?.active) this.positionHeldEnemyTrail(bullet, heldTrail);
-      body.setVelocity(Math.cos(angle) * speed, Math.sin(angle) * speed);
-    }
-  }
-
   private cleanupBullets(): void {
     const pad = 30;
     const beatFloat = this.conductor.beatFloatAt(this.conductor.now());
@@ -1998,6 +2027,7 @@ export class MainScene extends Phaser.Scene {
     this.combo.startSwitch(weapon.pattern);
     this.hud.setPattern(weapon.pattern, weapon.name);
     this.conductor.setCuePattern(weapon.pattern);
+    this.buildPatternPanel(this.state === 'tutorial');
     this.hud.setState('武器切换中…');
   }
 

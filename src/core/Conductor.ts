@@ -25,8 +25,8 @@ export type BeatCue = 'L' | 'H';
  * 驱动节拍事件并提前调度节拍器音效，保证节拍判定与声音精确对齐。
  */
 export class Conductor extends Phaser.Events.EventEmitter {
-  readonly bpm: number;
-  readonly beatDur: number;
+  private _bpm: number;
+  private _beatDur: number;
   readonly beatsPerMeasure = 4;
 
   readonly ctx: AudioContext | null = null;
@@ -43,8 +43,8 @@ export class Conductor extends Phaser.Events.EventEmitter {
   constructor(scene: Phaser.Scene, bpm: number) {
     super();
     this.scene = scene;
-    this.bpm = bpm;
-    this.beatDur = 60 / bpm;
+    this._bpm = bpm;
+    this._beatDur = 60 / bpm;
     const sm = scene.sound as Phaser.Sound.WebAudioSoundManager;
     this.ctx = sm.context ?? null;
     this.customBeatAudioReady = scene.cache.audio.exists('beat-light') && scene.cache.audio.exists('beat-heavy');
@@ -55,6 +55,27 @@ export class Conductor extends Phaser.Events.EventEmitter {
 
   get started(): boolean {
     return this._started;
+  }
+
+  get bpm(): number {
+    return this._bpm;
+  }
+
+  get beatDur(): number {
+    return this._beatDur;
+  }
+
+  /** 切换关卡音乐时保持当前拍号连续，只调整后续拍点间隔。 */
+  retune(bpm: number): void {
+    if (bpm <= 0 || bpm === this._bpm) return;
+    const referenceTime = this.pausedAt ?? this.now();
+    const beatFloat = this._started ? (referenceTime - this.startTime) / this._beatDur : 0;
+    this._bpm = bpm;
+    this._beatDur = 60 / bpm;
+    if (this._started) {
+      this.startTime = referenceTime - beatFloat * this._beatDur;
+      this.nextClickBeat = Math.max(this.lastEmittedBeat + 1, Math.floor(beatFloat));
+    }
   }
 
   get paused(): boolean {
