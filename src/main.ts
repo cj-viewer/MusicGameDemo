@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { IntroScene } from './scenes/IntroScene';
 import { MainScene } from './scenes/MainScene';
 import { FpvMiniScene } from './scenes/FpvMiniScene';
 
@@ -22,8 +23,8 @@ const config: Phaser.Types.Core.GameConfig = {
   input: {
     gamepad: true
   },
-  // 右上 FPV 小窗由设置面板开关；它只读取 MainScene 状态，不参与输入或玩法结算。
-  scene: [MainScene, FpvMiniScene]
+  // 开场视频播完再进入 MainScene 标题页；FPV 仍由 MainScene 启动。
+  scene: [IntroScene, MainScene, FpvMiniScene]
 };
 
 const game = new Phaser.Game(config);
