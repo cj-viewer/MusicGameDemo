@@ -3,6 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:," />
     <title>Music Game Demo</title>
     <style>
       html,
@@ -20,10 +21,30 @@
         justify-content: center;
         align-items: center;
       }
+      canvas {
+        image-rendering: pixelated;
+        image-rendering: crisp-edges;
+      }
+      .resolution-warning {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        height: 100%;
+        color: #f5d0fe;
+        background: #090516;
+        font: 24px/1.5 Arial, sans-serif;
+      }
+      .resolution-warning strong {
+        font-size: 34px;
+        color: #ffffff;
+      }
     </style>
-    <script type="module" crossorigin src="./assets/index-tyRHH1bs.js"></script>
+    <script type="module" crossorigin src="./assets/index-D3MoIOx_.js"></script>
   </head>
   <body>
-    <div id="game-container"></div>
+    <div id="game-container"></div>
   </body>
 </html>
