@@ -4,7 +4,7 @@
 
 - 在线试玩：[cj-viewer.github.io/MusicGameDemo](https://cj-viewer.github.io/MusicGameDemo/)
 - 开发分支：`dev-1.0`
-- 生产 Pages：推送 `main` 自动部署；`dev-1.0` 可通过 GitHub Actions 手动部署。
+- 生产 Pages：发布源为 `gh-pages` 分支；推送 `main` 后由 GitHub Actions 自动构建并更新该分支，`dev-1.0` 可通过 Actions 手动部署到同一在线链接。
 
 ## 快速开始
 
