@@ -92,7 +92,7 @@ type GameState = 'title' | 'tutorial' | 'tutorialConfirm' | 'playing' | 'intermi
 const TUTORIAL_TARGET_STREAK = 3;
 type BeatSfxCue = 'playerHurt' | 'feverStart' | 'enemyHurt' | 'pickup';
 
-const WAVE_ENEMY_COUNTS = [2, 4, 8, 16, 32];
+const WAVE_ENEMY_COUNTS = [6, 10, 16, 24, 36];
 
 interface Pickup {
   go: Phaser.GameObjects.Container;
@@ -945,43 +945,52 @@ export class MainScene extends Phaser.Scene {
     this.patternPanel = undefined;
     this.patternIcons = [];
     this.tutorialStreakText = undefined;
-    if (!tutorial) return;
 
     const ui = this.add
       .container(CAMERA_BASE_SCROLL_X + 640 / MAIN_CAMERA_BASE_ZOOM, CAMERA_BASE_SCROLL_Y)
       .setDepth(15)
       .setScale(1 / MAIN_CAMERA_BASE_ZOOM)
       .setScrollFactor(0);
-    ui.add(this.add.rectangle(0, 126, 560, 154, 0x0f172a, 0.72).setStrokeStyle(1, 0x334155));
-    ui.add(
-      this.add
-        .text(0, 62, '教学 · 按节拍打出连段', { fontFamily: 'Arial', fontSize: '22px', color: '#e2e8f0' })
-        .setOrigin(0.5)
-    );
+
+    if (tutorial) {
+      ui.add(this.add.rectangle(0, 126, 560, 154, 0x0f172a, 0.72).setStrokeStyle(1, 0x334155));
+      ui.add(
+        this.add
+          .text(0, 62, '教学 · 按节拍打出连段', { fontFamily: 'Arial', fontSize: '22px', color: '#e2e8f0' })
+          .setOrigin(0.5)
+      );
+    } else {
+      ui.add(this.add.rectangle(0, 128, 350, 70, 0x0f172a, 0.68).setStrokeStyle(1, 0x334155));
+    }
 
     const xs = [-108, -36, 36, 108];
     this.combo.pattern.forEach((key, i) => {
       const icon: Phaser.GameObjects.Shape = key === 'L'
         ? this.add.circle(xs[i], 128, 14).setStrokeStyle(3, 0x67e8f9)
         : this.add.rectangle(xs[i], 128, 22, 22, 0xfbbf24).setAngle(45);
-      const label = this.add
-        .text(xs[i], 160, key === 'L' ? '轻' : '重', {
-          fontFamily: 'Arial',
-          fontSize: '16px',
-          color: key === 'L' ? '#67e8f9' : '#fbbf24'
-        })
-        .setOrigin(0.5);
-      ui.add([icon, label]);
+      ui.add(icon);
       this.patternIcons.push(icon);
+
+      if (tutorial) {
+        const label = this.add
+          .text(xs[i], 160, key === 'L' ? '轻' : '重', {
+            fontFamily: 'Arial',
+            fontSize: '16px',
+            color: key === 'L' ? '#67e8f9' : '#fbbf24'
+          })
+          .setOrigin(0.5);
+        ui.add(label);
+      }
     });
 
-    this.tutorialStreakText = this.add
-      .text(0, 192, '', { fontFamily: 'Arial', fontSize: '17px', color: '#facc15' })
-      .setOrigin(0.5);
-    ui.add(this.tutorialStreakText);
+    if (tutorial) {
+      this.tutorialStreakText = this.add
+        .text(0, 192, '', { fontFamily: 'Arial', fontSize: '17px', color: '#facc15' })
+        .setOrigin(0.5);
+      ui.add(this.tutorialStreakText);
+    }
     this.patternPanel = ui;
   }
-
   /** 每拍高亮当前拍的节拍块（教学与游戏通用） */
   private pulsePatternIcon(beatIdx: number): void {
     const icon = this.patternIcons[beatIdx];
@@ -1430,6 +1439,7 @@ export class MainScene extends Phaser.Scene {
     });
   }
 
+
   private updateStraightBulletHitboxes(): void {
     for (const group of [this.bullets, this.playerBullets]) {
       for (const obj of group.getChildren()) {
@@ -1805,14 +1815,18 @@ export class MainScene extends Phaser.Scene {
   }
 
   spawnEnemyProjectile(x: number, y: number, angle: number, damage: number, color: number): void {
-    this.spawnBullet(
-      x + Math.cos(angle) * worldSize(26),
-      y + Math.sin(angle) * worldSize(26),
-      angle,
-      0,
-      damage,
-      color
-    );
+    // 三向散射让敌人数量上升后形成持续弹幕，同时保持子弹匀速移动。
+    for (const spread of [-0.13, 0, 0.13]) {
+      const shotAngle = angle + spread;
+      this.spawnBullet(
+        x + Math.cos(shotAngle) * worldSize(26),
+        y + Math.sin(shotAngle) * worldSize(26),
+        shotAngle,
+        0,
+        damage,
+        color
+      );
+    }
   }
 
   private spawnPlayerShotgun(

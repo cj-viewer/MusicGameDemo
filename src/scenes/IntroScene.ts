@@ -7,6 +7,7 @@ export class IntroScene extends Phaser.Scene {
   private startUi?: Phaser.GameObjects.Container;
   private startButton?: Phaser.GameObjects.Rectangle;
   private startButtonText?: Phaser.GameObjects.Text;
+  private skipHint?: Phaser.GameObjects.Text;
   private started = false;
   private finished = false;
 
@@ -59,6 +60,19 @@ export class IntroScene extends Phaser.Scene {
       .setOrigin(0.5);
     this.startUi = this.add.container(0, 0, [backdrop, glow, title, subtitle, this.startButton, this.startButtonText]).setDepth(2);
 
+    this.skipHint = this.add
+      .text(1256, 700, 'Shift 闪避跳过', {
+        fontFamily: 'Arial, Microsoft YaHei, sans-serif',
+        fontSize: '18px',
+        color: '#e2e8f0'
+      })
+      .setOrigin(1, 0.5)
+      .setDepth(3)
+      .setVisible(false);
+
+    // 正片用的闪避键（Shift）在这里兼作跳过键：既能提前教玩家这个键位，也不强制看完整段视频。
+    this.input.keyboard!.on('keydown-SHIFT', () => this.finishIntro());
+
     this.video = this.add.video(640, 360, INTRO_VIDEO_KEY).setDepth(1).setVisible(false);
     this.video.once(Phaser.GameObjects.Events.VIDEO_CREATED, (_video: Phaser.GameObjects.Video, width: number, height: number) => {
       const scale = Math.min(1280 / width, 720 / height);
@@ -80,12 +94,14 @@ export class IntroScene extends Phaser.Scene {
     this.startUi?.setVisible(false);
     this.video.setVisible(true).setMute(false).setVolume(1);
     this.video.play(false);
+    this.skipHint?.setVisible(true);
   }
 
   private restoreStartButton(): void {
     if (this.finished) return;
     this.started = false;
     this.video?.setVisible(false);
+    this.skipHint?.setVisible(false);
     this.startUi?.setVisible(true);
     this.startButton?.setInteractive({ useHandCursor: true });
     this.startButtonText?.setText('点击继续');

@@ -5,7 +5,7 @@ export class TuningEditor {
   readonly container: Phaser.GameObjects.Container;
   playerBulletSpeed = 360;
   enemyBulletSpeed = 144;
-  enemyBulletBeatSurgeEnabled = true;
+  enemyBulletBeatSurgeEnabled = false;
   tutorialBgmSlot = 3;
   levelBgmSlot = 0;
 

@@ -9,12 +9,12 @@ export const PLAYER_RADIUS = worldSize(16);
 const MOVE_SPEED = 260;
 const MOVE_ACCELERATION = 1050;
 const MOVE_DECELERATION = 720;
-const DODGE_DISTANCE = 80;
-const DODGE_DURATION_MS = 200;
+const DODGE_DISTANCE = 180;
+const DODGE_DURATION_MS = 150;
+const MAX_DODGE_CHARGES = 3;
+const DODGE_COOLDOWN_MS = 2400;
 const MAX_STAMINA = 90;
-const STAMINA_REGEN_PER_BEAT = 10;
-const DODGE_COST_OFFBEAT = 30;
-const DODGE_COST_ONBEAT = 15;
+
 /** 闪避踩拍判定窗口：拍点前后各 0.12 秒 */
 const DODGE_BEAT_WINDOW = 0.12;
 const WEAPON_SWING_DURATION_MS = 200;
@@ -44,6 +44,8 @@ export class Player {
   private keys: Record<'W' | 'A' | 'S' | 'D', Phaser.Input.Keyboard.Key>;
   private invulnUntil = 0;
   private staminaFullSince = 0;
+  private dodgeCharges = MAX_DODGE_CHARGES;
+  private dodgeCooldownUntil = 0;
   private lastTrailAt = 0;
   private lastMoveAngle = 0;
   private action: PlayerAction = 'idle';
@@ -79,6 +81,7 @@ export class Player {
 
   update(timeMs: number, dtMs: number): void {
     if (this.dead) return;
+    this.updateDodgeCharges(timeMs);
 
     // 移动（闪避期间由 tween 控制位移）
     if (!this.isDodging) {
@@ -125,7 +128,7 @@ export class Player {
   }
 
   onBeat(): void {
-    this.stamina = Math.min(this.maxStamina, this.stamina + STAMINA_REGEN_PER_BEAT);
+    // 闪现改为三次充能制，不再按拍恢复。
 
     // 踩拍律动：轻微蹲弹，与场边律动带、HP 血条的节拍呼吸保持一致
     if (!this.dead && !this.isDodging) {
@@ -150,13 +153,14 @@ export class Player {
     const t = conductor.now();
     const { offset } = conductor.nearestBeat(t);
     const onBeat = Math.abs(offset) <= DODGE_BEAT_WINDOW;
-    const cost = onBeat ? DODGE_COST_ONBEAT : DODGE_COST_OFFBEAT;
-    if (this.stamina < cost) {
+    if (this.dodgeCharges <= 0) {
       this.scene.hud.flashStaminaWarning();
       return false;
     }
-    this.stamina -= cost;
+    this.dodgeCharges--;
+    this.stamina = this.maxStamina * (this.dodgeCharges / MAX_DODGE_CHARGES);
     this.staminaFullSince = Infinity;
+    if (this.dodgeCharges === 0) this.dodgeCooldownUntil = this.scene.time.now + DODGE_COOLDOWN_MS;
 
     const bounds = this.scene.physics.world.bounds;
     const padX = this.body.halfWidth + 4;
@@ -186,6 +190,17 @@ export class Player {
       }
     });
     return true;
+  }
+
+  private updateDodgeCharges(timeMs: number): void {
+    if (this.dodgeCharges > 0 || this.dodgeCooldownUntil <= 0) return;
+    const remain = Math.max(0, this.dodgeCooldownUntil - timeMs);
+    this.stamina = this.maxStamina * (1 - remain / DODGE_COOLDOWN_MS);
+    if (remain > 0) return;
+    this.dodgeCharges = MAX_DODGE_CHARGES;
+    this.dodgeCooldownUntil = 0;
+    this.stamina = this.maxStamina;
+    this.staminaFullSince = timeMs;
   }
 
   takeDamage(amount: number): void {
