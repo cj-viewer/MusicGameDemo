@@ -1,25 +1,34 @@
 import Phaser from 'phaser';
 import { GLOWSTICKS, type WeaponDef } from './weapons';
 import { applyStickDeadzone } from './GamepadControls';
-import { PLAYER_SPRITE_SCALE, playPlayerAnimation, type PlayerAction } from './playerAnimation';
+import {
+  PLAYER_BODY_SOURCE_HEIGHT,
+  PLAYER_BODY_SOURCE_OFFSET_X,
+  PLAYER_BODY_SOURCE_OFFSET_Y,
+  PLAYER_BODY_SOURCE_WIDTH,
+  PLAYER_CHARACTER_SCALE,
+  PLAYER_SPRITE_SCALE,
+  playPlayerAttackEffect,
+  playPlayerAnimation,
+  type PlayerAction
+} from './playerAnimation';
 import type { MainScene } from '../scenes/MainScene';
 import { worldDepth, worldSize } from './visualScale';
 
-export const PLAYER_RADIUS = worldSize(16);
+export const PLAYER_RADIUS = worldSize(16) * PLAYER_CHARACTER_SCALE;
 const MOVE_SPEED = 260;
 const MOVE_ACCELERATION = 1050;
 const MOVE_DECELERATION = 720;
-const DODGE_DISTANCE = 80;
-const DODGE_DURATION_MS = 200;
-const MAX_STAMINA = 90;
-const STAMINA_REGEN_PER_BEAT = 10;
-const DODGE_COST_OFFBEAT = 30;
-const DODGE_COST_ONBEAT = 15;
+const DODGE_DISTANCE = 160;
+const DODGE_DURATION_MS = 140;
 /** 闪避踩拍判定窗口：拍点前后各 0.12 秒 */
 const DODGE_BEAT_WINDOW = 0.12;
-const WEAPON_SWING_DURATION_MS = 200;
-/** 握把到角色中心的距离：与瞄准线起点一致，使武器与白色瞄准短线重合 */
-const WEAPON_GRIP_DIST = PLAYER_RADIUS + worldSize(4);
+const ATTACK_EFFECT_DURATION_MS = 200;
+const PLAYER_WEAPON_SCALE = PLAYER_SPRITE_SCALE * 0.8;
+const PLAYER_WEAPON_SIDE_OFFSET = worldSize(14) * PLAYER_CHARACTER_SCALE;
+const PLAYER_WEAPON_WAIST_OFFSET_Y = worldSize(6) * PLAYER_CHARACTER_SCALE;
+const PLAYER_ATTACK_SIDE_OFFSET = worldSize(8) * PLAYER_CHARACTER_SCALE;
+const PLAYER_ATTACK_FX_END_SCALE = PLAYER_SPRITE_SCALE * 1.35;
 
 export class Player {
   scene: MainScene;
@@ -28,25 +37,20 @@ export class Player {
 
   hp = 100;
   readonly maxHp = 100;
-  stamina = MAX_STAMINA;
-  readonly maxStamina = MAX_STAMINA;
   weapon: WeaponDef = GLOWSTICKS;
   aimAngle = 0;
   /** 当前自动锁定方向，供只读 FPV 观察窗使用。 */
   rawAimAngle = 0;
   isDodging = false;
 
-  private gfx: Phaser.GameObjects.Graphics;
-  private weaponBars: Phaser.GameObjects.Rectangle[];
-  private weaponSwing = { progress: 1 };
-  private weaponSwingActive = false;
-  private weaponSwingDirection: -1 | 1 = 1;
+  private attackFx: Phaser.GameObjects.Sprite;
+  private weaponSprite: Phaser.GameObjects.Image;
   private keys: Record<'W' | 'A' | 'S' | 'D', Phaser.Input.Keyboard.Key>;
   private invulnUntil = 0;
-  private staminaFullSince = 0;
   private lastTrailAt = 0;
   private lastMoveAngle = 0;
   private action: PlayerAction = 'idle';
+  private actionLockedUntil = 0;
   private dead = false;
 
   constructor(scene: MainScene, x: number, y: number) {
@@ -55,14 +59,23 @@ export class Player {
     playPlayerAnimation(this.go, 'idle');
     scene.physics.add.existing(this.go);
     this.body = this.go.body as Phaser.Physics.Arcade.Body;
-    // 受击判定使用默认全帧矩形：刚好包裹裁切后的角色内容，且随缩放自动同步（body 世界尺寸 = 源帧尺寸 × scale）
+    // 正式素材使用 256px 透明画布；碰撞体按可见角色内容固定，不能使用整张画布。
+    this.body
+      .setSize(PLAYER_BODY_SOURCE_WIDTH, PLAYER_BODY_SOURCE_HEIGHT, false)
+      .setOffset(PLAYER_BODY_SOURCE_OFFSET_X, PLAYER_BODY_SOURCE_OFFSET_Y);
     this.body.setCollideWorldBounds(true);
 
-    this.gfx = scene.add.graphics().setDepth(6);
-    this.weaponBars = [
-      scene.add.rectangle(x, y, worldSize(20), worldSize(5), 0xef4444).setOrigin(0, 0.5).setDepth(7),
-      scene.add.rectangle(x, y, worldSize(20), worldSize(5), 0xef4444).setOrigin(0, 0.5).setDepth(7)
-    ];
+    this.attackFx = scene.add
+      .sprite(x, y, 'player-attack-light-1')
+      .setScale(PLAYER_SPRITE_SCALE)
+      .setVisible(false);
+    this.attackFx.on(Phaser.Animations.Events.ANIMATION_COMPLETE, () => this.attackFx.setVisible(false));
+    this.weaponSprite = scene.add
+      .image(x, y, 'player-weapon-glowsticks')
+      .setOrigin(0.5, 0.5)
+      .setScale(PLAYER_WEAPON_SCALE);
+    scene.textures.get('player-weapon-glowsticks').setFilter(Phaser.Textures.FilterMode.NEAREST);
+    scene.textures.get('player-weapon-baton').setFilter(Phaser.Textures.FilterMode.NEAREST);
     this.keys = scene.input.keyboard!.addKeys('W,A,S,D') as Record<
       'W' | 'A' | 'S' | 'D',
       Phaser.Input.Keyboard.Key
@@ -94,39 +107,56 @@ export class Player {
     // 自动瞄准：移动方向前方扇区内的目标享受两倍距离权重。
     this.updateAutoAim();
 
-    // 朝向与走/停动画：素材只绘制朝右版本，锁定方向在左侧时水平翻转（与武器持有侧一致）
-    this.go.setFlipX(Math.cos(this.aimAngle) < 0);
+    // 正式素材默认朝左；锁定方向在右侧时水平翻转。
+    this.go.setFlipX(Math.cos(this.aimAngle) >= 0);
     const moving = this.isDodging || this.body.velocity.length() > 20;
-    this.setAction(moving ? 'run' : 'idle');
+    if (this.isDodging) {
+      this.setAction('dash');
+    } else if (timeMs >= this.actionLockedUntil) {
+      this.setAction(moving ? 'run' : 'idle');
+    }
 
     const playerDepth = worldDepth(this.y + this.body.halfHeight);
     this.go.setDepth(playerDepth);
-    this.gfx.setDepth(playerDepth + 0.001);
-    this.weaponBars.forEach((bar) => bar.setDepth(playerDepth + 0.002));
+    this.weaponSprite.setDepth(playerDepth - 0.001);
     this.updateWeaponVisual();
-    this.drawOverlay(timeMs);
+    this.updateInvulnerabilityBlink(timeMs);
   }
 
-  playAttackAnimation(aimAngle: number): void {
-    this.scene.tweens.killTweensOf(this.weaponSwing);
-    this.weaponSwing.progress = 0;
-    this.weaponSwingActive = true;
-    this.weaponSwingDirection = Math.cos(aimAngle) >= 0 ? 1 : -1;
+  /** 角色攻击统一从中心向当前朝向侧轻移，弹幕、扫击和特效共享该锚点。 */
+  getAttackOrigin(): { x: number; y: number } {
+    const side = Math.cos(this.aimAngle) >= 0 ? 1 : -1;
+    return { x: this.x + side * PLAYER_ATTACK_SIDE_OFFSET, y: this.y };
+  }
 
-    this.scene.tweens.add({
-      targets: this.weaponSwing,
-      progress: 1,
-      duration: WEAPON_SWING_DURATION_MS,
-      ease: 'Sine.easeOut',
-      onComplete: () => {
-        this.weaponSwingActive = false;
-      }
-    });
+  playAttackAnimation(heavy: boolean): void {
+    if (!this.isDodging) {
+      const attackAction = heavy ? 'attack-hard' : 'attack-light';
+      const origin = this.getAttackOrigin();
+      const playerDepth = worldDepth(this.y + this.body.halfHeight);
+      this.actionLockedUntil = this.scene.time.now + ATTACK_EFFECT_DURATION_MS;
+      this.setAction(attackAction, true);
+      this.scene.tweens.killTweensOf(this.attackFx);
+      playPlayerAttackEffect(this.attackFx, attackAction);
+      this.attackFx
+        .setPosition(origin.x, origin.y)
+        .setFlipX(this.go.flipX)
+        .setScale(PLAYER_SPRITE_SCALE)
+        .setAlpha(0.95)
+        .setDepth(playerDepth - 0.002);
+      this.scene.tweens.add({
+        targets: this.attackFx,
+        scaleX: PLAYER_ATTACK_FX_END_SCALE,
+        scaleY: PLAYER_ATTACK_FX_END_SCALE,
+        alpha: 0,
+        duration: ATTACK_EFFECT_DURATION_MS,
+        ease: 'Quad.easeOut',
+        onComplete: () => this.attackFx.setVisible(false)
+      });
+    }
   }
 
   onBeat(): void {
-    this.stamina = Math.min(this.maxStamina, this.stamina + STAMINA_REGEN_PER_BEAT);
-
     // 踩拍律动：轻微蹲弹，与场边律动带、HP 血条的节拍呼吸保持一致
     if (!this.dead && !this.isDodging) {
       this.scene.tweens.add({
@@ -150,13 +180,7 @@ export class Player {
     const t = conductor.now();
     const { offset } = conductor.nearestBeat(t);
     const onBeat = Math.abs(offset) <= DODGE_BEAT_WINDOW;
-    const cost = onBeat ? DODGE_COST_ONBEAT : DODGE_COST_OFFBEAT;
-    if (this.stamina < cost) {
-      this.scene.hud.flashStaminaWarning();
-      return false;
-    }
-    this.stamina -= cost;
-    this.staminaFullSince = Infinity;
+    this.scene.consumeDodgeComboMeter(onBeat);
 
     const bounds = this.scene.physics.world.bounds;
     const padX = this.body.halfWidth + 4;
@@ -165,9 +189,12 @@ export class Player {
     const ty = Phaser.Math.Clamp(this.y + dir.y * DODGE_DISTANCE, bounds.top + padY, bounds.bottom - padY);
 
     this.isDodging = true;
+    this.actionLockedUntil = 0;
+    this.setAction('dash', true);
     this.body.setVelocity(0, 0);
     this.body.enable = false;
     this.lastTrailAt = 0;
+    let waveReleased = false;
 
     this.scene.tweens.add({
       targets: this.go,
@@ -175,14 +202,17 @@ export class Player {
       y: ty,
       duration: DODGE_DURATION_MS,
       ease: 'Quint.easeOut',
-      onUpdate: () => this.spawnTrail(),
+      onUpdate: (tween) => {
+        this.spawnTrail();
+        if (!waveReleased && tween.progress >= 2 / 3) {
+          waveReleased = true;
+          this.scene.triggerDodgeFeverWave(this.go.x, this.go.y);
+        }
+      },
       onComplete: () => {
         this.isDodging = false;
         this.body.enable = true;
         this.body.reset(this.go.x, this.go.y);
-        if (onBeat) {
-          this.scene.triggerDodgeFeverWave(this.go.x, this.go.y);
-        }
       }
     });
     return true;
@@ -212,15 +242,16 @@ export class Player {
     this.flash(0x86efac);
   }
 
-  /** 战败：倒地姿势并隐藏手持武器 */
+  /** 战败：两套完整死亡动画随机播放其一，并隐藏手持武器。 */
   die(): void {
     this.dead = true;
     this.body.setVelocity(0, 0);
-    this.setAction('down');
+    this.actionLockedUntil = Infinity;
+    this.setAction(Math.random() < 0.5 ? 'death-1' : 'death-2', true);
     this.go.clearTint();
     this.go.setAlpha(0.85);
-    this.gfx.clear();
-    this.weaponBars.forEach((bar) => bar.setVisible(false));
+    this.attackFx.setVisible(false);
+    this.weaponSprite.setVisible(false);
   }
 
   /** 输入错误的噪音反馈 */
@@ -266,10 +297,10 @@ export class Player {
   }
 
   /** 动作切换（同动作直接返回，避免每帧重置动画与缩放） */
-  private setAction(action: PlayerAction): void {
-    if (this.action === action) return;
+  private setAction(action: PlayerAction, forceRestart = false): void {
+    if (this.action === action && !forceRestart) return;
     this.action = action;
-    playPlayerAnimation(this.go, action);
+    playPlayerAnimation(this.go, action, forceRestart);
   }
 
   private spawnTrail(): void {
@@ -291,44 +322,25 @@ export class Player {
     });
   }
 
-  /**
-   * 武器示意跟随自动锁定方向：握把固定在瞄准线起点、棒身指向锁定方向，与白色瞄准短线重合。
-   * 挥击时从偏转角在 200ms 内收敛回瞄准线（朝指向劈下的观感），无结束跳变。
-   */
+  /** 正式武器贴图固定在角色身后；角色朝左/右时瞬切到身体同侧并镜像。 */
   private updateWeaponVisual(): void {
-    const gripX = this.x + Math.cos(this.aimAngle) * WEAPON_GRIP_DIST;
-    const gripY = this.y + Math.sin(this.aimAngle) * WEAPON_GRIP_DIST;
-    const swingDegrees = this.weapon.id === 'baton' ? 50 : 30;
-    const swingAngle = this.weaponSwingActive
-      ? this.weaponSwingDirection * Phaser.Math.DegToRad(swingDegrees) * (1 - this.weaponSwing.progress)
-      : 0;
-    const baseAngle = this.aimAngle + swingAngle;
-
-    // 两种武器都显示为握在瞄准线上的单根短棒，只在颜色和长度上区分
+    const facingRight = Math.cos(this.aimAngle) >= 0;
+    const side = facingRight ? 1 : -1;
     const isBaton = this.weapon.id === 'baton';
-    this.weaponBars[0]
+    this.weaponSprite
       .setVisible(true)
-      .setFillStyle(isBaton ? 0xa855f7 : 0xef4444)
-      .setDisplaySize(worldSize(isBaton ? 51 : 30), worldSize(isBaton ? 9 : 7.5))
-      .setPosition(gripX, gripY)
-      .setRotation(baseAngle);
-    this.weaponBars[1].setVisible(false);
+      .setTexture(isBaton ? 'player-weapon-baton' : 'player-weapon-glowsticks')
+      .setOrigin(0.5, 0.5)
+      .setPosition(
+        this.x + side * PLAYER_WEAPON_SIDE_OFFSET,
+        this.y + PLAYER_WEAPON_WAIST_OFFSET_Y
+      )
+      .setScale(PLAYER_WEAPON_SCALE)
+      .setFlipX(facingRight)
+      .setRotation(0);
   }
 
-  private drawOverlay(timeMs: number): void {
-    this.gfx.clear();
-
-    // 瞄准短线
-    const fromX = this.x + Math.cos(this.aimAngle) * (PLAYER_RADIUS + worldSize(4));
-    const fromY = this.y + Math.sin(this.aimAngle) * (PLAYER_RADIUS + worldSize(4));
-    this.gfx.lineStyle(worldSize(3), 0xffffff, 0.9);
-    this.gfx.lineBetween(
-      fromX,
-      fromY,
-      fromX + Math.cos(this.aimAngle) * worldSize(14),
-      fromY + Math.sin(this.aimAngle) * worldSize(14)
-    );
-
+  private updateInvulnerabilityBlink(timeMs: number): void {
     // 受击无敌闪烁
     if (this.scene.time.now < this.invulnUntil && !this.isDodging) {
       this.go.setAlpha(Math.sin(timeMs * 0.04) > 0 ? 1 : 0.4);
@@ -336,17 +348,5 @@ export class Player {
       this.go.setAlpha(1);
     }
 
-    // 闪避体力环：体力未满时显示，回满 1 秒后隐藏
-    if (this.stamina >= this.maxStamina) {
-      if (this.staminaFullSince === Infinity) this.staminaFullSince = timeMs;
-      if (timeMs - this.staminaFullSince > 1000) return;
-    }
-    const low = this.stamina < 30;
-    const ratio = this.stamina / this.maxStamina;
-    const ringR = PLAYER_RADIUS + worldSize(8);
-    this.gfx.lineStyle(worldSize(4), low ? 0x991b1b : 0xfacc15, 0.9);
-    this.gfx.beginPath();
-    this.gfx.arc(this.x, this.y, ringR, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio, false);
-    this.gfx.strokePath();
   }
 }

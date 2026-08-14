@@ -196,7 +196,7 @@ export class SmallGuard extends Enemy {
     if (this.dead) return;
     this.chooseMovementAngle();
     if (info.beatInMeasure !== 0) return;
-    const angle = this.angleToPlayer();
+    const angle = this.scene.quantizeEnemyAttackAngle(this.angleToPlayer());
     this.scene.spawnEnemyProjectile(this.x, this.y, angle, 12, 0x3b82f6);
   }
 
@@ -229,13 +229,13 @@ export class MidGuard extends Enemy {
 
   constructor(scene: MainScene, x: number, y: number) {
     super(scene, scene.add.image(x, y, 'guard').setDisplaySize(worldSize(52), worldSize(78)), 60, 0xffffff);
-    this.lockedAngle = this.angleToPlayer();
+    this.lockedAngle = this.scene.quantizeEnemyAttackAngle(this.angleToPlayer());
     this.laserGfx = scene.add.graphics().setDepth(2);
   }
 
   onBeat(info: BeatInfo): void {
     if (this.dead || info.beatInMeasure !== 0) return;
-    this.lockedAngle = this.angleToPlayer();
+    this.lockedAngle = this.scene.quantizeEnemyAttackAngle(this.angleToPlayer());
     this.aiming = false;
     this.scene.spawnEnemyProjectile(this.x, this.y, this.lockedAngle, 12, 0x3b82f6);
     this.flashLaser(this.lockedAngle);
@@ -245,16 +245,21 @@ export class MidGuard extends Enemy {
     super.update(dtMs);
     this.laserGfx.clear();
     if (!this.dead && this.aiming) {
-      const p = this.scene.player;
-      this.lockedAngle = this.angleToPlayer();
+      this.lockedAngle = this.scene.quantizeEnemyAttackAngle(this.angleToPlayer());
       this.laserGfx.lineStyle(2, 0xff4444, 0.35);
-      this.laserGfx.lineBetween(this.x, this.y, p.x, p.y);
+      const length = 900;
+      this.laserGfx.lineBetween(
+        this.x,
+        this.y,
+        this.x + Math.cos(this.lockedAngle) * length,
+        this.y + Math.sin(this.lockedAngle) * length
+      );
     }
   }
 
   protected move(dtMs: number): void {
     const dist = this.distToPlayer();
-    const angle = this.angleToPlayer();
+    const angle = this.scene.quantizeEnemyAttackAngle(this.angleToPlayer());
     if (dist > 340) {
       const v = this.scene.physics.velocityFromRotation(angle, 80);
       this.approachVelocity(v.x, v.y, dtMs, 140);

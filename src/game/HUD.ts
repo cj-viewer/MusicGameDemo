@@ -59,7 +59,6 @@ export class HUD {
   private messageText: Phaser.GameObjects.Text;
   private victoryText: Phaser.GameObjects.Text;
   private victoryBackdrop: Phaser.GameObjects.Rectangle;
-  private staminaWarnText: Phaser.GameObjects.Text;
   private panel: Phaser.GameObjects.Rectangle;
   private feverText: Phaser.GameObjects.Text;
   private feverMode = false;
@@ -174,12 +173,6 @@ export class HUD {
       .setAlpha(0.82)
       .setVisible(false);
 
-    this.staminaWarnText = scene.add
-      .text(BAR_CENTER_X, BAR_Y - 70, '体力不足！', { fontFamily: 'Arial', fontSize: '16px', color: '#f87171' })
-      .setOrigin(0.5)
-      .setDepth(10)
-      .setAlpha(0);
-
     // 主场景镜头会做轻微前探和拉远；用独立屏幕层抵消 scroll 与 zoom，保留旧 HUD 像素布局。
     this.screenLayer = scene.add
       .container(screenLayerOffset(1280), screenLayerOffset(720))
@@ -200,8 +193,7 @@ export class HUD {
       this.waveText,
       this.weaponText,
       this.stateText,
-      this.messageText,
-      this.staminaWarnText
+      this.messageText
     ]);
 
     this.setCombo(0, 0);
@@ -659,8 +651,4 @@ export class HUD {
     this.messageText.setText(text);
   }
 
-  flashStaminaWarning(): void {
-    this.staminaWarnText.setAlpha(1);
-    this.scene.tweens.add({ targets: this.staminaWarnText, alpha: 0, duration: 600, delay: 200 });
-  }
 }

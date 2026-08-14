@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 
-const CUE_GAIN = 0.28;
+const HEAVY_CUE_GAIN = 0.28;
+const LIGHT_CUE_GAIN = HEAVY_CUE_GAIN * 1.5;
 const CUE_SCHEDULE_AHEAD = 0.22;
 const LIGHT_CUE_LEAD = 0.07;
 const HEAVY_CUE_LEAD = 0.074;
@@ -184,7 +185,7 @@ export class Conductor extends Phaser.Events.EventEmitter {
   private playCue(time: number, heavy: boolean): void {
     if (!this.customBeatAudioReady) return;
     const key = heavy ? 'beat-heavy' : 'beat-light';
-    const cueGain = CUE_GAIN * this.sfxVolume;
+    const cueGain = (heavy ? HEAVY_CUE_GAIN : LIGHT_CUE_GAIN) * this.sfxVolume;
     const sound = this.scene.sound.add(key, { volume: cueGain }) as Phaser.Sound.WebAudioSound;
     sound.once(Phaser.Sound.Events.COMPLETE, () => {
       sound.destroy();

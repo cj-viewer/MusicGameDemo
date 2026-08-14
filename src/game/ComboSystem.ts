@@ -159,6 +159,26 @@ export class ComboSystem {
     this.progress = Math.min(100, this.progress + amount * FEVER_ENERGY_MULTIPLIER);
   }
 
+  /**
+   * 直接消耗 ComboMeter 点数。普通状态最低扣到 0；Fever 状态按总能量比例缩短持续拍数。
+   * 返回 true 表示本次消耗使 Fever 立即结束。
+   */
+  spendProgress(amount: number): boolean {
+    const clampedAmount = Math.max(0, amount);
+    if (!this.feverActive()) {
+      this.progress = Math.max(0, this.progress - clampedAmount);
+      return false;
+    }
+
+    const beatFloat = Math.max(0, this.conductor.beatFloatAt(this.conductor.now()));
+    this.feverUntilBeat -= (clampedAmount / 100) * FEVER_DURATION_BEATS;
+    if (this.feverUntilBeat > beatFloat) return false;
+
+    this.feverUntilBeat = -1;
+    this.progress = 0;
+    return true;
+  }
+
   private addCorrectInputProgress(amount: number): void {
     if (!this.feverActive()) {
       this.addProgress(amount);

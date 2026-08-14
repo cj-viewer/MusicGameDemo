@@ -71,6 +71,17 @@ export class IntroScene extends Phaser.Scene {
     this.startButton.on('pointerover', () => this.startButton?.setFillStyle(0xf472b6));
     this.startButton.on('pointerout', () => this.startButton?.setFillStyle(0xec4899));
     this.startButton.on('pointerdown', this.playIntro, this);
+
+    this.add
+      .text(1248, 688, '空格跳过', {
+        fontFamily: 'Arial, Microsoft YaHei, sans-serif',
+        fontSize: '18px',
+        color: '#ffffff'
+      })
+      .setOrigin(1)
+      .setAlpha(0.75)
+      .setDepth(3);
+    this.input.keyboard?.on('keydown-SPACE', this.finishIntro, this);
   }
 
   private playIntro(): void {
@@ -94,6 +105,7 @@ export class IntroScene extends Phaser.Scene {
   private finishIntro(): void {
     if (this.finished) return;
     this.finished = true;
+    this.input.keyboard?.off('keydown-SPACE', this.finishIntro, this);
     this.video?.stop(false);
     this.scene.start('MainScene');
   }

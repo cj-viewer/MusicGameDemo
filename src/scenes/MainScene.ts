@@ -4,7 +4,12 @@ import { Sfx } from '../core/Sfx';
 import { ComboSystem } from '../game/ComboSystem';
 import { HUD } from '../game/HUD';
 import { Player, PLAYER_RADIUS } from '../game/Player';
-import { registerPlayerAnimations } from '../game/playerAnimation';
+import {
+  PLAYER_ANIMATION_ASSETS,
+  playerAssetPath,
+  playerTextureKey,
+  registerPlayerAnimations
+} from '../game/playerAnimation';
 import { BATON, GLOWSTICKS, getAttackSpec, type WeaponDef } from '../game/weapons';
 import { Enemy, FanEnemy, SmallGuard } from '../game/enemies';
 import { GAMEPAD_BUTTON, rumbleParameters, type RumbleKind } from '../game/GamepadControls';
@@ -38,12 +43,12 @@ const DEFAULT_TUTORIAL_BGM_SLOT = 3;
 const DEFAULT_LEVEL_BGM_SLOT = 0;
 const BPM = BGM_TRACKS[DEFAULT_TUTORIAL_BGM_SLOT].bpm;
 
-/** BGM 通道对外仍以 100% 为默认值；内部基础混音衰减到旧版 0.3 的三分之一。 */
-const BGM_VOLUME = 0.05;
+/** BGM 通道默认显示 150%；内部基础混音继续使用上一版的 75%。 */
+const BGM_VOLUME = 0.0375;
 
 const DEFAULT_MASTER_VOLUME = 1.5;
 const MAX_MASTER_VOLUME = 3;
-const DEFAULT_BGM_CHANNEL_VOLUME = 1;
+const DEFAULT_BGM_CHANNEL_VOLUME = 1.5;
 const DEFAULT_SFX_CHANNEL_VOLUME = 1;
 const MAX_CHANNEL_VOLUME = 2;
 const VOLUME_TRACK_X = 440;
@@ -64,10 +69,11 @@ const ARENA = {
 const ARENA_BORDER_BASE_COLOR = 0x6b3b70;
 const ARENA_BEAT_LIGHT_COLOR = 0xe879f9;
 const ARENA_BEAT_HEAVY_COLOR = 0xf97316;
-/** 正式游戏同时预览未来三拍：每个框在各自的拍点抵达大框。 */
+/** 同时预告未来三拍：每个缩放框用三拍时间抵达场地边框。 */
 const ARENA_BEAT_CUE_START_SCALE = 0.7;
 const ARENA_BEAT_CUE_LOOKAHEAD = 3;
 const ARENA_BEAT_CUE_MIN_ALPHA = 0;
+const ARENA_BEAT_HEAVY_ALPHA_PEAK_PROGRESS = 0.9;
 const TUTORIAL_CALIBRATION_SAMPLES = 12;
 const TUTORIAL_CALIBRATION_MAX_ABS_OFFSET = 0.12;
 const TUTORIAL_CALIBRATION_CANDIDATE_WINDOW = 0.18;
@@ -195,13 +201,13 @@ export class MainScene extends Phaser.Scene {
         this.load.image(`fan-${animation}-${index}`, asset(`images/characters/fan/${animation}/${animation}-${frame}.png`));
       }
     }
-    for (let index = 1; index <= 2; index++) {
-      this.load.image(`player-idle-${index}`, asset(`images/characters/player/idle/idle-0${index}.png`));
+    for (const spec of PLAYER_ANIMATION_ASSETS) {
+      for (let frame = 1; frame <= spec.frameCount; frame++) {
+        this.load.image(playerTextureKey(spec.action, frame), asset(playerAssetPath(spec, frame)));
+      }
     }
-    for (let index = 1; index <= 4; index++) {
-      this.load.image(`player-run-${index}`, asset(`images/characters/player/run/run-0${index}.png`));
-    }
-    this.load.image('player-down-1', asset('images/characters/player/down/down-01.png'));
+    this.load.image('player-weapon-glowsticks', asset('images/weapons/light_stick/player/light_stick_player.png'));
+    this.load.image('player-weapon-baton', asset('images/weapons/baton/player/baton_player01.png'));
     this.load.audio('beat-light', asset('audio/sfx/sfx-beat-light.mp3'));
     this.load.audio('beat-heavy', asset('audio/sfx/sfx-beat-heavy.mp3'));
     this.load.audio('bgm-1', asset('audio/music/bgm1.mp3'));
@@ -1319,6 +1325,12 @@ export class MainScene extends Phaser.Scene {
       : moveAngle;
   }
 
+  /** 将敌人瞄准角吸附到最近的八方向扇区中线（每档 45°）。 */
+  quantizeEnemyAttackAngle(angle: number): number {
+    const sectorAngle = Math.PI / 4;
+    return Phaser.Math.Angle.Wrap(Math.round(Phaser.Math.Angle.Wrap(angle) / sectorAngle) * sectorAngle);
+  }
+
   /** 当前帧在整拍归一化 easeInExpo 位移曲线上的平均速度倍率。 */
   getNormalizedBeatMovementMultiplier(deltaMs: number): number {
     const dt = Math.max(0, deltaMs) / 1000;
@@ -1471,7 +1483,9 @@ export class MainScene extends Phaser.Scene {
     this.hud.onBeat(info.beatInMeasure);
     this.getFpvMiniScene()?.onBeat(this.combo.pattern[info.beatInMeasure] === 'H');
     const heavyBeat = this.combo.pattern[info.beatInMeasure] === 'H';
-    this.pulseRhythmEdgeBlocks(heavyBeat);
+    const nextBeatInMeasure = (info.beatInMeasure + 1) % 4;
+    const nextHeavyBeat = this.combo.pattern[nextBeatInMeasure] === 'H';
+    this.pulseRhythmEdgeBlocks(heavyBeat, nextHeavyBeat);
     this.pulseArenaBeatJudgement(heavyBeat);
     this.pulsePickups();
     this.pulsePatternIcon(info.beatInMeasure);
@@ -1522,17 +1536,18 @@ export class MainScene extends Phaser.Scene {
     const mult = this.combo.damageMultiplier;
     const heavy = weapon.pattern[beatIdx] === 'H';
     const angle = this.player.aimAngle;
+    const attackOrigin = this.player.getAttackOrigin();
 
     // enableFever 为 true 即踩拍成功（含自动演示），攻击带强调特效与发光弹丸
     const onBeat = enableFever;
     const damage = spec.kind === 'charge' ? 8 : spec.damage;
     this.sfx.attack(heavy);
-    this.player.playAttackAnimation(angle);
-    if (onBeat) this.spawnOnBeatAttackFx(this.player.x, this.player.y, angle, heavy, spec.color);
+    this.player.playAttackAnimation(heavy);
+    if (onBeat) this.spawnOnBeatAttackFx(attackOrigin.x, attackOrigin.y, angle, heavy, spec.color);
     if (weapon.id === 'baton') {
       this.spawnBatonSweep(
-        this.player.x,
-        this.player.y,
+        attackOrigin.x,
+        attackOrigin.y,
         angle,
         damage * mult,
         enableFever ? 3 : 1,
@@ -1541,8 +1556,8 @@ export class MainScene extends Phaser.Scene {
       );
     } else {
       this.spawnPlayerShotgun(
-        this.player.x,
-        this.player.y,
+        attackOrigin.x,
+        attackOrigin.y,
         angle,
         heavy ? 560 : 480,
         damage * mult,
@@ -1554,7 +1569,7 @@ export class MainScene extends Phaser.Scene {
 
     if (weapon.id !== 'baton' && spec.kind === 'charge') {
       const ring = this.add
-        .circle(this.player.x, this.player.y, worldSize(20))
+        .circle(attackOrigin.x, attackOrigin.y, worldSize(20))
         .setStrokeStyle(worldSize(3), spec.color, 0.9)
         .setDepth(6);
       this.tweens.add({ targets: ring, scale: 1.8, alpha: 0, duration: 250, onComplete: () => ring.destroy() });
@@ -1564,9 +1579,9 @@ export class MainScene extends Phaser.Scene {
     if (enableFever && this.combo.feverActive()) {
       this.sfx.feverWave();
       if (heavy) {
-        this.spawnSoundWave(this.player.x, this.player.y, angle, 180, 190, 14 * mult);
+        this.spawnSoundWave(attackOrigin.x, attackOrigin.y, angle, 180, 190, 14 * mult);
       } else {
-        this.spawnSoundWave(this.player.x, this.player.y, angle, 55, 230, 10 * mult);
+        this.spawnSoundWave(attackOrigin.x, attackOrigin.y, angle, 55, 230, 10 * mult);
       }
     }
   }
@@ -1631,7 +1646,7 @@ export class MainScene extends Phaser.Scene {
     cam.setZoom(MAIN_CAMERA_BASE_ZOOM);
     this.tweens.add({
       targets: cam,
-      zoom: MAIN_CAMERA_BASE_ZOOM * (heavy ? 1.015 : 1.0075),
+      zoom: MAIN_CAMERA_BASE_ZOOM * (heavy ? 1.01875 : 1.00375),
       duration: 60,
       yoyo: true,
       ease: 'Quad.easeOut'
@@ -1805,10 +1820,11 @@ export class MainScene extends Phaser.Scene {
   }
 
   spawnEnemyProjectile(x: number, y: number, angle: number, damage: number, color: number): void {
+    const shotAngle = this.quantizeEnemyAttackAngle(angle);
     this.spawnBullet(
-      x + Math.cos(angle) * worldSize(26),
-      y + Math.sin(angle) * worldSize(26),
-      angle,
+      x + Math.cos(shotAngle) * worldSize(26),
+      y + Math.sin(shotAngle) * worldSize(26),
+      shotAngle,
       0,
       damage,
       color
@@ -2037,8 +2053,8 @@ export class MainScene extends Phaser.Scene {
   }
 
   /**
-   * 正式游戏预览未来三拍：三个同宽高比内框分别在未来 1 / 2 / 3 拍抵达场地边界。
-   * 每个框从 0.4 倍尺寸出发，以 easeInExpo 缓慢加速扩散三拍；透明度按 easeOutQuint 变亮。
+   * 同时预告未来三拍，每个缩放框从 0.7 倍尺寸出发，用三拍时间缓慢抵达场地边框。
+   * 轻重框从相同透明度起步并统一按 Expo.In 淡入；橙色框压缩透明度进度，稍早抵达峰值。
    */
   private updateArenaBeatCue(): void {
     const active = this.conductor.started && (this.state === 'tutorial' || this.state === 'playing' || this.state === 'intermission');
@@ -2062,11 +2078,10 @@ export class MainScene extends Phaser.Scene {
       const elapsedBeats = beatFloat - (targetBeat - ARENA_BEAT_CUE_LOOKAHEAD);
       const progress = Phaser.Math.Clamp(elapsedBeats / ARENA_BEAT_CUE_LOOKAHEAD, 0, 1);
       const scaleProgress = Phaser.Math.Easing.Expo.In(progress);
-      const alphaProgress = Phaser.Math.Easing.Expo.In(progress);
       const scale = Phaser.Math.Linear(ARENA_BEAT_CUE_START_SCALE, 1, scaleProgress);
-      const alpha = Phaser.Math.Linear(ARENA_BEAT_CUE_MIN_ALPHA, 1, alphaProgress);
       const beatInMeasure = ((targetBeat % 4) + 4) % 4;
       const heavy = this.combo.pattern[beatInMeasure] === 'H';
+      const alpha = this.getArenaBeatCueAlpha(progress, heavy);
       cue
         .setVisible(progress < 1)
         .setScale(scale)
@@ -2131,6 +2146,7 @@ export class MainScene extends Phaser.Scene {
       block.setData('baseColor', baseColor);
       block.setData('lightColor', brightenAndDesaturate(baseColor, 3, 3));
       block.setData('heavyColor', brightenAndDesaturate(baseColor, 5, 5));
+      block.setData('heavyHueColor', this.interpolateHue(baseColor, ARENA_BEAT_HEAVY_COLOR, 1));
       block.setData('edge', edge);
       block.setData('anticipationDelay', Phaser.Math.FloatBetween(0, 0.12));
       block.setData('jumpVariance', Phaser.Math.FloatBetween(0.88, 1.12));
@@ -2167,7 +2183,7 @@ export class MainScene extends Phaser.Scene {
     });
   }
 
-  private pulseRhythmEdgeBlocks(heavy: boolean): void {
+  private pulseRhythmEdgeBlocks(heavy: boolean, nextHeavy: boolean): void {
     this.tweens.killTweensOf(this.rhythmBlocks);
     this.rhythmPulseUntil = this.time.now + (heavy ? 230 : 180);
     for (const block of this.rhythmBlocks) {
@@ -2175,7 +2191,7 @@ export class MainScene extends Phaser.Scene {
       const jumpScale = heavy ? 1.85 : 1.3;
       block.setScale(heavy ? 0.93 : 0.97, jumpScale * variance);
       block.setAlpha(1);
-      block.setFillStyle(block.getData(heavy ? 'heavyColor' : 'lightColor') as number, 1);
+      block.setFillStyle(block.getData(nextHeavy ? 'heavyHueColor' : 'lightColor') as number, 1);
     }
     this.tweens.add({
       targets: this.rhythmBlocks,
@@ -2186,7 +2202,7 @@ export class MainScene extends Phaser.Scene {
       onComplete: () => {
         for (const block of this.rhythmBlocks) {
           block.setAlpha(1);
-          block.setFillStyle(block.getData('baseColor') as number, 1);
+          block.setFillStyle(block.getData(nextHeavy ? 'heavyHueColor' : 'baseColor') as number, 1);
         }
       }
     });
@@ -2214,9 +2230,18 @@ export class MainScene extends Phaser.Scene {
       );
       const baseColor = block.getData('baseColor') as number;
       const targetColor = block.getData(heavy ? 'heavyColor' : 'lightColor') as number;
-      block.setFillStyle(this.interpolateRgb(baseColor, targetColor, eased), 1);
+      const anticipatedColor = this.interpolateRgb(baseColor, targetColor, eased);
+      block.setFillStyle(this.interpolateHue(anticipatedColor, ARENA_BEAT_HEAVY_COLOR, heavy ? 1 : 0), 1);
       block.setAlpha(1);
     }
+  }
+
+  private getArenaBeatCueAlpha(progress: number, heavy: boolean): number {
+    const adjustedProgress = heavy
+      ? Phaser.Math.Clamp(progress / ARENA_BEAT_HEAVY_ALPHA_PEAK_PROGRESS, 0, 1)
+      : progress;
+    const alphaProgress = Phaser.Math.Easing.Expo.In(adjustedProgress);
+    return Phaser.Math.Linear(ARENA_BEAT_CUE_MIN_ALPHA, 1, alphaProgress);
   }
 
   private interpolateRgb(from: number, to: number, amount: number): number {
@@ -2230,6 +2255,50 @@ export class MainScene extends Phaser.Scene {
     const g = Math.round(Phaser.Math.Linear(fromG, toG, amount));
     const b = Math.round(Phaser.Math.Linear(fromB, toB, amount));
     return (r << 16) | (g << 8) | b;
+  }
+
+  /** 只沿最短 HSV 色相路径过渡，保留律动条当下的饱和度和明度。 */
+  private interpolateHue(from: number, to: number, amount: number): number {
+    const rgbToHsv = (value: number): { h: number; s: number; v: number } => {
+      const r = ((value >> 16) & 0xff) / 255;
+      const g = ((value >> 8) & 0xff) / 255;
+      const b = (value & 0xff) / 255;
+      const max = Math.max(r, g, b);
+      const min = Math.min(r, g, b);
+      const delta = max - min;
+      let h = 0;
+      if (delta > 0) {
+        if (max === r) h = ((g - b) / delta) % 6;
+        else if (max === g) h = (b - r) / delta + 2;
+        else h = (r - g) / delta + 4;
+        h /= 6;
+        if (h < 0) h += 1;
+      }
+      return { h, s: max === 0 ? 0 : delta / max, v: max };
+    };
+    const hsvToColor = (h: number, s: number, v: number): number => {
+      const scaled = ((h % 1) + 1) % 1 * 6;
+      const sector = Math.floor(scaled);
+      const fraction = scaled - sector;
+      const p = v * (1 - s);
+      const q = v * (1 - fraction * s);
+      const t = v * (1 - (1 - fraction) * s);
+      const channels = [
+        [v, t, p], [q, v, p], [p, v, t],
+        [p, q, v], [t, p, v], [v, p, q]
+      ][sector % 6];
+      return (Math.round(channels[0] * 255) << 16)
+        | (Math.round(channels[1] * 255) << 8)
+        | Math.round(channels[2] * 255);
+    };
+
+    const fromHsv = rgbToHsv(from);
+    const toHsv = rgbToHsv(to);
+    let hueDelta = toHsv.h - fromHsv.h;
+    if (hueDelta > 0.5) hueDelta -= 1;
+    else if (hueDelta < -0.5) hueDelta += 1;
+    const ratio = Phaser.Math.Clamp(amount, 0, 1);
+    return hsvToColor(fromHsv.h + hueDelta * ratio, fromHsv.s, fromHsv.v);
   }
 
   private cleanupBullets(): void {
@@ -2254,12 +2323,22 @@ export class MainScene extends Phaser.Scene {
     }
   }
 
-  /** 踩拍冲刺使用 Fever 全圆音波同款逻辑，仅把 190px 作用半径缩至一半。 */
+  /** 闪避进行到三分之二时，释放 Fever 重拍同款全圆清屏音波。 */
   triggerDodgeFeverWave(x: number, y: number): void {
     this.sfx.feverWave();
-    this.spawnSoundWave(x, y, this.player.aimAngle, 180, 95, 14 * this.combo.damageMultiplier);
-    this.combo.addProgress(1);
-    this.refreshComboHUD();
+    this.spawnSoundWave(x, y, this.player.aimAngle, 180, 190, 14 * this.combo.damageMultiplier);
+  }
+
+  /** 踩拍闪避扣半级，错拍闪避扣一级；Fever 中等比例缩短剩余持续时间。 */
+  consumeDodgeComboMeter(onBeat: boolean): void {
+    const feverEnded = this.combo.spendProgress(onBeat ? 10 : 20);
+    if (feverEnded) {
+      this.endFever();
+    } else if (this.combo.feverActive()) {
+      this.hud.setFeverCountdown(this.combo.feverRemainRatio());
+    } else {
+      this.refreshComboHUD();
+    }
   }
 
   // ---------- 拾取 ----------
