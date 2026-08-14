@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { WORLD_OBJECT_SCALE } from './visualScale';
+import { UI_SCALE } from './displayConfig';
 
 export type PlayerAction =
   | 'idle'
@@ -23,14 +23,15 @@ export interface PlayerAnimationAssetSpec {
 /** 远端正式玩家素材：统一为 256px 方形画布，透明内容脚底约位于源图 y=186。 */
 export const PLAYER_SOURCE_FRAME_SIZE = 256;
 export const PLAYER_SOURCE_BASELINE_Y = 186;
-/** 以 Idle / Run 的约 108px 内容高度作为视觉标尺，保持上一版约 63.6px 的场内高度。 */
+/** 维持旧 720p 原型的屏幕占比：50.88px × 1.5 = 76.32px。 */
 export const PLAYER_REFERENCE_CONTENT_HEIGHT = 108;
-/** 本轮在既有统一场内缩放基础上，再把玩家本体缩至当前的 0.8 倍。 */
-export const PLAYER_CHARACTER_SCALE = 0.8;
-export const PLAYER_DISPLAY_HEIGHT = 79.5 * WORLD_OBJECT_SCALE * PLAYER_CHARACTER_SCALE;
+const LEGACY_PLAYER_DISPLAY_HEIGHT = 79.5 * 0.8 * 0.8;
+export const PLAYER_DISPLAY_HEIGHT = LEGACY_PLAYER_DISPLAY_HEIGHT * UI_SCALE;
 export const PLAYER_SPRITE_SCALE = PLAYER_DISPLAY_HEIGHT / PLAYER_REFERENCE_CONTENT_HEIGHT;
+/** 128 x 128 手持武器相对 256 x 256 角色画布的统一显示倍率。 */
+export const PLAYER_WEAPON_SCALE = PLAYER_SPRITE_SCALE * 0.8;
 
-/** 固定角色受击体，避免 256px 透明画布被误当成碰撞范围。缩放后约为 24.7 x 63.6px。 */
+/** 固定角色受击体，避免 256px 透明画布被误当成碰撞范围。 */
 export const PLAYER_BODY_SOURCE_WIDTH = 42;
 export const PLAYER_BODY_SOURCE_HEIGHT = 108;
 export const PLAYER_BODY_SOURCE_OFFSET_X = (PLAYER_SOURCE_FRAME_SIZE - PLAYER_BODY_SOURCE_WIDTH) / 2;
@@ -59,7 +60,7 @@ export function playerAssetPath(spec: PlayerAnimationAssetSpec, frame: number): 
   return `images/characters/player/animation/${spec.directory}/${spec.filePrefix}${index}.png`;
 }
 
-/** 注册正式玩家状态机动画，并只对这些像素纹理启用 NEAREST。 */
+/** 注册正式玩家状态机动画；全局与单纹理均使用 NEAREST。 */
 export function registerPlayerAnimations(scene: Phaser.Scene): void {
   for (const spec of PLAYER_ANIMATION_ASSETS) {
     for (let frame = 1; frame <= spec.frameCount; frame++) {
@@ -106,7 +107,7 @@ export function playPlayerAnimation(
   }
 }
 
-/** 在独立 Sprite 上播放攻击特效，角色本体继续保留当前 Idle / Run 帧。 */
+/** 在独立 Sprite 上播放轻 / 重攻击特效，和角色 256px 画布同中心完全重叠。 */
 export function playPlayerAttackEffect(
   sprite: Phaser.GameObjects.Sprite,
   action: PlayerAttackAction

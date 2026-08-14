@@ -1,6 +1,6 @@
-export const MAIN_CAMERA_BASE_ZOOM = 0.965;
-export const MAIN_CAMERA_LOOK_MAX_X = 30;
-export const MAIN_CAMERA_LOOK_MAX_Y = 20;
+export const MAIN_CAMERA_BASE_ZOOM = 1;
+export const MAIN_CAMERA_LOOK_MAX_X = 45;
+export const MAIN_CAMERA_LOOK_MAX_Y = 30;
 export const MAIN_CAMERA_LOOK_DEAD_ZONE = 0.12;
 export const MAIN_CAMERA_LOOK_DAMPING_MS = 220;
 

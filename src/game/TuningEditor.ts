@@ -1,11 +1,12 @@
 import Phaser from 'phaser';
 import { MAIN_CAMERA_BASE_ZOOM, screenLayerOffset } from './cameraConfig';
+import { UI_SCALE, VIEW_HEIGHT, VIEW_WIDTH } from './displayConfig';
 
 export class TuningEditor {
   readonly container: Phaser.GameObjects.Container;
   playerBulletSpeed = 360;
   enemyBulletSpeed = 144;
-  enemyBulletBeatSurgeEnabled = true;
+  enemyBulletBeatSurgeEnabled = false;
   tutorialBgmSlot = 3;
   levelBgmSlot = 0;
 
@@ -107,9 +108,9 @@ export class TuningEditor {
     addButton(830, 500, '›', () => this.cycleSlot('level', 1));
 
     this.container = scene.add
-      .container(screenLayerOffset(1280), screenLayerOffset(720), objects)
+      .container(screenLayerOffset(VIEW_WIDTH), screenLayerOffset(VIEW_HEIGHT), objects)
       .setDepth(31)
-      .setScale(1 / MAIN_CAMERA_BASE_ZOOM)
+      .setScale(UI_SCALE / MAIN_CAMERA_BASE_ZOOM)
       .setScrollFactor(0)
       .setVisible(false);
     this.refresh();

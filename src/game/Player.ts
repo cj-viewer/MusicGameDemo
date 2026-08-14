@@ -6,29 +6,35 @@ import {
   PLAYER_BODY_SOURCE_OFFSET_X,
   PLAYER_BODY_SOURCE_OFFSET_Y,
   PLAYER_BODY_SOURCE_WIDTH,
-  PLAYER_CHARACTER_SCALE,
   PLAYER_SPRITE_SCALE,
+  PLAYER_WEAPON_SCALE,
   playPlayerAttackEffect,
   playPlayerAnimation,
   type PlayerAction
 } from './playerAnimation';
 import type { MainScene } from '../scenes/MainScene';
+import { UI_SCALE } from './displayConfig';
 import { worldDepth, worldSize } from './visualScale';
 
-export const PLAYER_RADIUS = worldSize(16) * PLAYER_CHARACTER_SCALE;
+export const PLAYER_RADIUS = worldSize(16);
 const MOVE_SPEED = 260;
 const MOVE_ACCELERATION = 1050;
 const MOVE_DECELERATION = 720;
 const DODGE_DISTANCE = 160;
 const DODGE_DURATION_MS = 140;
+const EMPTY_COMBO_DODGE_INTERVAL_MS = 500;
 /** 闪避踩拍判定窗口：拍点前后各 0.12 秒 */
 const DODGE_BEAT_WINDOW = 0.12;
 const ATTACK_EFFECT_DURATION_MS = 200;
-const PLAYER_WEAPON_SCALE = PLAYER_SPRITE_SCALE * 0.8;
-const PLAYER_WEAPON_SIDE_OFFSET = worldSize(14) * PLAYER_CHARACTER_SCALE;
-const PLAYER_WEAPON_WAIST_OFFSET_Y = worldSize(6) * PLAYER_CHARACTER_SCALE;
-const PLAYER_ATTACK_SIDE_OFFSET = worldSize(8) * PLAYER_CHARACTER_SCALE;
-const PLAYER_ATTACK_FX_END_SCALE = PLAYER_SPRITE_SCALE * 1.35;
+const PLAYER_ATTACK_SIDE_OFFSET = 5.12 * 1.5;
+const PLAYER_WEAPON_WAIST_OFFSET_Y = 15 * UI_SCALE;
+const LIGHT_ATTACK_EFFECT_ALPHA = 0.45;
+const HARD_ATTACK_EFFECT_SCALE = 1.18;
+const LIGHT_ATTACK_GLOW_ALPHA = 0.3;
+const HARD_ATTACK_GLOW_ALPHA = 0.68;
+/** 武器透明内容的握把末端；旋转与镜像都必须围绕此点。 */
+const LIGHT_STICK_ORIGIN = { x: 101 / 128, y: 98 / 128 };
+const BATON_ORIGIN = { x: 123 / 128, y: 121 / 128 };
 
 export class Player {
   scene: MainScene;
@@ -44,6 +50,7 @@ export class Player {
   isDodging = false;
 
   private attackFx: Phaser.GameObjects.Sprite;
+  private attackGlowFx: Phaser.GameObjects.Sprite;
   private weaponSprite: Phaser.GameObjects.Image;
   private keys: Record<'W' | 'A' | 'S' | 'D', Phaser.Input.Keyboard.Key>;
   private invulnUntil = 0;
@@ -51,6 +58,8 @@ export class Player {
   private lastMoveAngle = 0;
   private action: PlayerAction = 'idle';
   private actionLockedUntil = 0;
+  private weaponAttackUntil = 0;
+  private lastDodgeAt = -Infinity;
   private dead = false;
 
   constructor(scene: MainScene, x: number, y: number) {
@@ -70,9 +79,18 @@ export class Player {
       .setScale(PLAYER_SPRITE_SCALE)
       .setVisible(false);
     this.attackFx.on(Phaser.Animations.Events.ANIMATION_COMPLETE, () => this.attackFx.setVisible(false));
+    this.attackGlowFx = scene.add
+      .sprite(x, y, 'player-attack-light-1')
+      .setScale(PLAYER_SPRITE_SCALE)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setVisible(false);
+    this.attackGlowFx.on(
+      Phaser.Animations.Events.ANIMATION_COMPLETE,
+      () => this.attackGlowFx.setVisible(false)
+    );
     this.weaponSprite = scene.add
       .image(x, y, 'player-weapon-glowsticks')
-      .setOrigin(0.5, 0.5)
+      .setOrigin(LIGHT_STICK_ORIGIN.x, LIGHT_STICK_ORIGIN.y)
       .setScale(PLAYER_WEAPON_SCALE);
     scene.textures.get('player-weapon-glowsticks').setFilter(Phaser.Textures.FilterMode.NEAREST);
     scene.textures.get('player-weapon-baton').setFilter(Phaser.Textures.FilterMode.NEAREST);
@@ -118,7 +136,19 @@ export class Player {
 
     const playerDepth = worldDepth(this.y + this.body.halfHeight);
     this.go.setDepth(playerDepth);
-    this.weaponSprite.setDepth(playerDepth - 0.001);
+    this.weaponSprite.setDepth(playerDepth + 0.002);
+    if (this.attackFx.visible) {
+      this.attackFx
+        .setPosition(this.x, this.y)
+        .setFlipX(this.go.flipX)
+        .setDepth(playerDepth - 0.002);
+    }
+    if (this.attackGlowFx.visible) {
+      this.attackGlowFx
+        .setPosition(this.x, this.y)
+        .setFlipX(this.go.flipX)
+        .setDepth(playerDepth - 0.003);
+    }
     this.updateWeaponVisual();
     this.updateInvulnerabilityBlink(timeMs);
   }
@@ -132,47 +162,54 @@ export class Player {
   playAttackAnimation(heavy: boolean): void {
     if (!this.isDodging) {
       const attackAction = heavy ? 'attack-hard' : 'attack-light';
-      const origin = this.getAttackOrigin();
       const playerDepth = worldDepth(this.y + this.body.halfHeight);
       this.actionLockedUntil = this.scene.time.now + ATTACK_EFFECT_DURATION_MS;
       this.setAction(attackAction, true);
       this.scene.tweens.killTweensOf(this.attackFx);
+      this.scene.tweens.killTweensOf(this.attackGlowFx);
       playPlayerAttackEffect(this.attackFx, attackAction);
+      playPlayerAttackEffect(this.attackGlowFx, attackAction);
       this.attackFx
-        .setPosition(origin.x, origin.y)
+        .setPosition(this.x, this.y)
         .setFlipX(this.go.flipX)
-        .setScale(PLAYER_SPRITE_SCALE)
-        .setAlpha(0.95)
+        .setScale(PLAYER_SPRITE_SCALE * (heavy ? HARD_ATTACK_EFFECT_SCALE : 1))
+        .setAlpha(heavy ? 1 : LIGHT_ATTACK_EFFECT_ALPHA)
         .setDepth(playerDepth - 0.002);
+      const glowStartScale = PLAYER_SPRITE_SCALE * (heavy ? HARD_ATTACK_EFFECT_SCALE * 1.08 : 1.04);
+      this.attackGlowFx
+        .setPosition(this.x, this.y)
+        .setFlipX(this.go.flipX)
+        .setScale(glowStartScale)
+        .setAlpha(heavy ? HARD_ATTACK_GLOW_ALPHA : LIGHT_ATTACK_GLOW_ALPHA)
+        .setTint(heavy ? 0xffb347 : 0xb9f8ff)
+        .setDepth(playerDepth - 0.003);
       this.scene.tweens.add({
-        targets: this.attackFx,
-        scaleX: PLAYER_ATTACK_FX_END_SCALE,
-        scaleY: PLAYER_ATTACK_FX_END_SCALE,
+        targets: this.attackGlowFx,
+        scaleX: glowStartScale * (heavy ? 1.28 : 1.14),
+        scaleY: glowStartScale * (heavy ? 1.28 : 1.14),
         alpha: 0,
         duration: ATTACK_EFFECT_DURATION_MS,
-        ease: 'Quad.easeOut',
-        onComplete: () => this.attackFx.setVisible(false)
+        ease: 'Cubic.easeOut',
+        onComplete: () => this.attackGlowFx.setVisible(false)
       });
+      this.playWeaponAttackMotion(heavy);
     }
   }
 
   onBeat(): void {
-    // 踩拍律动：轻微蹲弹，与场边律动带、HP 血条的节拍呼吸保持一致
-    if (!this.dead && !this.isDodging) {
-      this.scene.tweens.add({
-        targets: this.go,
-        scaleX: { from: PLAYER_SPRITE_SCALE * 1.06, to: PLAYER_SPRITE_SCALE },
-        scaleY: { from: PLAYER_SPRITE_SCALE * 0.95, to: PLAYER_SPRITE_SCALE },
-        duration: 150,
-        ease: 'Sine.easeOut'
-      });
-    }
+    // 角色保持固定的屏幕视觉尺寸；节拍律动由场边、HP 和镜头承担。
   }
 
   tryDodge(): boolean {
     if (this.isDodging || this.dead) return false;
     const conductor = this.scene.conductor;
     if (!conductor.started) return false;
+
+    const dodgeStartedAt = this.scene.time.now;
+    if (
+      this.scene.combo.progress <= 0 &&
+      dodgeStartedAt - this.lastDodgeAt < EMPTY_COMBO_DODGE_INTERVAL_MS
+    ) return false;
 
     const dir = this.moveDir();
     if (dir.lengthSq() === 0) return false;
@@ -189,6 +226,7 @@ export class Player {
     const ty = Phaser.Math.Clamp(this.y + dir.y * DODGE_DISTANCE, bounds.top + padY, bounds.bottom - padY);
 
     this.isDodging = true;
+    this.lastDodgeAt = dodgeStartedAt;
     this.actionLockedUntil = 0;
     this.setAction('dash', true);
     this.body.setVelocity(0, 0);
@@ -225,7 +263,7 @@ export class Player {
     this.invulnUntil = now + 600;
     this.scene.queueBeatSfx('playerHurt');
     this.scene.hud.setHp(this.hp, this.maxHp);
-    this.flash(0xef4444);
+    this.flashHitWhite();
     this.scene.spawnImpactFx(this.x, this.y, 0xef4444, true);
     if (this.hp <= 0) {
       this.scene.onPlayerDied();
@@ -251,6 +289,7 @@ export class Player {
     this.go.clearTint();
     this.go.setAlpha(0.85);
     this.attackFx.setVisible(false);
+    this.attackGlowFx.setVisible(false);
     this.weaponSprite.setVisible(false);
   }
 
@@ -269,6 +308,13 @@ export class Player {
   private flash(color: number): void {
     this.go.setTint(color);
     this.scene.time.delayedCall(120, () => this.go.clearTint());
+  }
+
+  private flashHitWhite(): void {
+    this.go.setTintFill();
+    this.scene.time.delayedCall(90, () => {
+      if (!this.dead) this.go.clearTint();
+    });
   }
 
   private moveDir(): Phaser.Math.Vector2 {
@@ -322,22 +368,54 @@ export class Player {
     });
   }
 
-  /** 正式武器贴图固定在角色身后；角色朝左/右时瞬切到身体同侧并镜像。 */
+  /** 玩家棍状武器位于角色前方；握把末端固定在腰部中线，左右严格镜像。 */
   private updateWeaponVisual(): void {
     const facingRight = Math.cos(this.aimAngle) >= 0;
-    const side = facingRight ? 1 : -1;
     const isBaton = this.weapon.id === 'baton';
     this.weaponSprite
       .setVisible(true)
       .setTexture(isBaton ? 'player-weapon-baton' : 'player-weapon-glowsticks')
-      .setOrigin(0.5, 0.5)
+      .setOrigin(
+        isBaton ? BATON_ORIGIN.x : LIGHT_STICK_ORIGIN.x,
+        isBaton ? BATON_ORIGIN.y : LIGHT_STICK_ORIGIN.y
+      )
       .setPosition(
-        this.x + side * PLAYER_WEAPON_SIDE_OFFSET,
+        this.x,
         this.y + PLAYER_WEAPON_WAIST_OFFSET_Y
       )
-      .setScale(PLAYER_WEAPON_SCALE)
-      .setFlipX(facingRight)
-      .setRotation(0);
+      // Phaser 的 flipX 只翻纹理 UV，非中心 Origin 会随之换到另一端。
+      // 使用负 scaleX 才能围绕握把 Origin 做真正的几何镜像。
+      .setFlipX(false)
+      .setScale(
+        facingRight ? -PLAYER_WEAPON_SCALE : PLAYER_WEAPON_SCALE,
+        PLAYER_WEAPON_SCALE
+      );
+    if (this.scene.time.now >= this.weaponAttackUntil) this.weaponSprite.setRotation(0);
+  }
+
+  /** 轻 / 重攻击使用不同幅度的非线性挥击，200ms 内回到握持角。 */
+  private playWeaponAttackMotion(heavy: boolean): void {
+    const downwardDirection = this.go.flipX ? 1 : -1;
+    const windup = Phaser.Math.DegToRad((heavy ? -14 : -9) * downwardDirection);
+    const strike = Phaser.Math.DegToRad((heavy ? 76 : 62) * downwardDirection);
+    const windupMs = heavy ? 72 : 54;
+    this.weaponAttackUntil = this.scene.time.now + ATTACK_EFFECT_DURATION_MS;
+    this.scene.tweens.killTweensOf(this.weaponSprite);
+    this.weaponSprite.setRotation(windup);
+    this.scene.tweens.add({
+      targets: this.weaponSprite,
+      rotation: strike,
+      duration: windupMs,
+      ease: 'Cubic.easeIn',
+      onComplete: () => {
+        this.scene.tweens.add({
+          targets: this.weaponSprite,
+          rotation: 0,
+          duration: ATTACK_EFFECT_DURATION_MS - windupMs,
+          ease: heavy ? 'Back.easeOut' : 'Quad.easeOut'
+        });
+      }
+    });
   }
 
   private updateInvulnerabilityBlink(timeMs: number): void {

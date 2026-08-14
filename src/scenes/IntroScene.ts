@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { UI_SCALE } from '../game/displayConfig';
 
 const INTRO_VIDEO_KEY = 'intro-video';
 
@@ -20,6 +21,8 @@ export class IntroScene extends Phaser.Scene {
   }
 
   create(): void {
+    // 片头沿用旧 1280×720 排版，但在 1920×1080 内部画布上等比铺满。
+    this.cameras.main.setZoom(UI_SCALE).centerOn(640, 360);
     this.cameras.main.setBackgroundColor('#000000');
 
     const backdrop = this.add.rectangle(640, 360, 1280, 720, 0x090516);

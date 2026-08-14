@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import type { Conductor } from '../core/Conductor';
 import type { BeatKey } from './weapons';
 import { MAIN_CAMERA_BASE_ZOOM, screenLayerOffset } from './cameraConfig';
+import { UI_SCALE, VIEW_HEIGHT, VIEW_WIDTH } from './displayConfig';
 
 const BAR_CENTER_X = 640;
 const BAR_Y = 668;
@@ -155,14 +156,14 @@ export class HUD {
       .setDepth(20);
 
     this.victoryBackdrop = scene.add
-      .rectangle(640, 320, 430, 116, 0x34223f, 0.92)
+      .rectangle(VIEW_WIDTH / 2, UI_SCALE * 320, UI_SCALE * 430, UI_SCALE * 116, 0x34223f, 0.92)
       .setStrokeStyle(2, 0x6b3b70, 0.7)
       .setDepth(0.2)
       .setVisible(false);
     this.victoryText = scene.add
-      .text(640, 320, 'VICTORY', {
+      .text(VIEW_WIDTH / 2, UI_SCALE * 320, 'VICTORY', {
         fontFamily: 'Arial',
-        fontSize: '64px',
+        fontSize: `${64 * UI_SCALE}px`,
         fontStyle: 'bold',
         color: '#d8b4fe',
         stroke: '#2b1834',
@@ -175,9 +176,9 @@ export class HUD {
 
     // 主场景镜头会做轻微前探和拉远；用独立屏幕层抵消 scroll 与 zoom，保留旧 HUD 像素布局。
     this.screenLayer = scene.add
-      .container(screenLayerOffset(1280), screenLayerOffset(720))
+      .container(screenLayerOffset(VIEW_WIDTH), screenLayerOffset(VIEW_HEIGHT))
       .setDepth(10)
-      .setScale(1 / MAIN_CAMERA_BASE_ZOOM)
+      .setScale(UI_SCALE / MAIN_CAMERA_BASE_ZOOM)
       .setScrollFactor(0);
     this.screenLayer.add([
       this.panel,

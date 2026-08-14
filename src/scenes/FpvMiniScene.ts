@@ -1,27 +1,28 @@
 import Phaser from 'phaser';
 import type { MainScene } from './MainScene';
 import type { Enemy } from '../game/enemies';
+import { VIEW_HEIGHT, VIEW_WIDTH, ui } from '../game/displayConfig';
 
 /**
  * 右下角的只读 FPV 观察窗：沿用实验分支的针孔投影，但不改变主场景相机、
  * HUD、输入或判定。它只是同一战场的第二种观看方式。
  */
-// 锚定屏幕右下角，而非战斗区：仅保留 20px 外边距。
-const PANEL_X = 1020;
-const PANEL_Y = 547;
-const PANEL_W = 240;
-const PANEL_H = 153;
-const HORIZON_Y = 63;
+// 锚定屏幕右下角；旧 20px 外边距和 240×153 尺寸按 1.5 倍迁移。
+const PANEL_W = ui(240);
+const PANEL_H = ui(153);
+const PANEL_X = VIEW_WIDTH - PANEL_W - ui(20);
+const PANEL_Y = VIEW_HEIGHT - PANEL_H - ui(20);
+const HORIZON_Y = ui(63);
 const FOV = Phaser.Math.DegToRad(100);
 const FOCAL = PANEL_W / 2 / Math.tan(FOV / 2);
-const EYE_HEIGHT = 34.5;
-const NEAR_CLIP = 24;
+const EYE_HEIGHT = ui(34.5);
+const NEAR_CLIP = ui(24);
 const ENEMY_POOL = 40;
 const BULLET_POOL = 80;
-const ARENA_LEFT = 94;
-const ARENA_RIGHT = 1186;
-const ARENA_TOP = 12;
-const ARENA_BOTTOM = 626;
+const ARENA_LEFT = ui(94);
+const ARENA_RIGHT = ui(1186);
+const ARENA_TOP = ui(12);
+const ARENA_BOTTOM = ui(626);
 
 interface Projected {
   screenX: number;
@@ -70,8 +71,8 @@ export class FpvMiniScene extends Phaser.Scene {
     for (let index = 0; index < BULLET_POOL; index++) {
       this.freeBulletSprites.push(this.add.rectangle(0, 0, 4, 4, 0xffffff).setVisible(false));
     }
-    for (let x = ARENA_LEFT; x <= ARENA_RIGHT; x += 180) this.addPost(x, ARENA_TOP), this.addPost(x, ARENA_BOTTOM);
-    for (let y = ARENA_TOP + 160; y < ARENA_BOTTOM; y += 180) this.addPost(ARENA_LEFT, y), this.addPost(ARENA_RIGHT, y);
+    for (let x = ARENA_LEFT; x <= ARENA_RIGHT; x += ui(180)) this.addPost(x, ARENA_TOP), this.addPost(x, ARENA_BOTTOM);
+    for (let y = ARENA_TOP + ui(160); y < ARENA_BOTTOM; y += ui(180)) this.addPost(ARENA_LEFT, y), this.addPost(ARENA_RIGHT, y);
   }
 
   setPanelEnabled(enabled: boolean): void {
