@@ -1,7 +1,8 @@
 import Phaser from 'phaser';
 import { GLOWSTICKS, type WeaponDef } from './weapons';
 import { applyStickDeadzone } from './GamepadControls';
-import { PLAYER_SPRITE_SCALE, playPlayerAnimation, type PlayerAction } from './playerAnimation';
+import { isInsideMainView } from './viewLayout';
+import { playPlayerAnimation, type PlayerAction } from './playerAnimation';
 import type { MainScene } from '../scenes/MainScene';
 import { worldDepth, worldSize } from './visualScale';
 
@@ -52,11 +53,16 @@ export class Player {
   private lastPointerY = 0;
   private action: PlayerAction = 'idle';
   private dead = false;
+  private artOverrideTexture?: string;
+  private defaultArtWidth = 0;
+  private defaultArtHeight = 0;
 
   constructor(scene: MainScene, x: number, y: number) {
     this.scene = scene;
     this.go = scene.add.sprite(x, y, 'player-idle-1').setDepth(5);
     playPlayerAnimation(this.go, 'idle');
+    this.defaultArtWidth = this.go.displayWidth;
+    this.defaultArtHeight = this.go.displayHeight;
     scene.physics.add.existing(this.go);
     this.body = this.go.body as Phaser.Physics.Arcade.Body;
     // 受击判定使用默认全帧矩形：刚好包裹裁切后的角色内容，且随缩放自动同步（body 世界尺寸 = 源帧尺寸 × scale）
@@ -73,6 +79,7 @@ export class Player {
     >;
     this.lastPointerX = scene.input.activePointer.x;
     this.lastPointerY = scene.input.activePointer.y;
+    if (scene.hasArtTextureOverride('player')) this.setArtTextureOverride(scene.getArtTextureKey('player'));
   }
 
   get x(): number {
@@ -135,10 +142,12 @@ export class Player {
 
     // 踩拍律动：轻微蹲弹，与场边律动带、HP 血条的节拍呼吸保持一致
     if (!this.dead && !this.isDodging) {
+      const baseScaleX = this.go.scaleX;
+      const baseScaleY = this.go.scaleY;
       this.scene.tweens.add({
         targets: this.go,
-        scaleX: { from: PLAYER_SPRITE_SCALE * 1.06, to: PLAYER_SPRITE_SCALE },
-        scaleY: { from: PLAYER_SPRITE_SCALE * 0.95, to: PLAYER_SPRITE_SCALE },
+        scaleX: { from: baseScaleX * 1.06, to: baseScaleX },
+        scaleY: { from: baseScaleY * 0.95, to: baseScaleY },
         duration: 150,
         ease: 'Sine.easeOut'
       });
@@ -229,6 +238,19 @@ export class Player {
     this.weaponBars.forEach((bar) => bar.setVisible(false));
   }
 
+  /** 美术测试工具使用静态图覆盖动画；恢复后继续当前动作。 */
+  setArtTextureOverride(textureKey?: string): void {
+    this.scene.tweens.killTweensOf(this.go);
+    this.artOverrideTexture = textureKey;
+    this.go.stop();
+    if (textureKey) {
+      this.go.setTexture(textureKey).setDisplaySize(this.defaultArtWidth, this.defaultArtHeight);
+    } else {
+      playPlayerAnimation(this.go, this.action);
+    }
+    this.body.setSize(this.go.frame.realWidth, this.go.frame.realHeight, true);
+  }
+
   /** 输入错误的噪音反馈 */
   errorFlash(): void {
     this.flash(0xef4444);
@@ -261,9 +283,13 @@ export class Player {
 
   private updateAim(): void {
     const pointer = this.scene.input.activePointer;
-    const pointerMoved = pointer.x !== this.lastPointerX || pointer.y !== this.lastPointerY;
-    this.lastPointerX = pointer.x;
-    this.lastPointerY = pointer.y;
+    const pointerInMainView = isInsideMainView(pointer.x, pointer.y);
+    const pointerMoved =
+      pointerInMainView && (pointer.x !== this.lastPointerX || pointer.y !== this.lastPointerY);
+    if (pointerInMainView) {
+      this.lastPointerX = pointer.x;
+      this.lastPointerY = pointer.y;
+    }
 
     const pad = this.scene.input.gamepad?.pad1;
     if (pad) {
@@ -280,7 +306,9 @@ export class Player {
 
     const rawAngle = this.gamepadAimActive
       ? this.gamepadAimAngle
-      : Phaser.Math.Angle.Between(this.x, this.y, pointer.worldX, pointer.worldY);
+      : pointerInMainView
+        ? Phaser.Math.Angle.Between(this.x, this.y, pointer.worldX, pointer.worldY)
+        : this.rawAimAngle;
     this.rawAimAngle = rawAngle;
     this.aimAngle = this.scene.getAssistedAimAngle(rawAngle);
   }
@@ -294,6 +322,7 @@ export class Player {
   private setAction(action: PlayerAction): void {
     if (this.action === action) return;
     this.action = action;
+    if (this.artOverrideTexture) return;
     playPlayerAnimation(this.go, action);
   }
 

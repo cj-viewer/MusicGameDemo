@@ -189,7 +189,12 @@ export class SmallGuard extends Enemy {
   private movementAngle = 0;
 
   constructor(scene: MainScene, x: number, y: number) {
-    super(scene, scene.add.image(x, y, 'guard').setDisplaySize(worldSize(46), worldSize(70)), 40, 0xffffff);
+    super(
+      scene,
+      scene.add.image(x, y, scene.getArtTextureKey('guard')).setDisplaySize(worldSize(46), worldSize(70)),
+      40,
+      0xffffff
+    );
     this.chooseMovementAngle();
   }
 
@@ -198,7 +203,7 @@ export class SmallGuard extends Enemy {
     this.chooseMovementAngle();
     if (info.beatInMeasure !== 0) return;
     const angle = this.angleToPlayer();
-    this.scene.spawnEnemyProjectile(this.x, this.y, angle, 12, 0x3b82f6);
+    this.scene.spawnEnemyProjectile(this.x, this.y, angle, 12, 0x67e8f9, 'capsule');
   }
 
   protected move(dtMs: number): void {
@@ -227,7 +232,12 @@ export class MidGuard extends Enemy {
   private laserGfx: Phaser.GameObjects.Graphics;
 
   constructor(scene: MainScene, x: number, y: number) {
-    super(scene, scene.add.image(x, y, 'guard').setDisplaySize(worldSize(52), worldSize(78)), 60, 0xffffff);
+    super(
+      scene,
+      scene.add.image(x, y, scene.getArtTextureKey('guard')).setDisplaySize(worldSize(52), worldSize(78)),
+      60,
+      0xffffff
+    );
     this.lockedAngle = this.angleToPlayer();
     this.laserGfx = scene.add.graphics().setDepth(2);
   }
@@ -236,7 +246,7 @@ export class MidGuard extends Enemy {
     if (this.dead || info.beatInMeasure !== 0) return;
     this.lockedAngle = this.angleToPlayer();
     this.aiming = false;
-    this.scene.spawnEnemyProjectile(this.x, this.y, this.lockedAngle, 12, 0x3b82f6);
+    this.scene.spawnEnemyProjectile(this.x, this.y, this.lockedAngle, 12, 0x67e8f9, 'capsule');
     this.flashLaser(this.lockedAngle);
   }
 
@@ -299,20 +309,38 @@ export class FanEnemy extends Enemy {
   private movementAngle = 0;
   private attackUntil = 0;
   private hurtRollUntil = 0;
+  private artOverrideTexture?: string;
+  private defaultArtWidth = 0;
+  private defaultArtHeight = 0;
 
   constructor(scene: MainScene, x: number, y: number) {
     const sprite = scene.add.sprite(x, y, 'fan-run-2');
     super(scene, sprite, 40, 0xffffff);
     this.sprite = sprite;
     playFanAnimation(this.sprite, 'run');
+    this.defaultArtWidth = this.sprite.displayWidth;
+    this.defaultArtHeight = this.sprite.displayHeight;
+    if (scene.hasArtTextureOverride('fan')) this.setArtTextureOverride(scene.getArtTextureKey('fan'));
     this.chooseMovementAngle();
+  }
+
+  /** 美术测试工具使用静态图覆盖序列帧；恢复后回到跑步动画。 */
+  setArtTextureOverride(textureKey?: string): void {
+    this.artOverrideTexture = textureKey;
+    this.sprite.stop();
+    if (textureKey) {
+      this.sprite.setTexture(textureKey).setDisplaySize(this.defaultArtWidth, this.defaultArtHeight);
+    } else {
+      playFanAnimation(this.sprite, 'run', true);
+    }
+    this.go.body.setSize(this.sprite.frame.realWidth, this.sprite.frame.realHeight, true);
   }
 
   takeDamage(amount: number, knockbackAngle?: number, knockbackSpeed = 0): void {
     super.takeDamage(amount, knockbackAngle, knockbackSpeed);
     if (this.dead) return;
     this.hurtRollUntil = this.scene.time.now + FAN_HURT_ROLL_DURATION_MS;
-    playFanAnimation(this.sprite, 'roll', true);
+    if (!this.artOverrideTexture) playFanAnimation(this.sprite, 'roll', true);
   }
 
   onBeat(info: BeatInfo): void {
@@ -322,7 +350,7 @@ export class FanEnemy extends Enemy {
     const angle = this.angleToPlayer();
     this.updateFacing(Math.cos(angle));
     this.playAttack();
-    this.scene.spawnEnemyProjectile(this.x, this.y, angle, 12, 0x3b82f6);
+    this.scene.spawnEnemyProjectile(this.x, this.y, angle, 12, 0xff5a36, 'orb');
   }
 
   protected move(dtMs: number): void {
@@ -336,10 +364,11 @@ export class FanEnemy extends Enemy {
 
   private playAttack(): void {
     this.attackUntil = this.scene.time.now + FAN_ATTACK_DURATION_MS;
-    playFanAnimation(this.sprite, 'attack', true);
+    if (!this.artOverrideTexture) playFanAnimation(this.sprite, 'attack', true);
   }
 
   private updateAnimation(rolling: boolean): void {
+    if (this.artOverrideTexture) return;
     if (this.scene.time.now < this.hurtRollUntil) return;
     if (this.scene.time.now < this.attackUntil) return;
     const action = rolling ? 'roll' : 'run';

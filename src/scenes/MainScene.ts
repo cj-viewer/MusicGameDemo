@@ -5,10 +5,17 @@ import { ComboSystem } from '../game/ComboSystem';
 import { HUD } from '../game/HUD';
 import { Player, PLAYER_RADIUS } from '../game/Player';
 import { registerPlayerAnimations } from '../game/playerAnimation';
+import {
+  PROJECTILE_FX_DEPTH,
+  createLineProjectileFx,
+  createPointProjectileFx,
+  type PointProjectileStyle
+} from '../game/ProjectileFx';
 import { BATON, GLOWSTICKS, getAttackSpec, type WeaponDef } from '../game/weapons';
 import { Enemy, FanEnemy, SmallGuard } from '../game/enemies';
 import { GAMEPAD_BUTTON, rumbleParameters, type RumbleKind } from '../game/GamepadControls';
 import { WORLD_OBJECT_SCALE, worldDepth, worldSize } from '../game/visualScale';
+import { MAIN_VIEW_X, VIEW_HEIGHT, VIEW_WIDTH, isInsideMainView } from '../game/viewLayout';
 import type { FpvMiniScene } from './FpvMiniScene';
 
 // bgm3.mp3 的实测节拍：对全曲 onset 包络做自相关 + 网格相位搜索得出 BPM，首拍在文件内 0.026s 处。
@@ -20,8 +27,6 @@ const DEFAULT_MASTER_VOLUME = 1.5;
 const MAX_MASTER_VOLUME = 3;
 const VOLUME_TRACK_X = 440;
 const VOLUME_TRACK_WIDTH = 400;
-const VIEW_WIDTH = 1280;
-const VIEW_HEIGHT = 720;
 const ARENA_MARGIN = 12;
 const RHYTHM_EDGE_BAND = 82;
 const ARENA = {
@@ -41,11 +46,14 @@ const TUTORIAL_CALIBRATION_SAMPLES = 12;
 const TUTORIAL_CALIBRATION_MAX_ABS_OFFSET = 0.12;
 const TUTORIAL_CALIBRATION_CANDIDATE_WINDOW = 0.18;
 const TUTORIAL_CALIBRATION_MAX_SPREAD = 0.04;
-const PLAYER_BULLET_LENGTH = worldSize(38);
+const PLAYER_BEAM_LENGTH = 720;
+const PLAYER_BEAM_THICKNESS = worldSize(7);
+const PLAYER_BEAM_DURATION = 160;
+const PLAYER_BEAM_HIT_DURATION = 90;
 const ENEMY_BULLET_LENGTH = worldSize(36 * 0.75);
 const BULLET_THICKNESS = worldSize(10);
 const ENEMY_BULLET_THICKNESS = BULLET_THICKNESS * 0.75;
-const PLAYER_BULLET_SPEED = 360;
+const MAX_ENEMY_BULLETS = 240;
 const ENEMY_DRIFT_SPEED = 6;
 const ENEMY_BEAT_BURST_SPEED = 600;
 const ENEMY_BEAT_BURST_WINDOW = 0.1;
@@ -55,6 +63,14 @@ const GLOWSTICK_KNOCKBACK_SPEED = 150;
 const BATON_KNOCKBACK_SPEED = GLOWSTICK_KNOCKBACK_SPEED * 1.25;
 
 type GameState = 'title' | 'tutorial' | 'tutorialConfirm' | 'playing' | 'intermission' | 'over';
+export type ArtAssetSlot = 'background' | 'player' | 'guard' | 'fan';
+type CharacterArtSlot = Exclude<ArtAssetSlot, 'background'>;
+
+const DEFAULT_ART_TEXTURE: Record<CharacterArtSlot, string> = {
+  player: 'player-idle-1',
+  guard: 'guard',
+  fan: 'fan-run-2'
+};
 
 /** 教学要求连续全对的小节数 */
 const TUTORIAL_TARGET_STREAK = 3;
@@ -113,6 +129,11 @@ export class MainScene extends Phaser.Scene {
   /** 调试：B 键切换判定框显示（红=受击判定，绿=武器/子弹判定），重开局保留开关状态 */
   private debugHitboxes = false;
   private debugGfx!: Phaser.GameObjects.Graphics;
+  private artTextureOverrides: Partial<Record<CharacterArtSlot, string>> = {};
+  private customArtTextureKeys: Partial<Record<ArtAssetSlot, string>> = {};
+  private artTextureSerial = 0;
+  private artBackground?: Phaser.GameObjects.Image;
+  private artBackgroundSize?: { width: number; height: number };
 
   // 顶部连段面板只在教学模式显示；正式游戏改用场地扩散框提示拍点
   private patternPanel?: Phaser.GameObjects.Container;
@@ -139,6 +160,20 @@ export class MainScene extends Phaser.Scene {
   preload(): void {
     const asset = (file: string): string => `${import.meta.env.BASE_URL}assets/${file}`;
     this.load.image('guard', asset('images/characters/guard.png'));
+    this.load.image('storybook-pillar', asset('images/environment/storybook/pillar.png'));
+    this.load.image('storybook-crate', asset('images/environment/storybook/equipment-crate.png'));
+    this.load.image('storybook-flowers', asset('images/environment/storybook/flower-patch.png'));
+    this.load.image('storybook-stage', asset('images/environment/storybook/main-stage.png'));
+    this.load.image('storybook-tree', asset('images/environment/storybook/festival-tree.png'));
+    this.load.image('storybook-tent', asset('images/environment/storybook/festival-tent.png'));
+    this.load.image('storybook-lantern', asset('images/environment/storybook/garden-lantern.png'));
+    this.load.image('storybook-bench', asset('images/environment/storybook/festival-bench.png'));
+    this.load.image('storybook-cloud-wide', asset('images/environment/storybook/sky/cloud-wide.png'));
+    this.load.image('storybook-cloud-medium', asset('images/environment/storybook/sky/cloud-medium.png'));
+    this.load.image('storybook-cloud-wisp', asset('images/environment/storybook/sky/cloud-wisp.png'));
+    this.load.image('storybook-bird-flock', asset('images/environment/storybook/sky/bird-flock.png'));
+    this.load.image('storybook-bird-pair', asset('images/environment/storybook/sky/bird-pair.png'));
+    this.load.image('storybook-shooting-star', asset('images/environment/storybook/sky/shooting-star.png'));
     for (const animation of ['run', 'roll', 'attack']) {
       const firstFrame = animation === 'run' ? 2 : 1;
       const lastFrame = animation === 'run' ? 5 : 6;
@@ -160,6 +195,8 @@ export class MainScene extends Phaser.Scene {
   }
 
   create(): void {
+    // 主场景只渲染在横向双联画布的左侧 16:9 视口。
+    this.cameras.main.setViewport(MAIN_VIEW_X, 0, VIEW_WIDTH, VIEW_HEIGHT);
     // 重开局（R 键）会在同一个 Scene 实例上重新执行 create()，先停掉旧的 bgm 避免叠放
     this.sound.stopByKey('bgm');
     this.enemies = [];
@@ -180,6 +217,7 @@ export class MainScene extends Phaser.Scene {
     this.tutorialFailedMeasures.clear();
     this.suppressAttackUntil = 0;
     this.countdownRemaining = -1;
+    this.artBackground = undefined;
     this.createFanAnimations();
     registerPlayerAnimations(this);
 
@@ -204,6 +242,10 @@ export class MainScene extends Phaser.Scene {
       .setVisible(false)
       .setDepth(8);
     this.createRhythmEdgeBlocks();
+    const backgroundKey = this.customArtTextureKeys.background;
+    if (backgroundKey && this.artBackgroundSize) {
+      this.applyBackgroundTexture(backgroundKey, this.artBackgroundSize.width, this.artBackgroundSize.height);
+    }
 
     this.debugGfx = this.add.graphics().setDepth(20);
 
@@ -284,6 +326,7 @@ export class MainScene extends Phaser.Scene {
     this.player.update(this.time.now, delta);
     for (const enemy of this.enemies) enemy.update(delta);
     this.updateEnemyBulletMotion();
+    this.updateProjectileVisuals();
     this.updateStraightBulletHitboxes();
     this.updateBulletTrails(delta);
     this.cleanupBullets();
@@ -295,7 +338,7 @@ export class MainScene extends Phaser.Scene {
     }
   }
 
-  /** 供右上角观察窗读取的只读状态；它不拥有任何主玩法状态。 */
+  /** 供右侧 FPV 视口读取的只读状态；它不拥有任何主玩法状态。 */
   get isGamePaused(): boolean {
     return this.gamePaused;
   }
@@ -316,6 +359,74 @@ export class MainScene extends Phaser.Scene {
     return this.playerBullets?.getChildren() ?? [];
   }
 
+  getArtTextureKey(slot: CharacterArtSlot): string {
+    return this.artTextureOverrides[slot] ?? DEFAULT_ART_TEXTURE[slot];
+  }
+
+  hasArtTextureOverride(slot: CharacterArtSlot): boolean {
+    return Boolean(this.artTextureOverrides[slot]);
+  }
+
+  applyArtAsset(slot: ArtAssetSlot, image: HTMLImageElement): void {
+    const key = `art-preview-${slot}-${++this.artTextureSerial}`;
+    const texture = this.textures.addImage(key, image);
+    if (!texture) throw new Error(`Unable to create texture for ${slot}`);
+
+    const previousKey = this.customArtTextureKeys[slot];
+    this.customArtTextureKeys[slot] = key;
+    if (slot === 'background') {
+      this.artBackgroundSize = { width: image.naturalWidth, height: image.naturalHeight };
+      this.applyBackgroundTexture(key, image.naturalWidth, image.naturalHeight);
+    } else {
+      this.artTextureOverrides[slot] = key;
+      this.applyCharacterTexture(slot, key);
+    }
+    if (previousKey && this.textures.exists(previousKey)) this.textures.remove(previousKey);
+  }
+
+  resetArtAsset(slot: ArtAssetSlot): void {
+    const previousKey = this.customArtTextureKeys[slot];
+    delete this.customArtTextureKeys[slot];
+    if (slot === 'background') {
+      this.artBackground?.destroy();
+      this.artBackground = undefined;
+      this.artBackgroundSize = undefined;
+    } else {
+      delete this.artTextureOverrides[slot];
+      this.applyCharacterTexture(slot, undefined);
+    }
+    if (previousKey && this.textures.exists(previousKey)) this.textures.remove(previousKey);
+  }
+
+  resetAllArtAssets(): void {
+    for (const slot of ['background', 'player', 'guard', 'fan'] as ArtAssetSlot[]) this.resetArtAsset(slot);
+  }
+
+  private applyBackgroundTexture(key: string, sourceWidth: number, sourceHeight: number): void {
+    if (!this.artBackground?.active) {
+      this.artBackground = this.add.image(VIEW_WIDTH / 2, VIEW_HEIGHT / 2, key).setDepth(0);
+    } else {
+      this.artBackground.setTexture(key);
+    }
+    const scale = Math.max(VIEW_WIDTH / sourceWidth, VIEW_HEIGHT / sourceHeight);
+    this.artBackground.setDisplaySize(sourceWidth * scale, sourceHeight * scale);
+  }
+
+  private applyCharacterTexture(slot: CharacterArtSlot, key?: string): void {
+    if (slot === 'player') {
+      this.player?.setArtTextureOverride(key);
+      return;
+    }
+    for (const enemy of this.enemies) {
+      if (slot === 'fan' && enemy instanceof FanEnemy) {
+        enemy.setArtTextureOverride(key);
+      } else if (slot === 'guard' && enemy.go instanceof Phaser.GameObjects.Image) {
+        const size = enemy.kind === 'midGuard' ? [worldSize(52), worldSize(78)] : [worldSize(46), worldSize(70)];
+        enemy.go.setTexture(key ?? DEFAULT_ART_TEXTURE.guard).setDisplaySize(size[0], size[1]);
+      }
+    }
+  }
+
   // ---------- 输入 ----------
 
   private setupInput(): void {
@@ -323,6 +434,8 @@ export class MainScene extends Phaser.Scene {
 
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       if (this.gamePaused || this.volumePanelVisible) return;
+      // 右侧 FPV 始终只读，不能从第二视口触发主场景攻击或标题操作。
+      if (!isInsideMainView(pointer.x, pointer.y)) return;
       if (this.state === 'title') {
         this.startGame();
         return;
@@ -529,7 +642,7 @@ export class MainScene extends Phaser.Scene {
       .text(845, 290, '', { fontFamily: 'Arial', fontSize: '17px', color: '#67e8f9' })
       .setOrigin(0.5);
     const fpvLabel = this.add
-      .text(390, 395, '右下 FPV 观察窗', { fontFamily: 'Arial', fontSize: '17px', color: '#cbd5e1' })
+      .text(390, 395, '右侧伪 3D 第三人称', { fontFamily: 'Arial', fontSize: '17px', color: '#cbd5e1' })
       .setOrigin(0, 0.5);
     this.fpvToggleButton = this.add
       .rectangle(765, 395, 152, 42, 0x0f766e)
@@ -1214,15 +1327,13 @@ export class MainScene extends Phaser.Scene {
         onBeat
       );
     } else {
-      this.spawnPlayerShotgun(
+      this.spawnPlayerBeamVolley(
         this.player.x,
         this.player.y,
         angle,
-        heavy ? 560 : 480,
         damage * mult,
         PLAYER_BULLET_COLOR,
-        pelletCount,
-        onBeat
+        pelletCount
       );
     }
 
@@ -1394,11 +1505,20 @@ export class MainScene extends Phaser.Scene {
     this.tweens.add({ targets: gfx, alpha: 0, duration: 200, onComplete: () => gfx.destroy() });
   }
 
-  spawnBullet(x: number, y: number, angle: number, _speed: number, damage: number, color: number): void {
+  spawnBullet(
+    x: number,
+    y: number,
+    angle: number,
+    _speed: number,
+    damage: number,
+    color: number,
+    style: PointProjectileStyle,
+    visualScale = 1
+  ): void {
     const bullet = this.add
-      .rectangle(x, y, ENEMY_BULLET_LENGTH, ENEMY_BULLET_THICKNESS, color)
+      .rectangle(x, y, ENEMY_BULLET_LENGTH, ENEMY_BULLET_THICKNESS, color, 0)
       .setRotation(angle)
-      .setDepth(4);
+      .setDepth(PROJECTILE_FX_DEPTH.point);
     this.bullets.add(bullet);
     const body = bullet.body as Phaser.Physics.Arcade.Body;
     body.setSize(ENEMY_BULLET_THICKNESS, ENEMY_BULLET_THICKNESS, true);
@@ -1413,63 +1533,146 @@ export class MainScene extends Phaser.Scene {
     bullet.setData('hitboxLength', ENEMY_BULLET_LENGTH);
     bullet.setData('hitboxSize', ENEMY_BULLET_THICKNESS);
     bullet.setData('hitboxAngle', angle);
+    bullet.setData('trailDisabled', true);
+    bullet.setData('projectileVisual', createPointProjectileFx(this, x, y, angle, color, style, visualScale));
     this.createBulletHitboxes(bullet, this.enemyBulletHitboxes, ENEMY_BULLET_THICKNESS);
     this.positionStraightBulletHitboxes(bullet, ENEMY_BULLET_LENGTH, ENEMY_BULLET_THICKNESS, angle);
-    this.createHeldEnemyTrail(bullet);
   }
 
-  spawnEnemyProjectile(x: number, y: number, angle: number, damage: number, color: number): void {
-    this.spawnBullet(
-      x + Math.cos(angle) * worldSize(26),
-      y + Math.sin(angle) * worldSize(26),
-      angle,
-      0,
-      damage,
-      color
-    );
-  }
-
-  private spawnPlayerShotgun(
+  spawnEnemyProjectile(
     x: number,
     y: number,
     angle: number,
-    _speed: number,
     damage: number,
     color: number,
-    pelletCount: number,
-    onBeat = false
+    style: PointProjectileStyle = 'capsule'
   ): void {
-    const judgedBeat = this.conductor.nearestBeat(this.conductor.now()).n;
-    const despawnBeat = Math.max(0, judgedBeat + 1);
+    const layers = [
+      { forward: 62, lateral: 0, angleOffset: 0, scale: 1.08 },
+      { forward: 44, lateral: -13, angleOffset: -6, scale: 0.98 },
+      { forward: 44, lateral: 13, angleOffset: 6, scale: 0.98 },
+      { forward: 26, lateral: -22, angleOffset: -11, scale: 0.86 },
+      { forward: 26, lateral: 0, angleOffset: 0, scale: 0.86 },
+      { forward: 26, lateral: 22, angleOffset: 11, scale: 0.86 }
+    ];
+    const available = Math.max(0, MAX_ENEMY_BULLETS - this.bullets.getLength());
+    const pelletDamage = Math.max(3, Math.round(damage * 0.35));
+    const perpendicular = angle + Math.PI / 2;
+
+    for (const layer of layers.slice(0, available)) {
+      const shotAngle = angle + Phaser.Math.DegToRad(layer.angleOffset);
+      const forward = worldSize(layer.forward);
+      const lateral = worldSize(layer.lateral);
+      this.spawnBullet(
+        x + Math.cos(angle) * forward + Math.cos(perpendicular) * lateral,
+        y + Math.sin(angle) * forward + Math.sin(perpendicular) * lateral,
+        shotAngle,
+        0,
+        pelletDamage,
+        color,
+        style,
+        layer.scale
+      );
+    }
+  }
+
+  private spawnPlayerBeamVolley(
+    x: number,
+    y: number,
+    angle: number,
+    damage: number,
+    color: number,
+    pelletCount: number
+  ): void {
     for (let i = 0; i < pelletCount; i++) {
       const offset = pelletCount === 1 ? 0 : -15 + (30 * i) / (pelletCount - 1);
       const shotAngle = angle + Phaser.Math.DegToRad(offset);
-      const bullet = this.add.rectangle(
-        x + Math.cos(shotAngle) * (PLAYER_RADIUS + worldSize(8)),
-        y + Math.sin(shotAngle) * (PLAYER_RADIUS + worldSize(8)),
-        PLAYER_BULLET_LENGTH,
-        BULLET_THICKNESS,
+      const startX = x + Math.cos(shotAngle) * (PLAYER_RADIUS + worldSize(10));
+      const startY = y + Math.sin(shotAngle) * (PLAYER_RADIUS + worldSize(10));
+      const hit = this.findNearestEnemyAlongBeam(startX, startY, shotAngle, PLAYER_BEAM_LENGTH);
+      const visibleLength = hit?.distance ?? PLAYER_BEAM_LENGTH;
+      const beam = createLineProjectileFx(
+        this,
+        startX + Math.cos(shotAngle) * visibleLength * 0.5,
+        startY + Math.sin(shotAngle) * visibleLength * 0.5,
+        shotAngle,
+        visibleLength,
+        PLAYER_BEAM_THICKNESS,
         color
-      ).setRotation(shotAngle).setDepth(4);
-      // 踩拍弹丸带白色描边发光，与错拍的普通弹丸区分
-      if (onBeat) bullet.setStrokeStyle(2, 0xffffff, 0.95);
-      this.playerBullets.add(bullet);
-      const body = bullet.body as Phaser.Physics.Arcade.Body;
-      body.setSize(BULLET_THICKNESS, BULLET_THICKNESS, true);
-      const velocity = this.physics.velocityFromRotation(shotAngle, PLAYER_BULLET_SPEED);
-      body.setVelocity(velocity.x, velocity.y);
-      bullet.setData('damage', damage);
-      bullet.setData('despawnBeat', despawnBeat);
-      bullet.setData('trailColor', color);
-      bullet.setData('trailThickness', BULLET_THICKNESS);
-      bullet.setData('knockbackAngle', shotAngle);
-      bullet.setData('knockbackSpeed', GLOWSTICK_KNOCKBACK_SPEED);
-      bullet.setData('hitboxMode', 'straight');
-      bullet.setData('hitboxLength', PLAYER_BULLET_LENGTH);
-      bullet.setData('hitboxSize', BULLET_THICKNESS);
-      bullet.setData('hitboxAngle', shotAngle);
-      this.createBulletHitboxes(bullet, this.playerBulletHitboxes, BULLET_THICKNESS);
-      this.positionStraightBulletHitboxes(bullet, PLAYER_BULLET_LENGTH, BULLET_THICKNESS, shotAngle);
+      );
+      if (hit) {
+        hit.enemy.takeDamage(Math.round(damage), shotAngle, GLOWSTICK_KNOCKBACK_SPEED);
+        this.spawnBeamHitFx(hit.x, hit.y, shotAngle, color);
+      }
+      this.tweens.add({
+        targets: beam,
+        alpha: 0,
+        duration: hit ? PLAYER_BEAM_HIT_DURATION : PLAYER_BEAM_DURATION,
+        ease: 'Quad.easeIn',
+        onComplete: () => beam.destroy(true)
+      });
+    }
+  }
+
+  private findNearestEnemyAlongBeam(
+    startX: number,
+    startY: number,
+    angle: number,
+    length: number
+  ): { enemy: Enemy; distance: number; x: number; y: number } | undefined {
+    const dirX = Math.cos(angle);
+    const dirY = Math.sin(angle);
+    let nearest: { enemy: Enemy; distance: number; x: number; y: number } | undefined;
+    for (const enemy of [...this.enemies]) {
+      if (enemy.dead) continue;
+      const dx = enemy.x - startX;
+      const dy = enemy.y - startY;
+      const along = dx * dirX + dy * dirY;
+      if (along < 0 || along > length + enemy.radius) continue;
+      const perpendicular = Math.abs(dx * dirY - dy * dirX);
+      if (perpendicular > enemy.radius + PLAYER_BEAM_THICKNESS * 0.5) continue;
+      const surfaceOffset = Math.sqrt(Math.max(0, enemy.radius ** 2 - Math.min(perpendicular, enemy.radius) ** 2));
+      const distance = Phaser.Math.Clamp(along - surfaceOffset, worldSize(24), length);
+      if (nearest && nearest.distance <= distance) continue;
+      nearest = { enemy, distance, x: startX + dirX * distance, y: startY + dirY * distance };
+    }
+    return nearest;
+  }
+
+  private spawnBeamHitFx(x: number, y: number, angle: number, color: number): void {
+    const glow = this.add
+      .circle(x, y, worldSize(10), color, 0.22)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(8);
+    const core = this.add.circle(x, y, worldSize(4), 0xffffff, 0.95).setDepth(9);
+    const ring = this.add.circle(x, y, worldSize(6)).setStrokeStyle(worldSize(2), 0x9ffcff, 0.75).setDepth(9);
+    this.tweens.add({
+      targets: [glow, core, ring],
+      scale: 1.55,
+      alpha: 0,
+      duration: 130,
+      ease: 'Quad.easeOut',
+      onComplete: () => {
+        glow.destroy();
+        core.destroy();
+        ring.destroy();
+      }
+    });
+    for (const sparkAngle of [angle - 1.05, angle - 0.45, angle + 0.45, angle + 1.05]) {
+      const spark = this.add
+        .rectangle(x, y, worldSize(9), worldSize(2), 0xd8ffff, 0.8)
+        .setRotation(sparkAngle)
+        .setDepth(9);
+      this.tweens.add({
+        targets: spark,
+        x: x + Math.cos(sparkAngle) * worldSize(16),
+        y: y + Math.sin(sparkAngle) * worldSize(16),
+        scaleX: 0.25,
+        alpha: 0,
+        duration: 115,
+        ease: 'Quad.easeOut',
+        onComplete: () => spark.destroy()
+      });
     }
   }
 
@@ -1496,7 +1699,7 @@ export class MainScene extends Phaser.Scene {
     const bullets = radii.map((radius, index) => {
       const arcLength = baseLength * lengthScales[index];
       const halfArcAngle = arcLength / (2 * radius);
-      const visual = this.add.graphics().setDepth(4);
+      const visual = this.add.graphics().setDepth(PROJECTILE_FX_DEPTH.line).setBlendMode(Phaser.BlendModes.ADD);
       const bullet = this.add
         .rectangle(originX, originY, arcLength, BULLET_THICKNESS + 4, BATON_BULLET_COLOR, 0)
         .setDepth(4);
@@ -1511,6 +1714,7 @@ export class MainScene extends Phaser.Scene {
       bullet.setData('trailThickness', BULLET_THICKNESS + 4);
       bullet.setData('knockbackSpeed', BATON_KNOCKBACK_SPEED);
       bullet.setData('hitboxMode', 'arc');
+      bullet.setData('trailDisabled', true);
       this.createBulletHitboxes(bullet, this.playerBulletHitboxes, BULLET_THICKNESS);
       return { bullet, visual, radius, halfArcAngle };
     });
@@ -1527,18 +1731,16 @@ export class MainScene extends Phaser.Scene {
         (bullet.body as Phaser.Physics.Arcade.Body).reset(x, y);
         this.positionArcBulletHitboxes(bullet, originX, originY, radius, angle, halfArcAngle);
         bullet.setData('knockbackAngle', angle + (clockwise ? Math.PI / 2 : -Math.PI / 2));
-        visual.clear();
-        // 踩拍扫击带白色光晕底层
-        if (onBeat) {
-          visual.lineStyle(BULLET_THICKNESS + 8, 0xffffff, 0.22);
-          visual.beginPath();
-          visual.arc(originX, originY, radius, angle - halfArcAngle * 1.15, angle + halfArcAngle * 1.15, false);
-          visual.strokePath();
-        }
-        visual.lineStyle(BULLET_THICKNESS, BATON_BULLET_COLOR, 1);
-        visual.beginPath();
-        visual.arc(originX, originY, radius, angle - halfArcAngle, angle + halfArcAngle, false);
-        visual.strokePath();
+        this.drawBatonBladeSlash(
+          visual,
+          originX,
+          originY,
+          radius,
+          angle - halfArcAngle,
+          angle + halfArcAngle,
+          heavy,
+          onBeat
+        );
       }
     };
     updatePositions();
@@ -1556,12 +1758,58 @@ export class MainScene extends Phaser.Scene {
     });
   }
 
+  private drawBatonBladeSlash(
+    gfx: Phaser.GameObjects.Graphics,
+    centerX: number,
+    centerY: number,
+    radius: number,
+    startAngle: number,
+    endAngle: number,
+    heavy: boolean,
+    onBeat: boolean
+  ): void {
+    gfx.clear();
+    const steps = 14;
+    const drawRibbon = (thickness: number, color: number, alpha: number, radialOffset: number): void => {
+      const outer: Phaser.Math.Vector2[] = [];
+      const inner: Phaser.Math.Vector2[] = [];
+      for (let i = 0; i <= steps; i++) {
+        const t = i / steps;
+        const angle = Phaser.Math.Linear(startAngle, endAngle, t);
+        const taper = Math.pow(Math.sin(Math.PI * t), 0.72);
+        const bias = heavy ? 0.9 + t * 0.1 : 1 - t * 0.08;
+        const halfWidth = Math.max(worldSize(0.35), worldSize(thickness) * taper * bias * 0.5);
+        const baseRadius = radius + worldSize(radialOffset);
+        outer.push(
+          new Phaser.Math.Vector2(
+            centerX + Math.cos(angle) * (baseRadius + halfWidth),
+            centerY + Math.sin(angle) * (baseRadius + halfWidth)
+          )
+        );
+        inner.push(
+          new Phaser.Math.Vector2(
+            centerX + Math.cos(angle) * (baseRadius - halfWidth),
+            centerY + Math.sin(angle) * (baseRadius - halfWidth)
+          )
+        );
+      }
+      gfx.fillStyle(color, alpha);
+      gfx.fillPoints([...outer, ...inner.reverse()], true);
+    };
+
+    drawRibbon(32, BATON_BULLET_COLOR, onBeat ? 0.08 : 0.06, 0);
+    drawRibbon(19, 0xc084fc, onBeat ? 0.16 : 0.12, 0);
+    drawRibbon(8, 0xd8b4fe, onBeat ? 0.68 : 0.58, 0);
+    drawRibbon(2, 0xffffff, onBeat ? 0.86 : 0.76, heavy ? -0.6 : 0.6);
+  }
+
   private updateBulletTrails(deltaMs: number): void {
     const now = this.time.now;
     const dt = Math.max(deltaMs, 1) / 1000;
     for (const group of [this.bullets, this.playerBullets]) {
       for (const obj of group.getChildren()) {
         const bullet = obj as Phaser.GameObjects.Rectangle;
+        if (bullet.getData('trailDisabled')) continue;
         const previousX = bullet.getData('trailX') as number | undefined;
         const previousY = bullet.getData('trailY') as number | undefined;
         bullet.setData('trailX', bullet.x);
@@ -1604,6 +1852,14 @@ export class MainScene extends Phaser.Scene {
     }
   }
 
+  private updateProjectileVisuals(): void {
+    for (const obj of this.bullets.getChildren()) {
+      const bullet = obj as Phaser.GameObjects.Rectangle;
+      const visual = bullet.getData('projectileVisual') as Phaser.GameObjects.Container | undefined;
+      if (visual?.active) visual.setPosition(bullet.x, bullet.y).setRotation(bullet.rotation);
+    }
+  }
+
   private destroyPlayerBullet(bullet: Phaser.GameObjects.Rectangle): void {
     const visual = bullet.getData('batonVisual') as Phaser.GameObjects.Graphics | undefined;
     if (visual?.active) visual.destroy();
@@ -1611,30 +1867,11 @@ export class MainScene extends Phaser.Scene {
     if (bullet.active) bullet.destroy();
   }
 
-  private createHeldEnemyTrail(bullet: Phaser.GameObjects.Rectangle): void {
-    // 慢行阶段保持方向标记；下一次拍前快速移动开始时再清除。
-    const angle = bullet.getData('angle') as number;
-    const length = ENEMY_BULLET_LENGTH * 0.9;
-    const trail = this.add
-      .rectangle(0, 0, length, ENEMY_BULLET_THICKNESS * 0.55, bullet.fillColor, 0.16)
-      .setRotation(angle)
-      .setDepth(3);
-    bullet.setData('heldTrail', trail);
-    this.positionHeldEnemyTrail(bullet, trail);
-  }
-
-  private positionHeldEnemyTrail(
-    bullet: Phaser.GameObjects.Rectangle,
-    trail: Phaser.GameObjects.Rectangle
-  ): void {
-    const angle = bullet.getData('angle') as number;
-    const offset = ENEMY_BULLET_LENGTH * 0.35 + trail.width * 0.5;
-    trail.setPosition(bullet.x - Math.cos(angle) * offset, bullet.y - Math.sin(angle) * offset);
-  }
-
   private destroyEnemyBullet(bullet: Phaser.GameObjects.Rectangle): void {
     const heldTrail = bullet.getData('heldTrail') as Phaser.GameObjects.Rectangle | undefined;
     if (heldTrail?.active) heldTrail.destroy();
+    const visual = bullet.getData('projectileVisual') as Phaser.GameObjects.Container | undefined;
+    if (visual?.active) visual.destroy(true);
     this.destroyBulletHitboxes(bullet);
     if (bullet.active) bullet.destroy();
   }
@@ -1874,17 +2111,7 @@ export class MainScene extends Phaser.Scene {
       const bullet = obj as Phaser.GameObjects.Rectangle;
       const angle = bullet.getData('angle') as number;
       const body = bullet.body as Phaser.Physics.Arcade.Body;
-      const wasBursting = Boolean(bullet.getData('bursting'));
-      if (bursting && !wasBursting) {
-        const heldTrail = bullet.getData('heldTrail') as Phaser.GameObjects.Rectangle | undefined;
-        if (heldTrail?.active) heldTrail.destroy();
-        bullet.setData('heldTrail', undefined);
-      } else if (!bursting && wasBursting) {
-        this.createHeldEnemyTrail(bullet);
-      }
       bullet.setData('bursting', bursting);
-      const heldTrail = bullet.getData('heldTrail') as Phaser.GameObjects.Rectangle | undefined;
-      if (heldTrail?.active) this.positionHeldEnemyTrail(bullet, heldTrail);
       body.setVelocity(Math.cos(angle) * speed, Math.sin(angle) * speed);
     }
   }
