@@ -38,7 +38,7 @@ export function fanCharacterTextureKey(action: FanAction, frame: number): string
 
 export function fanCharacterAssetPath(action: FanAction, frame: number): string {
   const suffix = String(frame).padStart(2, '0');
-  return `images/characters/npc/npc_fan01/animation/${action}/npc_fan01_${action}_${suffix}.png`;
+  return `images/characters/npc/npc_fan01/${action}/npc_fan01_${action}_${suffix}.png`;
 }
 
 export function fanAttackEffectTextureKey(effect: FanAttackEffect, frame: number): string {
@@ -47,7 +47,8 @@ export function fanAttackEffectTextureKey(effect: FanAttackEffect, frame: number
 
 export function fanAttackEffectAssetPath(effect: FanAttackEffect, frame: number): string {
   const suffix = String(frame).padStart(2, '0');
-  return `images/characters/npc/npc_fan01/animation/${effect}/npc_fan01_${effect.replace('-', '_')}_${suffix}.png`;
+  const directory = effect.replace('-', '_');
+  return `images/characters/npc/npc_fan01/${directory}/npc_fan01_${directory}_${suffix}.png`;
 }
 
 export function registerFanAnimations(scene: Phaser.Scene): void {

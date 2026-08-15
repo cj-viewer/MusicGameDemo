@@ -12,6 +12,11 @@ import {
   playFanAttackEffect
 } from './fanAnimation';
 import { worldDepth, worldSize } from './visualScale';
+import {
+  GUARD_ATTACK_DURATION_MS,
+  GUARD_ATTACK_EFFECT_SCALE,
+  playGuardAttackEffect
+} from './guardAnimation';
 
 export type EnemyKind = 'smallGuard' | 'midGuard' | 'fan';
 
@@ -134,7 +139,7 @@ export abstract class Enemy {
     this.scene.queueBeatSfx('enemyHurt');
     this.scene.spawnImpactFx(this.x, this.y, 0xef4444, false);
     this.showHitFlash();
-    this.scene.time.delayedCall(80, () => {
+    this.scene.time.delayedCall(120, () => {
       if (!this.dead) this.restoreVisualColor();
     });
     if (this.hp <= 0) {
@@ -174,6 +179,12 @@ export abstract class Enemy {
     return Phaser.Math.Angle.Between(this.x, this.y, p.x, p.y);
   }
 
+  protected setFacingFlip(angle: number): void {
+    if (this.go instanceof Phaser.GameObjects.Image || this.go instanceof Phaser.GameObjects.Sprite) {
+      this.go.setFlipX(Math.cos(angle) >= 0);
+    }
+  }
+
   /** 蓄力/预警闪烁 */
   protected telegraph(): void {
     this.setVisualColor(0xffd166);
@@ -199,12 +210,12 @@ export abstract class Enemy {
 
   private showHitFlash(): void {
     if (this.go instanceof Phaser.GameObjects.Shape) this.go.setFillStyle(0xffffff);
-    else this.go.setTintFill();
+    else this.go.setTint(0xffffff).setTintMode(Phaser.TintModes.FILL);
   }
 
   private restoreVisualColor(): void {
     if (this.go instanceof Phaser.GameObjects.Shape) this.go.setFillStyle(this.baseColor);
-    else this.go.clearTint();
+    else this.go.clearTint().setTintMode(Phaser.TintModes.MULTIPLY);
   }
 }
 
@@ -213,10 +224,32 @@ export class SmallGuard extends Enemy {
   readonly kind = 'smallGuard';
   private static readonly MOVE_SPEED = 44;
   private movementAngle = 0;
+  private facingAngle = Math.PI;
+  private attackFacingUntil = 0;
+  private readonly attackFx: Phaser.GameObjects.Sprite;
 
   constructor(scene: MainScene, x: number, y: number) {
     super(scene, scene.add.image(x, y, 'guard').setDisplaySize(worldSize(46), worldSize(70)), 40, 0xffffff);
+    this.attackFx = scene.add
+      .sprite(x, y, 'npc-guard-attack-light-fx-1')
+      .setScale(GUARD_ATTACK_EFFECT_SCALE)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setVisible(false);
     this.chooseMovementAngle();
+  }
+
+  update(dtMs: number): void {
+    super.update(dtMs);
+    if (this.dead) return;
+    if (this.scene.time.now >= this.attackFacingUntil) this.facingAngle = this.movementAngle;
+    const facingRight = Math.cos(this.facingAngle) >= 0;
+    const characterDepth = worldDepth(this.go.y + this.go.body.halfHeight);
+    this.setFacingFlip(this.facingAngle);
+    this.attackFx
+      .setPosition(this.x, this.y)
+      // Attack FX source frames face right, while the guard body source faces left.
+      .setFlipX(!facingRight)
+      .setDepth(characterDepth - 0.002);
   }
 
   onBeat(info: BeatInfo): void {
@@ -224,6 +257,9 @@ export class SmallGuard extends Enemy {
     this.chooseMovementAngle();
     if (info.beatInMeasure !== 3) return;
     const angle = this.scene.quantizeEnemyAttackAngle(this.angleToPlayer());
+    this.facingAngle = angle;
+    this.attackFacingUntil = this.scene.time.now + GUARD_ATTACK_DURATION_MS;
+    playGuardAttackEffect(this.attackFx, 'attack-light');
     this.scene.spawnEnemyProjectile(this.x, this.y, angle, 12, 0x3b82f6);
   }
 
@@ -237,6 +273,17 @@ export class SmallGuard extends Enemy {
     const maxOffset = this.distToPlayer() < 90 ? 70 : 24;
     const offset = Phaser.Math.FloatBetween(-maxOffset, maxOffset);
     this.movementAngle = this.angleToPlayer() + Phaser.Math.DegToRad(offset);
+    if (this.scene.time.now >= this.attackFacingUntil) this.facingAngle = this.movementAngle;
+  }
+
+  protected die(): void {
+    if (this.attackFx.active) this.attackFx.destroy();
+    super.die();
+  }
+
+  destroy(): void {
+    if (this.attackFx.active) this.attackFx.destroy();
+    super.destroy();
   }
 }
 
@@ -248,6 +295,8 @@ export class MidGuard extends Enemy {
   readonly kind = 'midGuard';
   private aiming = false;
   private lockedAngle = 0;
+  private facingAngle = Math.PI;
+  private attackFacingUntil = 0;
   private laserGfx: Phaser.GameObjects.Graphics;
 
   constructor(scene: MainScene, x: number, y: number) {
@@ -259,6 +308,8 @@ export class MidGuard extends Enemy {
   onBeat(info: BeatInfo): void {
     if (this.dead || info.beatInMeasure !== 3) return;
     this.lockedAngle = this.scene.quantizeEnemyAttackAngle(this.angleToPlayer());
+    this.facingAngle = this.lockedAngle;
+    this.attackFacingUntil = this.scene.time.now + GUARD_ATTACK_DURATION_MS;
     this.aiming = false;
     this.scene.spawnEnemyProjectile(this.x, this.y, this.lockedAngle, 12, 0x3b82f6);
     this.flashLaser(this.lockedAngle);
@@ -266,6 +317,8 @@ export class MidGuard extends Enemy {
 
   update(dtMs: number): void {
     super.update(dtMs);
+    if (this.scene.time.now >= this.attackFacingUntil) this.facingAngle = this.lockedAngle;
+    this.setFacingFlip(this.facingAngle);
     this.laserGfx.clear();
     if (!this.dead && this.aiming) {
       this.lockedAngle = this.scene.quantizeEnemyAttackAngle(this.angleToPlayer());
@@ -283,6 +336,7 @@ export class MidGuard extends Enemy {
   protected move(_dtMs: number): void {
     const dist = this.distToPlayer();
     const angle = this.scene.quantizeEnemyAttackAngle(this.angleToPlayer());
+    this.lockedAngle = angle;
     if (dist > 340) {
       const v = this.scene.physics.velocityFromRotation(angle, 72);
       this.go.body.setVelocity(v.x, v.y);
@@ -375,6 +429,7 @@ export class FanEnemy extends Enemy {
     if (this.scene.time.now >= this.attackUntil && this.sprite.anims.currentAnim?.key !== 'fan-run') {
       playFanAnimation(this.sprite, 'run', true);
     }
+    if (this.scene.time.now >= this.attackUntil) this.aimAngle = this.movementAngle;
   }
 
   protected die(): void {
@@ -433,7 +488,10 @@ export class FanEnemy extends Enemy {
     const characterDepth = worldDepth(this.go.y + this.go.body.halfHeight);
     this.attackFx
       .setPosition(this.x, this.y)
+      // Fan attack FX frames are authored toward the right side.
+      .setFlipX(!facingRight)
       .setDepth(characterDepth - 0.002);
+    this.sprite.setFlipX(facingRight);
     this.weaponSprite
       .setPosition(
         this.x + side * FanEnemy.WEAPON_SIDE_OFFSET,

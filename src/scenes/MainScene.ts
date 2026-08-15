@@ -26,6 +26,11 @@ import { WORLD_OBJECT_SCALE, worldDepth, worldSize } from '../game/visualScale';
 import type { FpvMiniScene } from './FpvMiniScene';
 import { TuningEditor } from '../game/TuningEditor';
 import {
+  GUARD_ATTACK_EFFECT_FRAMES,
+  guardAttackEffectAssetPath,
+  guardAttackEffectTextureKey
+} from '../game/guardAnimation';
+import {
   MAIN_CAMERA_BASE_ZOOM,
   MAIN_CAMERA_LOOK_DAMPING_MS,
   MAIN_CAMERA_LOOK_DEAD_ZONE,
@@ -216,6 +221,14 @@ export class MainScene extends Phaser.Scene {
         this.load.image(
           fanAttackEffectTextureKey(effect, frame),
           asset(fanAttackEffectAssetPath(effect, frame))
+        );
+      }
+    }
+    for (const effect of ['attack-light', 'attack-hard'] as const) {
+      for (const frame of GUARD_ATTACK_EFFECT_FRAMES[effect]) {
+        this.load.image(
+          guardAttackEffectTextureKey(effect, frame),
+          asset(guardAttackEffectAssetPath(effect, frame))
         );
       }
     }
@@ -1317,12 +1330,81 @@ export class MainScene extends Phaser.Scene {
   onPlayerDied(): void {
     this.state = 'over';
     this.player.die();
-    const fade = this.add
-      .rectangle(VIEW_WIDTH / 2, VIEW_HEIGHT / 2, VIEW_WIDTH, VIEW_HEIGHT, 0x000000, 0)
-      .setScrollFactor(0)
-      .setDepth(19);
-    this.tweens.add({ targets: fade, alpha: 0.72, duration: 650, ease: 'Sine.easeIn' });
-    this.hud.message('FAILED...\n\n按 R 重新开始');
+    this.playDeathDissolve();
+  }
+
+  /**
+   * Keep the player death animation readable while the rest of the scene is
+   * consumed by a staggered black pixel dissolve. The final underlay is fully
+   * opaque, so the death frame remains isolated on a pure black background.
+   */
+  private playDeathDissolve(): void {
+    const camera = this.cameras.main;
+    const view = camera.worldView;
+    const left = view.left - 8;
+    const top = view.top - 8;
+    const width = view.width + 16;
+    const height = view.height + 16;
+    const overlayDepth = 1000;
+    const durationMs = 820;
+    const tileSize = 28;
+
+    this.player.go.setDepth(overlayDepth + 2);
+    const underlay = this.add
+      .rectangle(view.centerX, view.centerY, width, height, 0x000000, 1)
+      .setAlpha(0)
+      .setDepth(overlayDepth);
+    const dissolve = this.add.graphics().setDepth(overlayDepth + 1);
+    const cells: { x: number; y: number }[] = [];
+    for (let y = top; y < top + height; y += tileSize) {
+      for (let x = left; x < left + width; x += tileSize) cells.push({ x, y });
+    }
+    Phaser.Utils.Array.Shuffle(cells);
+
+    const stepMs = 24;
+    const batchSize = Math.max(1, Math.ceil(cells.length / Math.ceil(durationMs / stepMs)));
+    let cursor = 0;
+    this.tweens.add({
+      targets: underlay,
+      alpha: 0.58,
+      duration: durationMs,
+      ease: 'Sine.easeIn'
+    });
+    this.time.addEvent({
+      delay: stepMs,
+      repeat: Math.ceil(cells.length / batchSize) - 1,
+      callback: () => {
+        for (let index = 0; index < batchSize && cursor < cells.length; index++, cursor++) {
+          const cell = cells[cursor];
+          dissolve.fillStyle(0x000000, Phaser.Math.FloatBetween(0.86, 1));
+          dissolve.fillRect(cell.x - 1, cell.y - 1, tileSize + 2, tileSize + 2);
+        }
+      }
+    });
+    this.time.delayedCall(durationMs, () => {
+        underlay.setAlpha(1);
+        dissolve.clear();
+        const message = this.add
+          .text(view.centerX, view.bottom - 72, 'FAILED...\n按 R 重新开始', {
+            fontFamily: 'Arial',
+            fontSize: '24px',
+            color: '#e5e7eb',
+            align: 'center',
+            stroke: '#000000',
+            strokeThickness: 5
+          })
+          .setOrigin(0.5, 1)
+          .setDepth(overlayDepth + 3)
+          .setAlpha(0)
+          .setScale(1 / MAIN_CAMERA_BASE_ZOOM);
+        this.tweens.add({ targets: message, alpha: 1, duration: 220 });
+    });
+
+    const fpv = this.getFpvMiniScene();
+    if (fpv) {
+      fpv.cameras.main.fadeOut(durationMs * 0.75, 0, 0, 0);
+      this.time.delayedCall(durationMs * 0.75, () => fpv.setPanelEnabled(false));
+    }
   }
 
   getAutoAimAngle(moveAngle: number): number {

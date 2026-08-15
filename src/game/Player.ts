@@ -22,6 +22,8 @@ const MOVE_ACCELERATION = 1050;
 const MOVE_DECELERATION = 720;
 const DODGE_DISTANCE = 160;
 const DODGE_DURATION_MS = 140;
+const DODGE_ANIMATION_FOLLOW_THROUGH_MS = 100;
+const DODGE_TRAIL_INTERVAL_MS = 30;
 const EMPTY_COMBO_DODGE_INTERVAL_MS = 500;
 /** 闪避踩拍判定窗口：拍点前后各 0.12 秒 */
 const DODGE_BEAT_WINDOW = 0.12;
@@ -227,7 +229,7 @@ export class Player {
 
     this.isDodging = true;
     this.lastDodgeAt = dodgeStartedAt;
-    this.actionLockedUntil = 0;
+    this.actionLockedUntil = dodgeStartedAt + DODGE_DURATION_MS + DODGE_ANIMATION_FOLLOW_THROUGH_MS;
     this.setAction('dash', true);
     this.body.setVelocity(0, 0);
     this.body.enable = false;
@@ -286,8 +288,7 @@ export class Player {
     this.body.setVelocity(0, 0);
     this.actionLockedUntil = Infinity;
     this.setAction(Math.random() < 0.5 ? 'death-1' : 'death-2', true);
-    this.go.clearTint();
-    this.go.setAlpha(0.85);
+    this.go.setAlpha(1);
     this.attackFx.setVisible(false);
     this.attackGlowFx.setVisible(false);
     this.weaponSprite.setVisible(false);
@@ -311,9 +312,13 @@ export class Player {
   }
 
   private flashHitWhite(): void {
-    this.go.setTintFill();
-    this.scene.time.delayedCall(90, () => {
-      if (!this.dead) this.go.clearTint();
+    this.go.setTint(0xffffff).setTintMode(Phaser.TintModes.FILL);
+    this.weaponSprite.setTint(0xffffff).setTintMode(Phaser.TintModes.FILL);
+    this.scene.time.delayedCall(140, () => {
+      if (this.go.active) this.go.clearTint().setTintMode(Phaser.TintModes.MULTIPLY);
+      if (this.weaponSprite.active) {
+        this.weaponSprite.clearTint().setTintMode(Phaser.TintModes.MULTIPLY);
+      }
     });
   }
 
@@ -351,7 +356,7 @@ export class Player {
 
   private spawnTrail(): void {
     const now = this.scene.time.now;
-    if (now - this.lastTrailAt < 50) return;
+    if (now - this.lastTrailAt < DODGE_TRAIL_INTERVAL_MS) return;
     this.lastTrailAt = now;
     const trail = this.scene.add
       .sprite(this.go.x, this.go.y, this.go.texture.key)

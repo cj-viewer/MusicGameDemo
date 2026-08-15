@@ -30,6 +30,9 @@ export const PLAYER_DISPLAY_HEIGHT = LEGACY_PLAYER_DISPLAY_HEIGHT * UI_SCALE;
 export const PLAYER_SPRITE_SCALE = PLAYER_DISPLAY_HEIGHT / PLAYER_REFERENCE_CONTENT_HEIGHT;
 /** 128 x 128 手持武器相对 256 x 256 角色画布的统一显示倍率。 */
 export const PLAYER_WEAPON_SCALE = PLAYER_SPRITE_SCALE * 0.8;
+/** 140 ms movement plus 100 ms of visual follow-through after the dash lands. */
+export const PLAYER_DASH_ANIMATION_DURATION_MS = 240;
+export const PLAYER_DEATH_ANIMATION_DURATION_MS = 800;
 
 /** 固定角色受击体，避免 256px 透明画布被误当成碰撞范围。 */
 export const PLAYER_BODY_SOURCE_WIDTH = 42;
@@ -86,11 +89,11 @@ export function registerPlayerAnimations(scene: Phaser.Scene): void {
 
   create('idle', 8, { frameRate: 8, repeat: -1 });
   create('run', 8, { frameRate: 12, repeat: -1 });
-  create('dash', 12, { duration: 140, repeat: 0 });
+  create('dash', 12, { duration: PLAYER_DASH_ANIMATION_DURATION_MS, repeat: 0 });
   create('attack-light', 5, { duration: 200, repeat: 0 });
   create('attack-hard', 5, { duration: 200, repeat: 0 });
-  create('death-1', 8, { frameRate: 12, repeat: 0 });
-  create('death-2', 8, { frameRate: 12, repeat: 0 });
+  create('death-1', 8, { duration: PLAYER_DEATH_ANIMATION_DURATION_MS, repeat: 0 });
+  create('death-2', 8, { duration: PLAYER_DEATH_ANIMATION_DURATION_MS, repeat: 0 });
 }
 
 export function playPlayerAnimation(

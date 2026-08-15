@@ -166,7 +166,13 @@ export class FpvMiniScene extends Phaser.Scene {
         if (!billboard) continue;
         this.enemyBillboards.set(enemy, billboard);
       }
-      billboard.setVisible(true).setTexture(visual.texture.key).setPosition(projected.screenX, projected.bottomY).setDisplaySize(projected.width, projected.height).setDepth(-projected.dist);
+      billboard
+        .setVisible(true)
+        .setTexture(visual.texture.key)
+        .setPosition(projected.screenX, projected.bottomY)
+        .setDisplaySize(projected.width, projected.height)
+        .setFlipX(visual.flipX)
+        .setDepth(-projected.dist);
     }
     for (const [enemy, billboard] of [...this.enemyBillboards]) {
       if (seen.has(enemy)) continue;
