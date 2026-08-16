@@ -2,8 +2,15 @@ import Phaser from 'phaser';
 import type { Conductor, BeatInfo } from '../core/Conductor';
 import type { BeatKey } from './weapons';
 
-/** 攻击输入判定窗口：拍点前后各 0.1 秒 */
-export const INPUT_WINDOW = 0.1;
+/** 攻击输入判定窗口：拍点前可提前 0.2 秒。 */
+export const INPUT_EARLY_WINDOW = 0.2;
+/** 攻击输入判定窗口：拍点后仍保留 0.1 秒宽限。 */
+export const INPUT_LATE_WINDOW = 0.1;
+
+/** `offset` 为相对最近拍点的秒数：负值代表提前，正值代表滞后。 */
+export function isWithinAttackInputWindow(offset: number): boolean {
+  return offset >= -INPUT_EARLY_WINDOW && offset <= INPUT_LATE_WINDOW;
+}
 
 export type InputResult =
   | { type: 'correct'; beatIdx: number; globalBeat: number; rawTimingOffset: number }
@@ -117,7 +124,7 @@ export class ComboSystem {
       if (bf >= this.demoStart) return { type: 'ignored', reason: 'protected' };
       const { n, offset } = this.conductor.nearestBeat(judgedTime);
       if (
-        Math.abs(offset) <= INPUT_WINDOW &&
+        isWithinAttackInputWindow(offset) &&
         n >= 0 &&
         n !== this.consumedBeat &&
         btn === this.pattern[n % 4]
@@ -138,7 +145,7 @@ export class ComboSystem {
       return { type: 'ignored', reason: 'consumed' };
     }
 
-    if (Math.abs(offset) > INPUT_WINDOW || n < 0) {
+    if (!isWithinAttackInputWindow(offset) || n < 0) {
       if (n >= 0) this.consumedBeat = n;
       return { type: 'wrong', beatIdx: ((n % 4) + 4) % 4 };
     }

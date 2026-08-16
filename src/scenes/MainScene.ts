@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { Conductor, type BeatInfo } from '../core/Conductor';
 import { Sfx } from '../core/Sfx';
-import { ComboSystem, INPUT_WINDOW } from '../game/ComboSystem';
+import { ComboSystem, INPUT_EARLY_WINDOW } from '../game/ComboSystem';
 import { HUD } from '../game/HUD';
 import { Player, PLAYER_RADIUS } from '../game/Player';
 import {
@@ -84,9 +84,16 @@ const ARENA = {
 const ARENA_BORDER_BASE_COLOR = 0x6b3b70;
 const ARENA_BEAT_LIGHT_COLOR = 0xe879f9;
 const ARENA_BEAT_HEAVY_COLOR = 0xf97316;
-/** 同时预告未来三拍：每个缩放框用三拍时间抵达场地边框。 */
+/** 同时预告未来三拍。 */
 const ARENA_BEAT_CUE_START_SCALE = 0.7;
-const ARENA_BEAT_CUE_LOOKAHEAD = 3;
+const ARENA_BEAT_CUE_COUNT = 3;
+/** 预告框出现时机后移原时长的五分之一：2.4 拍完成，平均下落速度为原来的 1.25 倍。 */
+const ARENA_BEAT_CUE_DURATION_BEATS = 2.4;
+/**
+ * 场地内框走完一半视觉路程时，正好进入攻击判定的提前窗口。
+ * 这个值与 INPUT_EARLY_WINDOW 联动，避免只改判定而预告仍在错误的时间位置。
+ */
+const ARENA_BEAT_CUE_JUDGEMENT_SCALE_PROGRESS = 0.5;
 const ARENA_BEAT_CUE_MIN_ALPHA = 0;
 const ARENA_BEAT_HEAVY_ALPHA_PEAK_PROGRESS = 0.9;
 const TUTORIAL_CALIBRATION_SAMPLES = 12;
@@ -288,7 +295,7 @@ export class MainScene extends Phaser.Scene {
       .rectangle(ARENA.x + ARENA.width / 2, ARENA.y + ARENA.height / 2, ARENA.width, ARENA.height)
       .setStrokeStyle(3, ARENA_BORDER_BASE_COLOR, 1)
       .setDepth(1);
-    this.arenaBeatCues = Array.from({ length: ARENA_BEAT_CUE_LOOKAHEAD }, () =>
+    this.arenaBeatCues = Array.from({ length: ARENA_BEAT_CUE_COUNT }, () =>
       this.add
         .rectangle(ARENA.x + ARENA.width / 2, ARENA.y + ARENA.height / 2, ARENA.width, ARENA.height)
         .setStrokeStyle(3, ARENA_BEAT_LIGHT_COLOR, 1)
@@ -2183,7 +2190,7 @@ export class MainScene extends Phaser.Scene {
   }
 
   /**
-   * 同时预告未来三拍，每个缩放框从 0.7 倍尺寸出发，用三拍时间缓慢抵达场地边框。
+   * 同时预告未来三拍，每个缩放框从 0.7 倍尺寸出发，在 2.4 拍内抵达场地边框。
    * 轻重框从相同透明度起步并统一按 Expo.In 淡入；橙色框压缩透明度进度，稍早抵达峰值。
    */
   private updateArenaBeatCue(): void {
@@ -2202,12 +2209,12 @@ export class MainScene extends Phaser.Scene {
     // 大场地框是固定判定边界；扩散框只在其内侧运行。
     // 不在这里重置边框颜色，让命中时的短暂亮起完整播放完毕。
     const nextBeat = Math.floor(beatFloat) + 1;
-    for (let index = 0; index < ARENA_BEAT_CUE_LOOKAHEAD; index++) {
+    for (let index = 0; index < ARENA_BEAT_CUE_COUNT; index++) {
       const cue = this.arenaBeatCues[index];
       const targetBeat = nextBeat + index;
-      const elapsedBeats = beatFloat - (targetBeat - ARENA_BEAT_CUE_LOOKAHEAD);
-      const progress = Phaser.Math.Clamp(elapsedBeats / ARENA_BEAT_CUE_LOOKAHEAD, 0, 1);
-      const scaleProgress = Phaser.Math.Easing.Expo.In(progress);
+      const elapsedBeats = beatFloat - (targetBeat - ARENA_BEAT_CUE_DURATION_BEATS);
+      const progress = Phaser.Math.Clamp(elapsedBeats / ARENA_BEAT_CUE_DURATION_BEATS, 0, 1);
+      const scaleProgress = this.getArenaBeatCueScaleProgress(progress);
       const scale = Phaser.Math.Linear(ARENA_BEAT_CUE_START_SCALE, 1, scaleProgress);
       const beatInMeasure = ((targetBeat % 4) + 4) % 4;
       const heavy = this.combo.pattern[beatInMeasure] === 'H';
@@ -2346,7 +2353,7 @@ export class MainScene extends Phaser.Scene {
     const nextBeat = Math.floor(this.conductor.beatFloatAt(now)) + 1;
     const beatInMeasure = ((nextBeat % 4) + 4) % 4;
     const heavy = this.combo.pattern[beatInMeasure] === 'H';
-    const heavyColorStart = INPUT_WINDOW + RHYTHM_HEAVY_COLOR_TRANSITION_DURATION;
+    const heavyColorStart = INPUT_EARLY_WINDOW + RHYTHM_HEAVY_COLOR_TRANSITION_DURATION;
     const heavyColorProgress = heavy
       ? Phaser.Math.Clamp(
         (heavyColorStart - timeToBeat) / RHYTHM_HEAVY_COLOR_TRANSITION_DURATION,
@@ -2396,6 +2403,35 @@ export class MainScene extends Phaser.Scene {
       : progress;
     const alphaProgress = Phaser.Math.Easing.Expo.In(adjustedProgress);
     return Phaser.Math.Linear(ARENA_BEAT_CUE_MIN_ALPHA, 1, alphaProgress);
+  }
+
+  /**
+   * 将预告框的视觉路程锚定在攻击提前窗口：
+   * 在距拍点 INPUT_EARLY_WINDOW 秒时，框已从 0.7x 走到 0.85x（全程的一半）。
+   * 使用一条归一化的连续指数曲线，而不是在窗口起点拼接两段曲线，避免视觉速度突变。
+   */
+  private getArenaBeatCueScaleProgress(progress: number): number {
+    const cueDuration = this.conductor.beatDur * ARENA_BEAT_CUE_DURATION_BEATS;
+    const judgementStartProgress = Phaser.Math.Clamp(
+      1 - INPUT_EARLY_WINDOW / cueDuration,
+      0.5001,
+      0.999
+    );
+    const halfDistance = ARENA_BEAT_CUE_JUDGEMENT_SCALE_PROGRESS;
+    let lowerExponent = 0;
+    let upperExponent = 24;
+
+    // f(x) = (exp(kx) - 1) / (exp(k) - 1) 是 0→1 的归一化 ease-in 指数曲线。
+    // 通过二分求 k，使 f(判定窗口开启时刻) 精确等于 0.5。
+    for (let iteration = 0; iteration < 20; iteration++) {
+      const exponent = (lowerExponent + upperExponent) * 0.5;
+      const valueAtJudgementStart = Math.expm1(exponent * judgementStartProgress) / Math.expm1(exponent);
+      if (valueAtJudgementStart > halfDistance) lowerExponent = exponent;
+      else upperExponent = exponent;
+    }
+    const exponent = (lowerExponent + upperExponent) * 0.5;
+    const clampedProgress = Phaser.Math.Clamp(progress, 0, 1);
+    return Math.expm1(exponent * clampedProgress) / Math.expm1(exponent);
   }
 
   private interpolateRgb(from: number, to: number, amount: number): number {
