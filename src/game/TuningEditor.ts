@@ -4,8 +4,14 @@ import { UI_SCALE, VIEW_HEIGHT, VIEW_WIDTH } from './displayConfig';
 
 export class TuningEditor {
   readonly container: Phaser.GameObjects.Container;
-  playerBulletSpeed = 360;
-  enemyBulletSpeed = 144;
+  glowstickBulletSpeed = 360;
+  glowstickAttackSpeed = 1;
+  batonSweepSpeed = 1;
+  batonAttackSpeed = 1;
+  smallGuardBulletSpeed = 144;
+  smallGuardAttackIntervalBeats = 4;
+  fanBulletSpeed = 144;
+  fanAttackIntervalBeats = 4;
   enemyBulletBeatSurgeEnabled = false;
   tutorialBgmSlot = 3;
   levelBgmSlot = 0;
@@ -118,6 +124,24 @@ export class TuningEditor {
 
   get visible(): boolean {
     return this.container.visible;
+  }
+
+  /** P 面板保留统一快捷调参；Esc 设置提供各武器的独立参数。 */
+  get playerBulletSpeed(): number {
+    return this.glowstickBulletSpeed;
+  }
+
+  set playerBulletSpeed(value: number) {
+    this.glowstickBulletSpeed = value;
+  }
+
+  get enemyBulletSpeed(): number {
+    return this.smallGuardBulletSpeed;
+  }
+
+  set enemyBulletSpeed(value: number) {
+    this.smallGuardBulletSpeed = value;
+    this.fanBulletSpeed = value;
   }
 
   setVisible(visible: boolean): void {

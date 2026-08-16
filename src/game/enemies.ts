@@ -109,6 +109,19 @@ export abstract class Enemy {
   /** 物理组接管对象后执行一次，避免 Group 默认值覆盖出生时的初始运动状态。 */
   onSpawned(): void {}
 
+  /** 游戏结束时停止物理与位移，保留单位原地播放可用的 Idle 表现。 */
+  enterGameOverIdle(): void {
+    if (this.dead) return;
+    this.scene.tweens.killTweensOf(this.go);
+    this.knockbackUntil = 0;
+    this.knockbackVelocity.set(0, 0);
+    this.go.body.setVelocity(0, 0);
+    this.go.body.enable = false;
+    this.onGameOverIdle();
+  }
+
+  protected onGameOverIdle(): void {}
+
   /** 精灵动画换帧时源尺寸可能变化，同步 body 保证判定框始终等于当前显示图片 */
   private syncBodyToCurrentFrame(): void {
     if (!(this.go instanceof Phaser.GameObjects.Sprite)) return;
@@ -255,12 +268,12 @@ export class SmallGuard extends Enemy {
   onBeat(info: BeatInfo): void {
     if (this.dead) return;
     this.chooseMovementAngle();
-    if (info.beatInMeasure !== 3) return;
+    if (!this.scene.shouldEnemyAttack(this.kind, info.globalBeat)) return;
     const angle = this.scene.quantizeEnemyAttackAngle(this.angleToPlayer());
     this.facingAngle = angle;
     this.attackFacingUntil = this.scene.time.now + GUARD_ATTACK_DURATION_MS;
     playGuardAttackEffect(this.attackFx, 'attack-light');
-    this.scene.spawnEnemyProjectile(this.x, this.y, angle, 12, 0x3b82f6);
+    this.scene.spawnEnemyProjectile(this.x, this.y, angle, 12, 0x3b82f6, this.kind);
   }
 
   protected move(_dtMs: number): void {
@@ -285,6 +298,10 @@ export class SmallGuard extends Enemy {
     if (this.attackFx.active) this.attackFx.destroy();
     super.destroy();
   }
+
+  protected onGameOverIdle(): void {
+    this.attackFx.setVisible(false);
+  }
 }
 
 /**
@@ -306,12 +323,12 @@ export class MidGuard extends Enemy {
   }
 
   onBeat(info: BeatInfo): void {
-    if (this.dead || info.beatInMeasure !== 3) return;
+    if (this.dead || !this.scene.shouldEnemyAttack(this.kind, info.globalBeat)) return;
     this.lockedAngle = this.scene.quantizeEnemyAttackAngle(this.angleToPlayer());
     this.facingAngle = this.lockedAngle;
     this.attackFacingUntil = this.scene.time.now + GUARD_ATTACK_DURATION_MS;
     this.aiming = false;
-    this.scene.spawnEnemyProjectile(this.x, this.y, this.lockedAngle, 12, 0x3b82f6);
+    this.scene.spawnEnemyProjectile(this.x, this.y, this.lockedAngle, 12, 0x3b82f6, this.kind);
     this.flashLaser(this.lockedAngle);
   }
 
@@ -356,6 +373,11 @@ export class MidGuard extends Enemy {
   destroy(): void {
     this.laserGfx.destroy();
     super.destroy();
+  }
+
+  protected onGameOverIdle(): void {
+    this.aiming = false;
+    this.laserGfx.clear();
   }
 
   private flashLaser(angle: number): void {
@@ -418,10 +440,10 @@ export class FanEnemy extends Enemy {
   onBeat(info: BeatInfo): void {
     if (this.dead) return;
     this.chooseMovementAngle();
-    if (info.beatInMeasure !== 3) return;
+    if (!this.scene.shouldEnemyAttack(this.kind, info.globalBeat)) return;
     this.aimAngle = this.scene.quantizeEnemyAttackAngle(this.angleToPlayer());
     this.playAttack(this.aimAngle);
-    this.scene.spawnEnemyProjectile(this.x, this.y, this.aimAngle, 12, 0x3b82f6);
+    this.scene.spawnEnemyProjectile(this.x, this.y, this.aimAngle, 12, 0x3b82f6, this.kind);
   }
 
   protected move(_dtMs: number): void {
@@ -443,6 +465,13 @@ export class FanEnemy extends Enemy {
     if (this.attackFx.active) this.attackFx.destroy();
     if (this.weaponSprite.active) this.weaponSprite.destroy();
     super.destroy();
+  }
+
+  protected onGameOverIdle(): void {
+    this.scene.tweens.killTweensOf(this.weaponSprite);
+    this.attackFx.setVisible(false);
+    this.weaponSprite.setRotation(0);
+    playFanAnimation(this.sprite, 'idle', true);
   }
 
   private playAttack(angle: number): void {

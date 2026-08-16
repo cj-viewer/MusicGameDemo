@@ -169,12 +169,14 @@ export class Player {
     if (!this.isDodging) {
       const attackAction = heavy ? 'attack-hard' : 'attack-light';
       const playerDepth = worldDepth(this.y + this.body.halfHeight);
-      this.actionLockedUntil = this.scene.time.now + ATTACK_EFFECT_DURATION_MS;
+      const attackSpeed = this.scene.getPlayerWeaponAttackSpeed(this.weapon.id);
+      const attackDuration = ATTACK_EFFECT_DURATION_MS / attackSpeed;
+      this.actionLockedUntil = this.scene.time.now + attackDuration;
       this.setAction(attackAction, true);
       this.scene.tweens.killTweensOf(this.attackFx);
       this.scene.tweens.killTweensOf(this.attackGlowFx);
-      playPlayerAttackEffect(this.attackFx, attackAction);
-      playPlayerAttackEffect(this.attackGlowFx, attackAction);
+      playPlayerAttackEffect(this.attackFx, attackAction, attackSpeed);
+      playPlayerAttackEffect(this.attackGlowFx, attackAction, attackSpeed);
       this.attackFx
         .setPosition(this.x, this.y)
         .setFlipX(this.go.flipX)
@@ -194,11 +196,11 @@ export class Player {
         scaleX: glowStartScale * (heavy ? 1.28 : 1.14),
         scaleY: glowStartScale * (heavy ? 1.28 : 1.14),
         alpha: 0,
-        duration: ATTACK_EFFECT_DURATION_MS,
+        duration: attackDuration,
         ease: 'Cubic.easeOut',
         onComplete: () => this.attackGlowFx.setVisible(false)
       });
-      this.playWeaponAttackMotion(heavy);
+      this.playWeaponAttackMotion(heavy, attackDuration);
     }
   }
 
@@ -300,6 +302,23 @@ export class Player {
     this.attackFx.setVisible(false);
     this.attackGlowFx.setVisible(false);
     this.weaponSprite.setVisible(false);
+  }
+
+  /** 游戏结束时保留角色在场景中，停止位移并循环 Idle。 */
+  enterGameOverIdle(): void {
+    this.dead = true;
+    this.isDodging = false;
+    this.scene.tweens.killTweensOf([this.go, this.weaponSprite, this.attackFx, this.attackGlowFx]);
+    this.body.setVelocity(0, 0);
+    this.body.enable = false;
+    this.actionLockedUntil = Infinity;
+    this.action = 'idle';
+    playPlayerAnimation(this.go, 'idle', true);
+    this.go.setAlpha(1);
+    this.attackFx.setVisible(false);
+    this.attackGlowFx.setVisible(false);
+    this.weaponSprite.setVisible(true).setRotation(0);
+    this.updateWeaponVisual();
   }
 
   /** 输入错误的噪音反馈 */
@@ -428,12 +447,13 @@ export class Player {
   }
 
   /** 轻 / 重攻击使用不同幅度的非线性挥击，200ms 内回到握持角。 */
-  private playWeaponAttackMotion(heavy: boolean): void {
+  private playWeaponAttackMotion(heavy: boolean, attackDuration: number): void {
     const downwardDirection = this.go.flipX ? 1 : -1;
     const windup = Phaser.Math.DegToRad((heavy ? -14 : -9) * downwardDirection);
     const strike = Phaser.Math.DegToRad((heavy ? 76 : 62) * downwardDirection);
-    const windupMs = heavy ? 72 : 54;
-    this.weaponAttackUntil = this.scene.time.now + ATTACK_EFFECT_DURATION_MS;
+    const windupRatio = heavy ? 72 / ATTACK_EFFECT_DURATION_MS : 54 / ATTACK_EFFECT_DURATION_MS;
+    const windupMs = attackDuration * windupRatio;
+    this.weaponAttackUntil = this.scene.time.now + attackDuration;
     this.scene.tweens.killTweensOf(this.weaponSprite);
     this.weaponSprite.setRotation(windup);
     this.scene.tweens.add({
@@ -445,7 +465,7 @@ export class Player {
         this.scene.tweens.add({
           targets: this.weaponSprite,
           rotation: 0,
-          duration: ATTACK_EFFECT_DURATION_MS - windupMs,
+          duration: attackDuration - windupMs,
           ease: heavy ? 'Back.easeOut' : 'Quad.easeOut'
         });
       }

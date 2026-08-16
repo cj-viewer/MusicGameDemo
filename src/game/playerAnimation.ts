@@ -113,8 +113,10 @@ export function playPlayerAnimation(
 /** 在独立 Sprite 上播放轻 / 重攻击特效，和角色 256px 画布同中心完全重叠。 */
 export function playPlayerAttackEffect(
   sprite: Phaser.GameObjects.Sprite,
-  action: PlayerAttackAction
+  action: PlayerAttackAction,
+  timeScale = 1
 ): void {
+  sprite.anims.timeScale = Math.max(0.1, timeScale);
   sprite
     .setVisible(true)
     .setScale(PLAYER_SPRITE_SCALE)
