@@ -64,12 +64,12 @@ const DEFAULT_LEVEL_BGM_SLOT = 0;
 /** 试玩中的统一节拍速度；BGM 按各自原始 BPM 等比变速到该值。 */
 const BPM = 132;
 
-/** BGM 通道默认显示 150%；内部基础混音继续使用上一版的 75%。 */
-const BGM_VOLUME = 0.0375;
+/** BGM 通道归一显示为 100%；基础混音已补偿为上一默认有效响度的 150%。 */
+const BGM_VOLUME = 0.084375;
 
 const DEFAULT_MASTER_VOLUME = 1.5;
 const MAX_MASTER_VOLUME = 3;
-const DEFAULT_BGM_CHANNEL_VOLUME = 1.5;
+const DEFAULT_BGM_CHANNEL_VOLUME = 1;
 const MAX_CHANNEL_VOLUME = 2;
 const SETTINGS_VOLUME_TRACK_X = 280;
 const SETTINGS_VOLUME_TRACK_WIDTH = 250;
@@ -690,8 +690,9 @@ export class MainScene extends Phaser.Scene {
     const attackOrigin = this.player.getAttackOrigin();
     const startX = attackOrigin.x + Math.cos(this.player.aimAngle) * worldSize(10);
     const startY = attackOrigin.y + Math.sin(this.player.aimAngle) * worldSize(10) - worldSize(18);
+    // 准确度浮字属于攻击反馈，但必须在角色本体之后，避免遮住出手和受击表现。
     const feedback = this.add.container(startX, startY + worldSize(5), [label, detail])
-      .setDepth(20)
+      .setDepth(this.player.go.depth - 0.004)
       .setAlpha(0)
       .setAngle(Phaser.Math.FloatBetween(-4, -1))
       .setScale(0.72, 1.18);

@@ -38,9 +38,9 @@ const LIGHT_ATTACK_EFFECT_ALPHA = 0.45;
 const HARD_ATTACK_EFFECT_SCALE = 1.18;
 const LIGHT_ATTACK_GLOW_ALPHA = 0.3;
 const HARD_ATTACK_GLOW_ALPHA = 0.68;
-/** 复用边缘律动的轻 / 重拍层级，但将角色本体的缩放压低到克制可见。 */
-const CHARACTER_BEAT_PULSE_LIGHT_SCALE = 1.035;
-const CHARACTER_BEAT_PULSE_HEAVY_SCALE = 1.075;
+/** 角色脚底锚定的 Y 轴上弹：轻拍 +5%、重拍 +10%，横轴和镜像不参与缩放。 */
+const CHARACTER_BEAT_PULSE_LIGHT_SCALE_Y = 1.05;
+const CHARACTER_BEAT_PULSE_HEAVY_SCALE_Y = 1.1;
 const CHARACTER_BEAT_PULSE_LIGHT_DURATION_MS = 170;
 const CHARACTER_BEAT_PULSE_HEAVY_DURATION_MS = 220;
 /** 武器透明内容的握把末端；旋转与镜像都必须围绕此点。 */
@@ -211,14 +211,21 @@ export class Player {
 
   onBeat(heavy: boolean): void {
     if (this.dead) return;
-    const scale = heavy ? CHARACTER_BEAT_PULSE_HEAVY_SCALE : CHARACTER_BEAT_PULSE_LIGHT_SCALE;
     this.scene.tweens.killTweensOf(this.go);
-    this.go.setScale(PLAYER_SPRITE_SCALE * scale);
+    const baseY = this.go.y;
+    const baseDisplayHeight = this.go.height * PLAYER_SPRITE_SCALE;
+    const yForScale = (scaleY: number) => baseY + (baseDisplayHeight * (1 - scaleY)) / 2;
+    const totalDuration = heavy ? CHARACTER_BEAT_PULSE_HEAVY_DURATION_MS : CHARACTER_BEAT_PULSE_LIGHT_DURATION_MS;
+    const peakScaleY = heavy ? CHARACTER_BEAT_PULSE_HEAVY_SCALE_Y : CHARACTER_BEAT_PULSE_LIGHT_SCALE_Y;
+
+    // 补偿中心点的 Y 位移，使画面上的脚底在向上弹起与回落中保持原位。
+    this.go.setScale(PLAYER_SPRITE_SCALE, PLAYER_SPRITE_SCALE * peakScaleY);
+    this.go.setY(yForScale(peakScaleY));
     this.scene.tweens.add({
       targets: this.go,
-      scaleX: PLAYER_SPRITE_SCALE,
       scaleY: PLAYER_SPRITE_SCALE,
-      duration: heavy ? CHARACTER_BEAT_PULSE_HEAVY_DURATION_MS : CHARACTER_BEAT_PULSE_LIGHT_DURATION_MS,
+      y: baseY,
+      duration: totalDuration,
       ease: 'Back.easeOut'
     });
   }

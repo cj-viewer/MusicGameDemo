@@ -110,17 +110,23 @@ export abstract class Enemy {
   abstract onBeat(info: BeatInfo): void;
   protected abstract move(dtMs: number): void;
 
-  /** 所有敌人复用边缘律动的轻 / 重拍节奏，但仅做小幅本体缩放，不改变物理体。 */
+  /** 所有敌人复用边缘律动的轻 / 重拍节奏，脚底锚定，只做纵向上弹。 */
   pulseBeat(heavy: boolean): void {
     if (this.dead) return;
-    const scale = heavy ? 1.075 : 1.035;
+    const peakScaleY = heavy ? 1.1 : 1.05;
+    const totalDuration = heavy ? 220 : 170;
+    const baseY = this.go.y;
+    const baseDisplayHeight = this.go.height * this.baseScaleY;
+    const yForScale = (scaleY: number) => baseY + (baseDisplayHeight * (1 - scaleY)) / 2;
     this.scene.tweens.killTweensOf(this.go);
-    this.go.setScale(this.baseScaleX * scale, this.baseScaleY * scale);
+    // 横轴始终保持基础比例与镜像状态；Y 位移补偿令脚底在上弹和回落中不漂移。
+    this.go.setScale(this.baseScaleX, this.baseScaleY * peakScaleY);
+    this.go.setY(yForScale(peakScaleY));
     this.scene.tweens.add({
       targets: this.go,
-      scaleX: this.baseScaleX,
       scaleY: this.baseScaleY,
-      duration: heavy ? 220 : 170,
+      y: baseY,
+      duration: totalDuration,
       ease: 'Back.easeOut'
     });
   }
