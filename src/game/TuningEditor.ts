@@ -1,6 +1,17 @@
 import Phaser from 'phaser';
 import { MAIN_CAMERA_BASE_ZOOM, screenLayerOffset } from './cameraConfig';
 import { UI_SCALE, VIEW_HEIGHT, VIEW_WIDTH } from './displayConfig';
+import type { AttackJudgement } from './ComboSystem';
+import type { WeaponId } from './weapons';
+
+export type TunableEnemyKind = 'smallGuard' | 'midGuard' | 'fan';
+
+export function passesDropChance(chance: number, roll = Math.random()): boolean {
+  const clampedChance = Phaser.Math.Clamp(chance, 0, 1);
+  if (clampedChance <= 0) return false;
+  if (clampedChance >= 1) return true;
+  return roll < clampedChance;
+}
 
 export class TuningEditor {
   readonly container: Phaser.GameObjects.Container;
@@ -12,6 +23,18 @@ export class TuningEditor {
   smallGuardAttackIntervalBeats = 4;
   fanBulletSpeed = 144;
   fanAttackIntervalBeats = 4;
+  weaponJudgementDamageMultipliers: Record<WeaponId, Record<AttackJudgement, number>> = {
+    glowsticks: { perfect: 1.2, good: 1, poor: 0.5 },
+    baton: { perfect: 1.2, good: 1, poor: 0.5 }
+  };
+  enemyProjectileDamage = {
+    smallGuard: 12,
+    fan: 12
+  };
+  weaponDropChances: Record<WeaponId, number> = {
+    glowsticks: 1,
+    baton: 1
+  };
   enemyBulletBeatSurgeEnabled = false;
   tutorialBgmSlot = 3;
   levelBgmSlot = 0;
@@ -142,6 +165,18 @@ export class TuningEditor {
   set enemyBulletSpeed(value: number) {
     this.smallGuardBulletSpeed = value;
     this.fanBulletSpeed = value;
+  }
+
+  getWeaponJudgementDamageMultiplier(weaponId: WeaponId, judgement: AttackJudgement): number {
+    return this.weaponJudgementDamageMultipliers[weaponId][judgement];
+  }
+
+  getEnemyProjectileDamage(kind: TunableEnemyKind): number {
+    return kind === 'fan' ? this.enemyProjectileDamage.fan : this.enemyProjectileDamage.smallGuard;
+  }
+
+  getWeaponDropChance(weaponId: WeaponId): number {
+    return this.weaponDropChances[weaponId];
   }
 
   setVisible(visible: boolean): void {

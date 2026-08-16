@@ -28,7 +28,7 @@ import {
 import { GAMEPAD_BUTTON, rumbleParameters, type RumbleKind } from '../game/GamepadControls';
 import { WORLD_OBJECT_SCALE, worldDepth, worldSize } from '../game/visualScale';
 import type { FpvMiniScene } from './FpvMiniScene';
-import { TuningEditor } from '../game/TuningEditor';
+import { passesDropChance, TuningEditor } from '../game/TuningEditor';
 import {
   GUARD_ATTACK_EFFECT_FRAMES,
   guardAttackEffectAssetPath,
@@ -125,6 +125,7 @@ type GameState = 'title' | 'tutorial' | 'tutorialConfirm' | 'playing' | 'intermi
 const TUTORIAL_TARGET_STREAK = 3;
 type BeatSfxCue = 'playerHurt' | 'feverStart' | 'enemyHurt' | 'pickup';
 type AudioChannel = 'master' | 'bgm' | 'rhythm' | SfxCategory;
+type CombatSettingsPage = 'speed' | 'damage';
 type CombatSettingKey =
   | 'glowstickBulletSpeed'
   | 'glowstickAttackSpeed'
@@ -133,7 +134,17 @@ type CombatSettingKey =
   | 'smallGuardBulletSpeed'
   | 'smallGuardAttackIntervalBeats'
   | 'fanBulletSpeed'
-  | 'fanAttackIntervalBeats';
+  | 'fanAttackIntervalBeats'
+  | 'glowstickPerfectDamageMultiplier'
+  | 'glowstickGoodDamageMultiplier'
+  | 'glowstickPoorDamageMultiplier'
+  | 'batonPerfectDamageMultiplier'
+  | 'batonGoodDamageMultiplier'
+  | 'batonPoorDamageMultiplier'
+  | 'smallGuardDamage'
+  | 'fanDamage'
+  | 'glowstickDropChance'
+  | 'batonDropChance';
 
 interface VolumeSliderVisual {
   fill: Phaser.GameObjects.Rectangle;
@@ -176,6 +187,9 @@ export class MainScene extends Phaser.Scene {
   private volumePanel!: Phaser.GameObjects.Container;
   private volumeSliders: Partial<Record<AudioChannel, VolumeSliderVisual>> = {};
   private combatValueTexts: Partial<Record<CombatSettingKey, Phaser.GameObjects.Text>> = {};
+  private combatSettingsPage: CombatSettingsPage = 'speed';
+  private combatPageContainers: Partial<Record<CombatSettingsPage, Phaser.GameObjects.Container>> = {};
+  private combatTabButtons: Partial<Record<CombatSettingsPage, Phaser.GameObjects.Rectangle>> = {};
   private volumePanelVisible = false;
   private volumeDragging: AudioChannel | null = null;
   private fpvWindowEnabled = true;
@@ -594,7 +608,7 @@ export class MainScene extends Phaser.Scene {
     const result = this.combo.handleInput(btn, this.conductor.now());
     if (result.type === 'correct') {
       this.showAttackJudgement(result.judgement, result.timingOffset);
-      this.performWeaponAttack(result.beatIdx, true, btn);
+      this.performWeaponAttack(result.beatIdx, true, btn, result.judgement);
       this.registerRhythmHit(result.globalBeat, btn === 'H');
       if (this.combo.feverActive()) this.player.heal(10);
       this.flashArenaCorrectJudgement(this.combo.pattern[result.beatIdx] === 'H');
@@ -605,7 +619,7 @@ export class MainScene extends Phaser.Scene {
     } else if (result.type === 'wrong') {
       this.showAttackJudgement(result.judgement, result.timingOffset, result.reason);
       this.breakRhythmCombo();
-      this.performWeaponAttack(result.beatIdx, false, btn);
+      this.performWeaponAttack(result.beatIdx, false, btn, result.judgement);
       this.sfx.error();
       this.player.errorFlash();
       this.hud.flashError();
@@ -860,13 +874,15 @@ export class MainScene extends Phaser.Scene {
       this.add.text(80, 94, '音频分类', {
         fontFamily: 'Arial', fontSize: '20px', fontStyle: 'bold', color: '#f0abfc'
       }).setOrigin(0, 0.5),
-      this.add.text(690, 94, '战斗参数', {
+      this.add.text(690, 84, '战斗参数', {
         fontFamily: 'Arial', fontSize: '20px', fontStyle: 'bold', color: '#67e8f9'
       }).setOrigin(0, 0.5),
       this.add.rectangle(640, 360, 2, 510, 0x334155, 0.9)
     ];
     this.volumeSliders = {};
     this.combatValueTexts = {};
+    this.combatPageContainers = {};
+    this.combatTabButtons = {};
 
     const beginDrag = (channel: AudioChannel, pointer: Phaser.Input.Pointer): void => {
       this.volumeDragging = channel;
@@ -922,7 +938,32 @@ export class MainScene extends Phaser.Scene {
       addVolumeRow(channel, 135 + index * 50, label, color, max);
     });
 
-    const addStepButton = (x: number, y: number, label: string, onClick: () => void): void => {
+    const addCombatTab = (page: CombatSettingsPage, x: number, label: string): void => {
+      const rect = this.add.rectangle(x, 116, 150, 30, 0x334155)
+        .setStrokeStyle(1, 0x64748b)
+        .setInteractive({ useHandCursor: true });
+      const text = this.add.text(x, 116, label, {
+        fontFamily: 'Arial', fontSize: '15px', fontStyle: 'bold', color: '#e2e8f0'
+      }).setOrigin(0.5);
+      rect.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+        pointer.event.stopPropagation();
+        this.setCombatSettingsPage(page);
+      });
+      this.combatTabButtons[page] = rect;
+      objects.push(rect, text);
+    };
+    addCombatTab('speed', 830, '速度 / 频率');
+    addCombatTab('damage', 1010, '伤害 / 掉落');
+
+    const speedPageObjects: Phaser.GameObjects.GameObject[] = [];
+    const damagePageObjects: Phaser.GameObjects.GameObject[] = [];
+    const addStepButton = (
+      target: Phaser.GameObjects.GameObject[],
+      x: number,
+      y: number,
+      label: string,
+      onClick: () => void
+    ): void => {
       const rect = this.add.rectangle(x, y, 38, 30, 0x334155)
         .setStrokeStyle(1, 0x94a3b8)
         .setInteractive({ useHandCursor: true });
@@ -933,29 +974,55 @@ export class MainScene extends Phaser.Scene {
         pointer.event.stopPropagation();
         onClick();
       });
-      objects.push(rect, text);
+      target.push(rect, text);
     };
-    const addCombatRow = (key: CombatSettingKey, y: number, label: string, step: number): void => {
-      objects.push(this.add.text(690, y, label, {
+    const addCombatRow = (
+      target: Phaser.GameObjects.GameObject[],
+      key: CombatSettingKey,
+      y: number,
+      label: string,
+      step: number
+    ): void => {
+      target.push(this.add.text(690, y, label, {
         fontFamily: 'Arial', fontSize: '16px', color: '#cbd5e1'
       }).setOrigin(0, 0.5));
       const valueText = this.add.text(1030, y, '', {
         fontFamily: 'Arial', fontSize: '15px', color: '#67e8f9'
       }).setOrigin(0.5);
       this.combatValueTexts[key] = valueText;
-      objects.push(valueText);
-      addStepButton(960, y, '−', () => this.adjustCombatSetting(key, -step));
-      addStepButton(1100, y, '+', () => this.adjustCombatSetting(key, step));
+      target.push(valueText);
+      addStepButton(target, 960, y, '−', () => this.adjustCombatSetting(key, -step));
+      addStepButton(target, 1100, y, '+', () => this.adjustCombatSetting(key, step));
     };
 
-    addCombatRow('glowstickBulletSpeed', 140, '荧光棒弹速', 20);
-    addCombatRow('glowstickAttackSpeed', 195, '荧光棒攻击速度', 0.1);
-    addCombatRow('batonSweepSpeed', 250, '警棍弧弹飞行速度', 0.1);
-    addCombatRow('batonAttackSpeed', 305, '警棍攻击速度', 0.1);
-    addCombatRow('smallGuardBulletSpeed', 360, '保安弹速', 20);
-    addCombatRow('smallGuardAttackIntervalBeats', 415, '保安攻击间隔', 1);
-    addCombatRow('fanBulletSpeed', 470, '粉丝弹速', 20);
-    addCombatRow('fanAttackIntervalBeats', 525, '粉丝攻击间隔', 1);
+    addCombatRow(speedPageObjects, 'glowstickBulletSpeed', 160, '荧光棒弹速', 20);
+    addCombatRow(speedPageObjects, 'glowstickAttackSpeed', 215, '荧光棒攻击速度', 0.1);
+    addCombatRow(speedPageObjects, 'batonSweepSpeed', 270, '警棍弧弹飞行速度', 0.1);
+    addCombatRow(speedPageObjects, 'batonAttackSpeed', 325, '警棍攻击速度', 0.1);
+    addCombatRow(speedPageObjects, 'smallGuardBulletSpeed', 380, '保安弹速', 20);
+    addCombatRow(speedPageObjects, 'smallGuardAttackIntervalBeats', 435, '保安攻击间隔', 1);
+    addCombatRow(speedPageObjects, 'fanBulletSpeed', 490, '粉丝弹速', 20);
+    addCombatRow(speedPageObjects, 'fanAttackIntervalBeats', 545, '粉丝攻击间隔', 1);
+
+    const damageRows: Array<[CombatSettingKey, string, number]> = [
+      ['glowstickPerfectDamageMultiplier', '荧光棒 PERFECT 伤害', 0.1],
+      ['glowstickGoodDamageMultiplier', '荧光棒 GOOD 伤害', 0.1],
+      ['glowstickPoorDamageMultiplier', '荧光棒 POOR 伤害', 0.1],
+      ['batonPerfectDamageMultiplier', '警棍 PERFECT 伤害', 0.1],
+      ['batonGoodDamageMultiplier', '警棍 GOOD 伤害', 0.1],
+      ['batonPoorDamageMultiplier', '警棍 POOR 伤害', 0.1],
+      ['smallGuardDamage', '保安弹幕伤害', 1],
+      ['fanDamage', '粉丝弹幕伤害', 1],
+      ['glowstickDropChance', '荧光棒掉落概率', 0.05],
+      ['batonDropChance', '警棍掉落概率', 0.05]
+    ];
+    damageRows.forEach(([key, label, step], index) => {
+      addCombatRow(damagePageObjects, key, 158 + index * 44, label, step);
+    });
+
+    this.combatPageContainers.speed = this.add.container(0, 0, speedPageObjects);
+    this.combatPageContainers.damage = this.add.container(0, 0, damagePageObjects);
+    objects.push(this.combatPageContainers.speed, this.combatPageContainers.damage);
 
     const fpvLabel = this.add.text(80, 555, '右下 FPV 观察窗', {
       fontFamily: 'Arial', fontSize: '16px', color: '#cbd5e1'
@@ -989,7 +1056,22 @@ export class MainScene extends Phaser.Scene {
     });
     this.refreshVolumeControl();
     this.refreshCombatControls();
+    this.setCombatSettingsPage(this.combatSettingsPage);
     this.refreshFpvToggle();
+  }
+
+  private setCombatSettingsPage(page: CombatSettingsPage): void {
+    this.combatSettingsPage = page;
+    for (const candidate of ['speed', 'damage'] as const) {
+      const active = candidate === page;
+      const pageContainer = this.combatPageContainers[candidate];
+      pageContainer?.setVisible(active).setActive(active);
+      pageContainer?.each((child: Phaser.GameObjects.GameObject) => {
+        if (child.input) child.input.enabled = active;
+      });
+      this.combatTabButtons[candidate]?.setFillStyle(active ? 0x0f766e : 0x334155);
+      this.combatTabButtons[candidate]?.setStrokeStyle(1, active ? 0x67e8f9 : 0x64748b);
+    }
   }
 
   private setVolumePanelVisible(visible: boolean): void {
@@ -1136,6 +1218,78 @@ export class MainScene extends Phaser.Scene {
       case 'fanAttackIntervalBeats':
         this.tuningEditor[key] = Phaser.Math.Clamp(this.tuningEditor[key] + delta, 1, 8);
         break;
+      case 'glowstickPerfectDamageMultiplier':
+        this.tuningEditor.weaponJudgementDamageMultipliers.glowsticks.perfect = Phaser.Math.Clamp(
+          this.tuningEditor.weaponJudgementDamageMultipliers.glowsticks.perfect + delta,
+          0,
+          3
+        );
+        break;
+      case 'glowstickGoodDamageMultiplier':
+        this.tuningEditor.weaponJudgementDamageMultipliers.glowsticks.good = Phaser.Math.Clamp(
+          this.tuningEditor.weaponJudgementDamageMultipliers.glowsticks.good + delta,
+          0,
+          3
+        );
+        break;
+      case 'glowstickPoorDamageMultiplier':
+        this.tuningEditor.weaponJudgementDamageMultipliers.glowsticks.poor = Phaser.Math.Clamp(
+          this.tuningEditor.weaponJudgementDamageMultipliers.glowsticks.poor + delta,
+          0,
+          3
+        );
+        break;
+      case 'batonPerfectDamageMultiplier':
+        this.tuningEditor.weaponJudgementDamageMultipliers.baton.perfect = Phaser.Math.Clamp(
+          this.tuningEditor.weaponJudgementDamageMultipliers.baton.perfect + delta,
+          0,
+          3
+        );
+        break;
+      case 'batonGoodDamageMultiplier':
+        this.tuningEditor.weaponJudgementDamageMultipliers.baton.good = Phaser.Math.Clamp(
+          this.tuningEditor.weaponJudgementDamageMultipliers.baton.good + delta,
+          0,
+          3
+        );
+        break;
+      case 'batonPoorDamageMultiplier':
+        this.tuningEditor.weaponJudgementDamageMultipliers.baton.poor = Phaser.Math.Clamp(
+          this.tuningEditor.weaponJudgementDamageMultipliers.baton.poor + delta,
+          0,
+          3
+        );
+        break;
+      case 'smallGuardDamage':
+        this.tuningEditor.enemyProjectileDamage.smallGuard = Phaser.Math.Clamp(
+          this.tuningEditor.enemyProjectileDamage.smallGuard + delta,
+          0,
+          100
+        );
+        this.syncEnemyProjectileDamage('smallGuard');
+        break;
+      case 'fanDamage':
+        this.tuningEditor.enemyProjectileDamage.fan = Phaser.Math.Clamp(
+          this.tuningEditor.enemyProjectileDamage.fan + delta,
+          0,
+          100
+        );
+        this.syncEnemyProjectileDamage('fan');
+        break;
+      case 'glowstickDropChance':
+        this.tuningEditor.weaponDropChances.glowsticks = Phaser.Math.Clamp(
+          this.tuningEditor.weaponDropChances.glowsticks + delta,
+          0,
+          1
+        );
+        break;
+      case 'batonDropChance':
+        this.tuningEditor.weaponDropChances.baton = Phaser.Math.Clamp(
+          this.tuningEditor.weaponDropChances.baton + delta,
+          0,
+          1
+        );
+        break;
     }
     this.refreshCombatControls();
   }
@@ -1150,11 +1304,34 @@ export class MainScene extends Phaser.Scene {
       smallGuardBulletSpeed: `${Math.round(this.tuningEditor.smallGuardBulletSpeed)} px/s`,
       smallGuardAttackIntervalBeats: `${Math.round(this.tuningEditor.smallGuardAttackIntervalBeats)} 拍`,
       fanBulletSpeed: `${Math.round(this.tuningEditor.fanBulletSpeed)} px/s`,
-      fanAttackIntervalBeats: `${Math.round(this.tuningEditor.fanAttackIntervalBeats)} 拍`
+      fanAttackIntervalBeats: `${Math.round(this.tuningEditor.fanAttackIntervalBeats)} 拍`,
+      glowstickPerfectDamageMultiplier: percent(
+        this.tuningEditor.weaponJudgementDamageMultipliers.glowsticks.perfect
+      ),
+      glowstickGoodDamageMultiplier: percent(this.tuningEditor.weaponJudgementDamageMultipliers.glowsticks.good),
+      glowstickPoorDamageMultiplier: percent(this.tuningEditor.weaponJudgementDamageMultipliers.glowsticks.poor),
+      batonPerfectDamageMultiplier: percent(this.tuningEditor.weaponJudgementDamageMultipliers.baton.perfect),
+      batonGoodDamageMultiplier: percent(this.tuningEditor.weaponJudgementDamageMultipliers.baton.good),
+      batonPoorDamageMultiplier: percent(this.tuningEditor.weaponJudgementDamageMultipliers.baton.poor),
+      smallGuardDamage: `${Math.round(this.tuningEditor.enemyProjectileDamage.smallGuard)} 点`,
+      fanDamage: `${Math.round(this.tuningEditor.enemyProjectileDamage.fan)} 点`,
+      glowstickDropChance: percent(this.tuningEditor.weaponDropChances.glowsticks),
+      batonDropChance: percent(this.tuningEditor.weaponDropChances.baton)
     };
     for (const [key, text] of Object.entries(this.combatValueTexts) as Array<
       [CombatSettingKey, Phaser.GameObjects.Text]
     >) text.setText(values[key]);
+  }
+
+  private syncEnemyProjectileDamage(kind: 'smallGuard' | 'fan'): void {
+    if (!this.bullets) return;
+    for (const obj of this.bullets.getChildren()) {
+      const bullet = obj as Phaser.GameObjects.Rectangle;
+      const sourceKind = bullet.getData('sourceKind') as EnemyKind;
+      if (sourceKind === kind || (kind === 'smallGuard' && sourceKind === 'midGuard')) {
+        bullet.setData('damage', this.tuningEditor.getEnemyProjectileDamage(sourceKind));
+      }
+    }
   }
 
   /** bgm3 长度不是整拍；每 616 拍按 Conductor 重新开始，避免 Phaser 原生循环累计漂移。 */
@@ -1546,7 +1723,12 @@ export class MainScene extends Phaser.Scene {
 
     // 保安掉警棍，粉丝掉荧光棒；玩家已持有或场上已有时不重复生成。
     const drop = enemy.kind === 'smallGuard' ? BATON : enemy.kind === 'fan' ? GLOWSTICKS : undefined;
-    if (drop && this.player.weapon.id !== drop.id && !this.pickups.some((pickup) => pickup.weapon.id === drop.id)) {
+    if (
+      drop
+      && this.player.weapon.id !== drop.id
+      && !this.pickups.some((pickup) => pickup.weapon.id === drop.id)
+      && passesDropChance(this.tuningEditor.getWeaponDropChance(drop.id))
+    ) {
       this.spawnPickup(enemy.x, enemy.y, drop);
     }
 
@@ -1843,7 +2025,8 @@ export class MainScene extends Phaser.Scene {
   private performWeaponAttack(
     beatIdx: number,
     onBeat: boolean,
-    attackInput: 'L' | 'H'
+    attackInput: 'L' | 'H',
+    judgement: AttackJudgement
   ): void {
     const weapon = this.player.weapon;
     const spec = getAttackSpec(weapon.id, beatIdx);
@@ -1855,6 +2038,11 @@ export class MainScene extends Phaser.Scene {
     const attackOrigin = this.player.getAttackOrigin();
 
     const damage = spec.kind === 'charge' ? 8 : spec.damage;
+    const judgementDamageMultiplier = this.tuningEditor.getWeaponJudgementDamageMultiplier(
+      weapon.id,
+      judgement
+    );
+    const tunedDamage = damage * mult * judgementDamageMultiplier;
     const projectileCount = onBeat ? this.getCorrectProjectileCount(weapon.id) : 1;
     const projectileLengthScale = onBeat ? 1 : 0.5;
     const projectileRangeScale = onBeat ? 1 : 0.5;
@@ -1880,7 +2068,7 @@ export class MainScene extends Phaser.Scene {
           attackOrigin.x,
           attackOrigin.y,
           attackAngle,
-          damage * mult,
+          tunedDamage,
           projectileCount,
           heavy,
           onBeat,
@@ -1893,7 +2081,7 @@ export class MainScene extends Phaser.Scene {
           attackOrigin.y,
           attackAngle,
           heavy ? 560 : 480,
-          damage * mult,
+          tunedDamage,
           PLAYER_BULLET_COLOR,
           projectileCount,
           onBeat,
@@ -2178,7 +2366,6 @@ export class MainScene extends Phaser.Scene {
     x: number,
     y: number,
     angle: number,
-    damage: number,
     color: number,
     sourceKind: EnemyKind
   ): void {
@@ -2188,7 +2375,7 @@ export class MainScene extends Phaser.Scene {
       y + Math.sin(shotAngle) * worldSize(26),
       shotAngle,
       this.getEnemyBulletSpeed(sourceKind),
-      damage,
+      this.tuningEditor.getEnemyProjectileDamage(sourceKind),
       color,
       sourceKind
     );
