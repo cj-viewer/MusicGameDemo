@@ -44,19 +44,21 @@ import { UI_SCALE, VIEW_HEIGHT, VIEW_WIDTH, ui as hd } from '../game/displayConf
 interface BgmTrack {
   key: string;
   label: string;
-  bpm: number;
+  /** 音频文件原始速度下实测的 BPM，用于换算播放倍率。 */
+  sourceBpm: number;
   firstBeatOffset: number;
   loopBeats: number;
 }
 const BGM_TRACKS: readonly BgmTrack[] = [
-  { key: 'bgm-1', label: 'bgm1.mp3', bpm: 145, firstBeatOffset: 0.012, loopBeats: 498 },
-  { key: 'bgm-2', label: 'bgm2.mp3', bpm: 176.47, firstBeatOffset: 0.02, loopBeats: 624 },
-  { key: 'bgm-3', label: 'bgm3.mp3', bpm: 146.32, firstBeatOffset: 0.026, loopBeats: 616 },
-  { key: 'bgm-0', label: 'bgm0.mp3', bpm: 153.846, firstBeatOffset: 0.09, loopBeats: 438 }
+  { key: 'bgm-1', label: 'bgm1.mp3', sourceBpm: 145, firstBeatOffset: 0.012, loopBeats: 498 },
+  { key: 'bgm-2', label: 'bgm2.mp3', sourceBpm: 176.47, firstBeatOffset: 0.02, loopBeats: 624 },
+  { key: 'bgm-3', label: 'bgm3.mp3', sourceBpm: 146.32, firstBeatOffset: 0.026, loopBeats: 616 },
+  { key: 'bgm-0', label: 'bgm0.mp3', sourceBpm: 153.846, firstBeatOffset: 0.09, loopBeats: 438 }
 ];
 const DEFAULT_TUTORIAL_BGM_SLOT = 3;
 const DEFAULT_LEVEL_BGM_SLOT = 0;
-const BPM = BGM_TRACKS[DEFAULT_TUTORIAL_BGM_SLOT].bpm;
+/** 试玩中的统一节拍速度；BGM 按各自原始 BPM 等比变速到该值。 */
+const BPM = 132;
 
 /** BGM 通道默认显示 150%；内部基础混音继续使用上一版的 75%。 */
 const BGM_VOLUME = 0.0375;
@@ -656,26 +658,34 @@ export class MainScene extends Phaser.Scene {
    * 若倒数时间足够则用 delay 等到那一刻播放，否则直接以 seek 跳过已经过去的部分。
    */
   private playBgmAlignedToBeat(firstBeat: number): void {
+    const playbackRate = BPM / this.currentBgmTrack.sourceBpm;
+    // firstBeatOffset 是源文件时间轴；变速后，墙钟上的等效偏移需除以播放倍率。
+    const scaledFirstBeatOffset = this.currentBgmTrack.firstBeatOffset / playbackRate;
     const delayToFirstBeat = this.conductor.timeOfBeat(firstBeat) - this.conductor.now();
-    if (delayToFirstBeat >= this.currentBgmTrack.firstBeatOffset) {
-      this.bgm.play({ delay: delayToFirstBeat - this.currentBgmTrack.firstBeatOffset });
+    if (delayToFirstBeat >= scaledFirstBeatOffset) {
+      this.bgm.play({ delay: delayToFirstBeat - scaledFirstBeatOffset, rate: playbackRate });
     } else {
-      this.bgm.play({ seek: this.currentBgmTrack.firstBeatOffset - delayToFirstBeat });
+      // seek 仍使用源文件秒数，所以把已经过去的墙钟时间乘回播放倍率。
+      this.bgm.play({
+        seek: this.currentBgmTrack.firstBeatOffset - delayToFirstBeat * playbackRate,
+        rate: playbackRate
+      });
     }
   }
 
   private switchBgmTrack(track: BgmTrack, playNow = true): void {
     if (this.currentBgmTrack.key === track.key && this.bgm) {
-      this.conductor.retune(track.bpm);
+      this.conductor.retune(BPM);
       return;
     }
     this.bgm?.stop();
     this.bgm?.destroy();
     this.currentBgmTrack = track;
-    this.conductor.retune(track.bpm);
+    this.conductor.retune(BPM);
     this.bgm = this.sound.add(track.key, {
       loop: false,
-      volume: BGM_VOLUME * this.bgmChannelVolume
+      volume: BGM_VOLUME * this.bgmChannelVolume,
+      rate: BPM / track.sourceBpm
     }) as Phaser.Sound.WebAudioSound | Phaser.Sound.HTML5AudioSound;
     this.bgm.on(Phaser.Sound.Events.COMPLETE, this.onBgmComplete, this);
     if (playNow && this.conductor.started) {

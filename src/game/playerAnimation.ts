@@ -30,8 +30,8 @@ export const PLAYER_DISPLAY_HEIGHT = LEGACY_PLAYER_DISPLAY_HEIGHT * UI_SCALE;
 export const PLAYER_SPRITE_SCALE = PLAYER_DISPLAY_HEIGHT / PLAYER_REFERENCE_CONTENT_HEIGHT;
 /** 128 x 128 手持武器相对 256 x 256 角色画布的统一显示倍率。 */
 export const PLAYER_WEAPON_SCALE = PLAYER_SPRITE_SCALE * 0.8;
-/** 140 ms movement plus 100 ms of visual follow-through after the dash lands. */
-export const PLAYER_DASH_ANIMATION_DURATION_MS = 240;
+/** 140 ms movement plus 220 ms of slower visual follow-through after the dash lands. */
+export const PLAYER_DASH_ANIMATION_DURATION_MS = 360;
 export const PLAYER_DEATH_ANIMATION_DURATION_MS = 800;
 
 /** 固定角色受击体，避免 256px 透明画布被误当成碰撞范围。 */

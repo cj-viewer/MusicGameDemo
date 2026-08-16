@@ -6,6 +6,7 @@ import {
   PLAYER_BODY_SOURCE_OFFSET_X,
   PLAYER_BODY_SOURCE_OFFSET_Y,
   PLAYER_BODY_SOURCE_WIDTH,
+  PLAYER_DASH_ANIMATION_DURATION_MS,
   PLAYER_SPRITE_SCALE,
   PLAYER_WEAPON_SCALE,
   playPlayerAttackEffect,
@@ -22,8 +23,11 @@ const MOVE_ACCELERATION = 1050;
 const MOVE_DECELERATION = 720;
 const DODGE_DISTANCE = 160;
 const DODGE_DURATION_MS = 140;
-const DODGE_ANIMATION_FOLLOW_THROUGH_MS = 100;
-const DODGE_TRAIL_INTERVAL_MS = 30;
+const DODGE_ANIMATION_FOLLOW_THROUGH_MS = PLAYER_DASH_ANIMATION_DURATION_MS - DODGE_DURATION_MS;
+/** Dash 位移过程中的角色残影采样间隔。 */
+const DODGE_TRAIL_INTERVAL_MS = 10;
+/** 两倍原始 0.55 会超过 Phaser 的上限，因此取最大可见值。 */
+const DODGE_TRAIL_INITIAL_ALPHA = 1;
 const EMPTY_COMBO_DODGE_INTERVAL_MS = 500;
 /** 闪避踩拍判定窗口：拍点前后各 0.12 秒 */
 const DODGE_BEAT_WINDOW = 0.12;
@@ -233,7 +237,10 @@ export class Player {
     this.setAction('dash', true);
     this.body.setVelocity(0, 0);
     this.body.enable = false;
-    this.lastTrailAt = 0;
+    const trailStartX = this.go.x;
+    const trailStartY = this.go.y;
+    this.lastTrailAt = dodgeStartedAt;
+    this.spawnTrail(trailStartX, trailStartY);
     let waveReleased = false;
 
     this.scene.tweens.add({
@@ -243,13 +250,14 @@ export class Player {
       duration: DODGE_DURATION_MS,
       ease: 'Quint.easeOut',
       onUpdate: (tween) => {
-        this.spawnTrail();
+        this.spawnDodgeTrailSamples(dodgeStartedAt, trailStartX, trailStartY, tx, ty);
         if (!waveReleased && tween.progress >= 2 / 3) {
           waveReleased = true;
           this.scene.triggerDodgeFeverWave(this.go.x, this.go.y);
         }
       },
       onComplete: () => {
+        this.spawnDodgeTrailSamples(dodgeStartedAt, trailStartX, trailStartY, tx, ty);
         this.isDodging = false;
         this.body.enable = true;
         this.body.reset(this.go.x, this.go.y);
@@ -354,15 +362,36 @@ export class Player {
     playPlayerAnimation(this.go, action, forceRestart);
   }
 
-  private spawnTrail(): void {
-    const now = this.scene.time.now;
-    if (now - this.lastTrailAt < DODGE_TRAIL_INTERVAL_MS) return;
-    this.lastTrailAt = now;
+  /**
+   * 按固定的 10ms 时间轴补齐残影。渲染帧跨过多个采样点时，仍按 Quint.easeOut
+   * 位移曲线在对应的历史位置生成残影，而不是将多个残影堆叠在当前帧位置。
+   */
+  private spawnDodgeTrailSamples(
+    dodgeStartedAt: number,
+    startX: number,
+    startY: number,
+    targetX: number,
+    targetY: number
+  ): void {
+    const dodgeEndsAt = dodgeStartedAt + DODGE_DURATION_MS;
+    const sampleUntil = Math.min(this.scene.time.now, dodgeEndsAt);
+    while (this.lastTrailAt + DODGE_TRAIL_INTERVAL_MS <= sampleUntil) {
+      this.lastTrailAt += DODGE_TRAIL_INTERVAL_MS;
+      const progress = Phaser.Math.Clamp((this.lastTrailAt - dodgeStartedAt) / DODGE_DURATION_MS, 0, 1);
+      const easedProgress = 1 - (1 - progress) ** 5; // Quint.easeOut
+      this.spawnTrail(
+        Phaser.Math.Linear(startX, targetX, easedProgress),
+        Phaser.Math.Linear(startY, targetY, easedProgress)
+      );
+    }
+  }
+
+  private spawnTrail(x: number, y: number): void {
     const trail = this.scene.add
-      .sprite(this.go.x, this.go.y, this.go.texture.key)
+      .sprite(x, y, this.go.texture.key)
       .setScale(this.go.scaleX, this.go.scaleY)
       .setFlipX(this.go.flipX)
-      .setAlpha(0.55)
+      .setAlpha(DODGE_TRAIL_INITIAL_ALPHA)
       .setTint(0x9be8ff)
       .setDepth(this.go.depth - 0.0005);
     this.scene.tweens.add({
