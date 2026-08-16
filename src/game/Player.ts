@@ -38,6 +38,11 @@ const LIGHT_ATTACK_EFFECT_ALPHA = 0.45;
 const HARD_ATTACK_EFFECT_SCALE = 1.18;
 const LIGHT_ATTACK_GLOW_ALPHA = 0.3;
 const HARD_ATTACK_GLOW_ALPHA = 0.68;
+/** 复用边缘律动的轻 / 重拍层级，但将角色本体的缩放压低到克制可见。 */
+const CHARACTER_BEAT_PULSE_LIGHT_SCALE = 1.035;
+const CHARACTER_BEAT_PULSE_HEAVY_SCALE = 1.075;
+const CHARACTER_BEAT_PULSE_LIGHT_DURATION_MS = 170;
+const CHARACTER_BEAT_PULSE_HEAVY_DURATION_MS = 220;
 /** 武器透明内容的握把末端；旋转与镜像都必须围绕此点。 */
 const LIGHT_STICK_ORIGIN = { x: 101 / 128, y: 98 / 128 };
 const BATON_ORIGIN = { x: 123 / 128, y: 121 / 128 };
@@ -204,8 +209,18 @@ export class Player {
     }
   }
 
-  onBeat(): void {
-    // 角色保持固定的屏幕视觉尺寸；节拍律动由场边、HP 和镜头承担。
+  onBeat(heavy: boolean): void {
+    if (this.dead) return;
+    const scale = heavy ? CHARACTER_BEAT_PULSE_HEAVY_SCALE : CHARACTER_BEAT_PULSE_LIGHT_SCALE;
+    this.scene.tweens.killTweensOf(this.go);
+    this.go.setScale(PLAYER_SPRITE_SCALE * scale);
+    this.scene.tweens.add({
+      targets: this.go,
+      scaleX: PLAYER_SPRITE_SCALE,
+      scaleY: PLAYER_SPRITE_SCALE,
+      duration: heavy ? CHARACTER_BEAT_PULSE_HEAVY_DURATION_MS : CHARACTER_BEAT_PULSE_LIGHT_DURATION_MS,
+      ease: 'Back.easeOut'
+    });
   }
 
   tryDodge(): boolean {

@@ -44,6 +44,8 @@ export abstract class Enemy {
   private bodySourceBounds?: EnemyBodySourceBounds;
   private knockbackUntil = 0;
   private knockbackVelocity = new Phaser.Math.Vector2();
+  private readonly baseScaleX: number;
+  private readonly baseScaleY: number;
 
   constructor(
     scene: MainScene,
@@ -58,6 +60,8 @@ export abstract class Enemy {
     this.maxHp = hp;
     this.baseColor = color;
     this.bodySourceBounds = bodySourceBounds;
+    this.baseScaleX = go.scaleX;
+    this.baseScaleY = go.scaleY;
     go.setDepth(3);
     scene.physics.add.existing(go);
     if (bodySourceBounds) {
@@ -105,6 +109,21 @@ export abstract class Enemy {
 
   abstract onBeat(info: BeatInfo): void;
   protected abstract move(dtMs: number): void;
+
+  /** 所有敌人复用边缘律动的轻 / 重拍节奏，但仅做小幅本体缩放，不改变物理体。 */
+  pulseBeat(heavy: boolean): void {
+    if (this.dead) return;
+    const scale = heavy ? 1.075 : 1.035;
+    this.scene.tweens.killTweensOf(this.go);
+    this.go.setScale(this.baseScaleX * scale, this.baseScaleY * scale);
+    this.scene.tweens.add({
+      targets: this.go,
+      scaleX: this.baseScaleX,
+      scaleY: this.baseScaleY,
+      duration: heavy ? 220 : 170,
+      ease: 'Back.easeOut'
+    });
+  }
 
   /** 物理组接管对象后执行一次，避免 Group 默认值覆盖出生时的初始运动状态。 */
   onSpawned(): void {}

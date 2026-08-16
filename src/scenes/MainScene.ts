@@ -1799,10 +1799,10 @@ export class MainScene extends Phaser.Scene {
     this.playQueuedBeatSfx();
     if (this.state === 'over') return;
 
-    this.player.onBeat();
-    this.hud.onBeat(info.beatInMeasure);
-    this.getFpvMiniScene()?.onBeat(this.combo.pattern[info.beatInMeasure] === 'H');
     const heavyBeat = this.combo.pattern[info.beatInMeasure] === 'H';
+    this.player.onBeat(heavyBeat);
+    this.hud.onBeat(info.beatInMeasure);
+    this.getFpvMiniScene()?.onBeat(heavyBeat);
     this.pulseRhythmEdgeBlocks(heavyBeat);
     this.pulseArenaBeatJudgement(heavyBeat);
     this.pulsePickups();
@@ -1830,7 +1830,10 @@ export class MainScene extends Phaser.Scene {
     }
 
     if (this.state === 'playing') {
-      for (const enemy of [...this.enemies]) enemy.onBeat(info);
+      for (const enemy of [...this.enemies]) {
+        enemy.pulseBeat(heavyBeat);
+        enemy.onBeat(info);
+      }
     }
   }
 
@@ -1838,7 +1841,7 @@ export class MainScene extends Phaser.Scene {
 
   private performWeaponAttack(
     beatIdx: number,
-    enableFever: boolean,
+    onBeat: boolean,
     attackInput: 'L' | 'H'
   ): void {
     const weapon = this.player.weapon;
@@ -1850,10 +1853,14 @@ export class MainScene extends Phaser.Scene {
     const angle = this.player.aimAngle;
     const attackOrigin = this.player.getAttackOrigin();
 
-    // enableFever 为 true 即玩家踩拍成功，攻击带强调特效与发光弹丸
-    const onBeat = enableFever;
     const damage = spec.kind === 'charge' ? 8 : spec.damage;
-    const projectileCount = enableFever ? this.combo.level + 1 : 1;
+    const projectileCount = onBeat ? this.getCorrectProjectileCount(weapon.id) : 1;
+    const projectileLengthScale = onBeat ? 1 : 0.5;
+    const projectileRangeScale = onBeat ? 1 : 0.5;
+    const batonSweepScale = onBeat ? 1 : 0.5;
+    const attackAngles = onBeat && this.combo.feverActive()
+      ? [angle, angle + (Math.PI * 2) / 3, angle - (Math.PI * 2) / 3]
+      : [angle];
     this.sfx.attack(heavy);
     this.player.playAttackAnimation(heavy);
     if (onBeat) {
@@ -1866,27 +1873,33 @@ export class MainScene extends Phaser.Scene {
         weapon.id !== 'baton'
       );
     }
-    if (weapon.id === 'baton') {
-      this.spawnBatonSweep(
-        attackOrigin.x,
-        attackOrigin.y,
-        angle,
-        damage * mult,
-        Math.min(3, projectileCount),
-        heavy,
-        onBeat
-      );
-    } else {
-      this.spawnPlayerShotgun(
-        attackOrigin.x,
-        attackOrigin.y,
-        angle,
-        heavy ? 560 : 480,
-        damage * mult,
-        PLAYER_BULLET_COLOR,
-        projectileCount,
-        onBeat
-      );
+    for (const attackAngle of attackAngles) {
+      if (weapon.id === 'baton') {
+        this.spawnBatonSweep(
+          attackOrigin.x,
+          attackOrigin.y,
+          attackAngle,
+          damage * mult,
+          projectileCount,
+          heavy,
+          onBeat,
+          projectileLengthScale,
+          batonSweepScale
+        );
+      } else {
+        this.spawnPlayerShotgun(
+          attackOrigin.x,
+          attackOrigin.y,
+          attackAngle,
+          heavy ? 560 : 480,
+          damage * mult,
+          PLAYER_BULLET_COLOR,
+          projectileCount,
+          onBeat,
+          projectileLengthScale,
+          projectileRangeScale
+        );
+      }
     }
 
     if (weapon.id !== 'baton' && spec.kind === 'charge') {
@@ -1898,7 +1911,7 @@ export class MainScene extends Phaser.Scene {
     }
 
     // Fever Time：每次成功攻击额外释放清屏音波（轻=扇形，重=全圆）
-    if (enableFever && this.combo.feverActive()) {
+    if (onBeat && this.combo.feverActive()) {
       this.sfx.feverWave();
       if (heavy) {
         this.spawnSoundWave(attackOrigin.x, attackOrigin.y, angle, 180, 190, 14 * mult);
@@ -2188,10 +2201,17 @@ export class MainScene extends Phaser.Scene {
     damage: number,
     color: number,
     pelletCount: number,
-    onBeat = false
+    onBeat = false,
+    lengthScale = 1,
+    rangeScale = 1
   ): void {
-    const judgedBeat = this.conductor.nearestBeat(this.conductor.now()).n;
-    const despawnBeat = Math.max(0, judgedBeat + 1);
+    const now = this.conductor.now();
+    const currentBeat = this.conductor.beatFloatAt(now);
+    const judgedBeat = this.conductor.nearestBeat(now).n;
+    const fullRangeDespawnBeat = Math.max(0, judgedBeat + 1);
+    // 错拍保持原速，但只飞行正常剩余路程的一半。
+    const despawnBeat = currentBeat + (fullRangeDespawnBeat - currentBeat) * rangeScale;
+    const bulletLength = PLAYER_BULLET_LENGTH * lengthScale;
     const offsets = Array.from({ length: pelletCount }, (_, index) => {
       if (index === 0) return 0;
       const side = index % 2 === 1 ? -1 : 1;
@@ -2202,7 +2222,7 @@ export class MainScene extends Phaser.Scene {
       const bullet = this.add.rectangle(
         x + Math.cos(shotAngle) * (PLAYER_RADIUS + worldSize(8)),
         y + Math.sin(shotAngle) * (PLAYER_RADIUS + worldSize(8)),
-        PLAYER_BULLET_LENGTH,
+        bulletLength,
         BULLET_THICKNESS,
         color
       ).setRotation(shotAngle).setDepth(4);
@@ -2220,11 +2240,11 @@ export class MainScene extends Phaser.Scene {
       bullet.setData('knockbackAngle', shotAngle);
       bullet.setData('knockbackSpeed', GLOWSTICK_KNOCKBACK_SPEED);
       bullet.setData('hitboxMode', 'straight');
-      bullet.setData('hitboxLength', PLAYER_BULLET_LENGTH);
+      bullet.setData('hitboxLength', bulletLength);
       bullet.setData('hitboxSize', BULLET_THICKNESS);
       bullet.setData('hitboxAngle', shotAngle);
       this.createBulletHitboxes(bullet, this.playerBulletHitboxes, BULLET_THICKNESS);
-      this.positionStraightBulletHitboxes(bullet, PLAYER_BULLET_LENGTH, BULLET_THICKNESS, shotAngle);
+      this.positionStraightBulletHitboxes(bullet, bulletLength, BULLET_THICKNESS, shotAngle);
     }
   }
 
@@ -2235,10 +2255,12 @@ export class MainScene extends Phaser.Scene {
     damage: number,
     bulletCount: number,
     heavy: boolean,
-    onBeat = false
+    onBeat = false,
+    lengthScale = 1,
+    sweepScale = 1
   ): void {
     const clockwise = !heavy;
-    const halfSweep = heavy ? Math.PI / 3 : Math.PI / 4;
+    const halfSweep = (heavy ? Math.PI / 3 : Math.PI / 4) * sweepScale;
     const startAngle = aimAngle + (clockwise ? -halfSweep : halfSweep);
     const endAngle = aimAngle + (clockwise ? halfSweep : -halfSweep);
     const middleRadius = worldSize(74 * 1.25);
@@ -2250,8 +2272,8 @@ export class MainScene extends Phaser.Scene {
     ];
     const activeLayers = layerTemplates.slice(0, Phaser.Math.Clamp(bulletCount, 1, 3));
     const baseLength = worldSize((heavy ? 62 : 46) * 1.5);
-    const bullets = activeLayers.map(({ radius, lengthScale }) => {
-      const arcLength = baseLength * lengthScale;
+    const bullets = activeLayers.map(({ radius, lengthScale: layerLengthScale }) => {
+      const arcLength = baseLength * layerLengthScale * lengthScale;
       const halfArcAngle = arcLength / (2 * radius);
       const visual = this.add.graphics().setDepth(4);
       const bullet = this.add
@@ -2813,6 +2835,14 @@ export class MainScene extends Phaser.Scene {
       : progress;
     const alphaProgress = Phaser.Math.Easing.Expo.In(adjustedProgress);
     return Phaser.Math.Linear(ARENA_BEAT_CUE_MIN_ALPHA, 1, alphaProgress);
+  }
+
+  /** 正确输入时，不同武器按 ComboMeter 使用各自的弹幕层数上限。 */
+  private getCorrectProjectileCount(weaponId: string): number {
+    if (weaponId === 'baton') {
+      return Math.min(3, 1 + Math.floor(this.combo.level / 2));
+    }
+    return Math.min(5, 1 + this.combo.level);
   }
 
   /**
