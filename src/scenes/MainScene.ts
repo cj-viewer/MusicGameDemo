@@ -65,12 +65,12 @@ const DEFAULT_LEVEL_BGM_SLOT = 0;
 const BPM = 132;
 
 /** BGM 通道归一显示为 100%；基础混音已补偿为上一默认有效响度的 150%。 */
-const BGM_VOLUME = 0.084375;
+const BGM_VOLUME = 1;
 
-const DEFAULT_MASTER_VOLUME = 1.5;
-const MAX_MASTER_VOLUME = 3;
+const DEFAULT_MASTER_VOLUME = 1;
+const MAX_MASTER_VOLUME = 1;
 const DEFAULT_BGM_CHANNEL_VOLUME = 1;
-const MAX_CHANNEL_VOLUME = 2;
+const MAX_CHANNEL_VOLUME = 1;
 const SETTINGS_VOLUME_TRACK_X = 280;
 const SETTINGS_VOLUME_TRACK_WIDTH = 250;
 /** 1080p 主场景使用 1x 基础镜头，并按角色靠近场地边缘的程度做 Cinemachine 风格前探。 */
@@ -304,6 +304,9 @@ export class MainScene extends Phaser.Scene {
     this.enemies = [];
     this.pickups = [];
     this.state = 'title';
+    this.gamePaused = false;
+    this.volumePanelVisible = false;
+    this.volumeDragging = null;
     this.waveIdx = -1;
     this.displayedWaveNumber = 0;
     this.victoryAchieved = false;
@@ -420,6 +423,7 @@ export class MainScene extends Phaser.Scene {
     this.conductor.on('beat', this.onBeat, this);
 
     this.setupInput();
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.cleanupForRestart, this);
     // 独立 Scene 只投影主场景数据，不参与主场景的控制、物理或判定。
     if (this.scene.isActive('FpvMiniScene')) this.scene.stop('FpvMiniScene');
     this.scene.launch('FpvMiniScene');
@@ -537,9 +541,9 @@ export class MainScene extends Phaser.Scene {
       }
     });
 
-    this.input.keyboard!.on('keydown-R', () => {
-      if (this.gamePaused) return;
-      this.scene.restart();
+    this.input.keyboard!.on('keydown-R', (event: KeyboardEvent) => {
+      if (event.repeat || this.gamePaused) return;
+      this.restartGame();
     });
 
     this.input.keyboard!.on('keydown-P', (event: KeyboardEvent) => {
@@ -561,6 +565,18 @@ export class MainScene extends Phaser.Scene {
         this.refreshComboHUD();
       }
     });
+  }
+
+  private restartGame(): void {
+    this.scene.stop('FpvMiniScene');
+    this.scene.restart();
+  }
+
+  private cleanupForRestart(): void {
+    this.bgm?.off(Phaser.Sound.Events.COMPLETE, this.onBgmComplete, this);
+    this.bgm?.stop();
+    this.conductor?.off('beat', this.onBeat, this);
+    if (this.scene.isActive('FpvMiniScene')) this.scene.stop('FpvMiniScene');
   }
 
   /**
@@ -637,8 +653,8 @@ export class MainScene extends Phaser.Scene {
   /** JRPG 式小型浮字：从实际攻击锚点弹出，短暂停留后上浮消隐。 */
   private showAttackJudgement(
     judgement: AttackJudgement,
-    timingOffset: number,
-    reason?: 'offBeat' | 'wrongInput'
+    _timingOffset: number,
+    _reason?: 'offBeat' | 'wrongInput'
   ): void {
     const styles = {
       perfect: {
@@ -667,15 +683,6 @@ export class MainScene extends Phaser.Scene {
       }
     } as const;
     const style = styles[judgement];
-    const absoluteMs = Math.round(Math.abs(timingOffset) * 1000);
-    const timingLabel = absoluteMs <= 4
-      ? 'ON BEAT'
-      : `${timingOffset < 0 ? 'EARLY' : 'LATE'} ${absoluteMs.toString().padStart(3, '0')} ms`;
-    const detailLabel = reason === 'wrongInput'
-      ? `WRONG INPUT · ${timingLabel}`
-      : reason === 'offBeat'
-        ? `OFF BEAT · ${timingLabel}`
-        : timingLabel;
     const textStyle: Phaser.Types.GameObjects.Text.TextStyle = {
       fontFamily: '"Arial Narrow", Arial, sans-serif',
       fontSize: `${style.size}px`,
@@ -692,20 +699,11 @@ export class MainScene extends Phaser.Scene {
     gradient.addColorStop(0.42, style.top);
     gradient.addColorStop(1, style.bottom);
     label.setFill(gradient);
-    const detail = this.add.text(0, 20, detailLabel, {
-      fontFamily: 'Arial, sans-serif',
-      fontSize: '10px',
-      fontStyle: 'bold',
-      color: style.detail,
-      stroke: '#111827',
-      strokeThickness: 3
-    }).setOrigin(0.5, 0);
-
     const attackOrigin = this.player.getAttackOrigin();
     const startX = attackOrigin.x + Math.cos(this.player.aimAngle) * worldSize(10);
     const startY = attackOrigin.y + Math.sin(this.player.aimAngle) * worldSize(10) - worldSize(18);
     // 准确度浮字属于攻击反馈，但必须在角色本体之后，避免遮住出手和受击表现。
-    const feedback = this.add.container(startX, startY + worldSize(5), [label, detail])
+    const feedback = this.add.container(startX, startY + worldSize(5), [label])
       .setDepth(this.player.go.depth - 0.004)
       .setAlpha(0)
       .setAngle(Phaser.Math.FloatBetween(-4, -1))
@@ -867,22 +865,24 @@ export class MainScene extends Phaser.Scene {
   private createSettingsPanel(): void {
     const objects: Phaser.GameObjects.GameObject[] = [
       this.add.rectangle(640, 360, 1280, 720, 0x000000, 0.62),
-      this.add.rectangle(640, 360, 1180, 650, 0x0f172a, 0.97).setStrokeStyle(2, 0x67e8f9, 0.9),
-      this.add.text(640, 52, '设置（游戏已暂停）', {
+      this.add.rectangle(320, 360, 600, 650, 0x0f172a, 0.97).setStrokeStyle(2, 0x67e8f9, 0.9),
+      this.add.text(320, 52, '音量设置（游戏已暂停）', {
         fontFamily: 'Arial', fontSize: '26px', fontStyle: 'bold', color: '#ffffff'
       }).setOrigin(0.5),
       this.add.text(80, 94, '音频分类', {
         fontFamily: 'Arial', fontSize: '20px', fontStyle: 'bold', color: '#f0abfc'
       }).setOrigin(0, 0.5),
-      this.add.text(690, 84, '战斗参数', {
-        fontFamily: 'Arial', fontSize: '20px', fontStyle: 'bold', color: '#67e8f9'
-      }).setOrigin(0, 0.5),
-      this.add.rectangle(640, 360, 2, 510, 0x334155, 0.9)
     ];
     this.volumeSliders = {};
     this.combatValueTexts = {};
     this.combatPageContainers = {};
     this.combatTabButtons = {};
+    const debugObjects: Phaser.GameObjects.GameObject[] = [
+      this.add.text(690, 84, '战斗参数', {
+        fontFamily: 'Arial', fontSize: '20px', fontStyle: 'bold', color: '#67e8f9'
+      }).setOrigin(0, 0.5),
+      this.add.rectangle(640, 360, 2, 510, 0x334155, 0.9)
+    ];
 
     const beginDrag = (channel: AudioChannel, pointer: Phaser.Input.Pointer): void => {
       this.volumeDragging = channel;
@@ -950,7 +950,7 @@ export class MainScene extends Phaser.Scene {
         this.setCombatSettingsPage(page);
       });
       this.combatTabButtons[page] = rect;
-      objects.push(rect, text);
+      debugObjects.push(rect, text);
     };
     addCombatTab('speed', 830, '速度 / 频率');
     addCombatTab('damage', 1010, '伤害 / 掉落');
@@ -1022,7 +1022,7 @@ export class MainScene extends Phaser.Scene {
 
     this.combatPageContainers.speed = this.add.container(0, 0, speedPageObjects);
     this.combatPageContainers.damage = this.add.container(0, 0, damagePageObjects);
-    objects.push(this.combatPageContainers.speed, this.combatPageContainers.damage);
+    debugObjects.push(this.combatPageContainers.speed, this.combatPageContainers.damage);
 
     const fpvLabel = this.add.text(80, 555, '右下 FPV 观察窗', {
       fontFamily: 'Arial', fontSize: '16px', color: '#cbd5e1'
@@ -1033,10 +1033,12 @@ export class MainScene extends Phaser.Scene {
     this.fpvToggleText = this.add.text(430, 555, '', {
       fontFamily: 'Arial', fontSize: '15px', fontStyle: 'bold', color: '#ecfeff'
     }).setOrigin(0.5);
-    const hint = this.add.text(640, 660, '按 Esc 关闭并应用设置；攻击速度不改变踩拍判定窗口', {
+    const hint = this.add.text(320, 660, '按 Esc 关闭音量设置', {
       fontFamily: 'Arial', fontSize: '14px', color: '#94a3b8'
     }).setOrigin(0.5);
-    objects.push(fpvLabel, this.fpvToggleButton, this.fpvToggleText, hint);
+    objects.push(hint);
+    debugObjects.push(fpvLabel, this.fpvToggleButton, this.fpvToggleText);
+    this.tuningEditor.container.add(debugObjects);
 
     this.volumePanel = this.add.container(0, 0, objects)
       .setDepth(30)
@@ -1080,7 +1082,6 @@ export class MainScene extends Phaser.Scene {
     this.volumePanel.setVisible(visible);
     if (visible) {
       this.refreshVolumeControl();
-      this.refreshCombatControls();
       this.gamePaused = true;
       this.conductor.pause();
       this.sound.pauseAll();
@@ -1119,6 +1120,9 @@ export class MainScene extends Phaser.Scene {
   private setTuningEditorVisible(visible: boolean): void {
     this.tuningEditor.setVisible(visible);
     if (visible) {
+      this.refreshCombatControls();
+      this.setCombatSettingsPage(this.combatSettingsPage);
+      this.refreshFpvToggle();
       this.gamePaused = true;
       this.conductor.pause();
       this.sound.pauseAll();

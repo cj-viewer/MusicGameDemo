@@ -11,10 +11,10 @@ const PANEL_WIDTH = 780;
 const METER_X = BAR_CENTER_X - 448;
 const WEAPON_NAME_X = METER_X + 54;
 const STATE_X = BAR_CENTER_X + 400;
-const HP_X = 20;
+const HP_X = 32;
 // 与 ComboMeter 同一基线放在左下：缩短至不压住圆环。
-const HP_Y = BAR_Y;
-const HP_WIDTH = 124;
+const HP_Y = 42;
+const HP_WIDTH = 220;
 /** 预览未来 3 拍（旧版 2 拍的 1.5 倍），相邻拍间距 120px；到达中心即拍点。 */
 const LOOKAHEAD_BEATS = 3;
 const NOTE_SPACING = 120;
@@ -51,6 +51,7 @@ export class HUD {
   private meterGfx: Phaser.GameObjects.Graphics;
   private meterText: Phaser.GameObjects.Text;
   private meterBeatRing: Phaser.GameObjects.Arc;
+  private hpLabel: Phaser.GameObjects.Text;
   private hpBarBg: Phaser.GameObjects.Rectangle;
   private hpBar: Phaser.GameObjects.Rectangle;
   private hpText: Phaser.GameObjects.Text;
@@ -110,12 +111,23 @@ export class HUD {
       .setDepth(11);
 
     // HP
+    this.hpLabel = scene.add
+      .text(HP_X, HP_Y - 22, 'PLAYER HP', {
+        fontFamily: 'Arial',
+        fontSize: '14px',
+        fontStyle: 'bold',
+        color: '#ffffff',
+        stroke: '#000000',
+        strokeThickness: 3
+      })
+      .setOrigin(0, 0.5)
+      .setDepth(11);
     this.hpBarBg = scene.add
-      .rectangle(HP_X, HP_Y, HP_WIDTH + 4, 18, 0x0f172a, 0.8)
+      .rectangle(HP_X, HP_Y, HP_WIDTH + 4, 24, 0x0f172a, 0.92)
       .setOrigin(0, 0.5)
       .setStrokeStyle(1, 0x334155)
       .setDepth(10);
-    this.hpBar = scene.add.rectangle(HP_X + 2, HP_Y, HP_WIDTH, 14, 0x4ade80).setOrigin(0, 0.5).setDepth(10);
+    this.hpBar = scene.add.rectangle(HP_X + 2, HP_Y, HP_WIDTH, 18, 0x4ade80).setOrigin(0, 0.5).setDepth(10);
     this.hpText = scene.add
       .text(HP_X + HP_WIDTH / 2 + 2, HP_Y, '100 / 100', { fontFamily: 'Arial', fontSize: '13px', color: '#e2e8f0' })
       .setOrigin(0.5)
@@ -187,6 +199,7 @@ export class HUD {
       this.feverText,
       this.meterGfx,
       this.meterBeatRing,
+      this.hpLabel,
       this.meterText,
       this.hpBarBg,
       this.hpBar,

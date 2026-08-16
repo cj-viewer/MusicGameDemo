@@ -48,6 +48,12 @@ export class FpvMiniScene extends Phaser.Scene {
 
   create(): void {
     this.cameras.main.setViewport(PANEL_X, PANEL_Y, PANEL_W, PANEL_H);
+    this.enemyBillboards.clear();
+    this.freeEnemySprites = [];
+    this.bulletBillboards.clear();
+    this.freeBulletSprites = [];
+    this.posts = [];
+
     this.add.rectangle(PANEL_W / 2, PANEL_H / 2, PANEL_W, PANEL_H, 0x0b1026, 0.98).setDepth(-10000);
     this.add.rectangle(PANEL_W / 2, (HORIZON_Y + PANEL_H) / 2, PANEL_W, PANEL_H - HORIZON_Y, 0x1f2937).setDepth(-10000);
     const ground = this.add.graphics().setDepth(-9000);

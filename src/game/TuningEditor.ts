@@ -51,17 +51,17 @@ export class TuningEditor {
     this.trackLabels = trackLabels;
     const objects: Phaser.GameObjects.GameObject[] = [
       scene.add.rectangle(640, 360, 1280, 720, 0x000000, 0.62),
-      scene.add.rectangle(640, 350, 650, 480, 0x0f172a, 0.98).setStrokeStyle(2, 0xf59e0b, 0.95),
-      scene.add.text(640, 135, '调参 Editor', {
+      scene.add.rectangle(640, 360, 1180, 650, 0x0f172a, 0.98).setStrokeStyle(2, 0xf59e0b, 0.95),
+      scene.add.text(640, 52, 'DEBUG MENU', {
         fontFamily: 'Arial', fontSize: '28px', fontStyle: 'bold', color: '#ffffff'
       }).setOrigin(0.5),
-      scene.add.text(640, 570, '按 P 关闭并应用当前参数', {
+      scene.add.text(640, 660, '按 P 关闭并应用当前参数', {
         fontFamily: 'Arial', fontSize: '14px', color: '#94a3b8'
       }).setOrigin(0.5)
     ];
 
     const addLabel = (y: number, label: string): void => {
-      objects.push(scene.add.text(390, y, label, {
+      objects.push(scene.add.text(80, y, label, {
         fontFamily: 'Arial', fontSize: '18px', color: '#cbd5e1'
       }).setOrigin(0, 0.5));
     };
@@ -79,38 +79,38 @@ export class TuningEditor {
     };
 
     addLabel(240, '玩家弹速');
-    this.playerSpeedText = scene.add.text(720, 240, '', {
+    this.playerSpeedText = scene.add.text(430, 240, '', {
       fontFamily: 'Arial', fontSize: '18px', color: '#67e8f9'
     }).setOrigin(0.5);
     objects.push(this.playerSpeedText);
-    addButton(660, 240, '−', () => {
+    addButton(370, 240, '−', () => {
       this.playerBulletSpeed = Phaser.Math.Clamp(this.playerBulletSpeed - 20, 100, 800);
       this.refresh();
     });
-    addButton(780, 240, '+', () => {
+    addButton(490, 240, '+', () => {
       this.playerBulletSpeed = Phaser.Math.Clamp(this.playerBulletSpeed + 20, 100, 800);
       this.refresh();
     });
 
     addLabel(300, '敌人弹速');
-    this.enemySpeedText = scene.add.text(720, 300, '', {
+    this.enemySpeedText = scene.add.text(430, 300, '', {
       fontFamily: 'Arial', fontSize: '18px', color: '#fca5a5'
     }).setOrigin(0.5);
     objects.push(this.enemySpeedText);
-    addButton(660, 300, '−', () => {
+    addButton(370, 300, '−', () => {
       this.enemyBulletSpeed = Phaser.Math.Clamp(this.enemyBulletSpeed - 20, 40, 600);
       this.refresh();
     });
-    addButton(780, 300, '+', () => {
+    addButton(490, 300, '+', () => {
       this.enemyBulletSpeed = Phaser.Math.Clamp(this.enemyBulletSpeed + 20, 40, 600);
       this.refresh();
     });
 
     addLabel(360, '弹幕节拍突进');
-    this.enemyBeatSurgeButton = scene.add.rectangle(720, 360, 140, 36, 0x0f766e)
+    this.enemyBeatSurgeButton = scene.add.rectangle(430, 360, 140, 36, 0x0f766e)
       .setStrokeStyle(1, 0x94a3b8)
       .setInteractive({ useHandCursor: true });
-    this.enemyBeatSurgeText = scene.add.text(720, 360, '', {
+    this.enemyBeatSurgeText = scene.add.text(430, 360, '', {
       fontFamily: 'Arial', fontSize: '17px', fontStyle: 'bold', color: '#ffffff'
     }).setOrigin(0.5);
     this.enemyBeatSurgeButton.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
@@ -121,20 +121,20 @@ export class TuningEditor {
     objects.push(this.enemyBeatSurgeButton, this.enemyBeatSurgeText);
 
     addLabel(430, '教学关 BGM Slot');
-    this.tutorialSlotText = scene.add.text(720, 430, '', {
+    this.tutorialSlotText = scene.add.text(430, 430, '', {
       fontFamily: 'Arial', fontSize: '17px', color: '#fde68a'
     }).setOrigin(0.5);
     objects.push(this.tutorialSlotText);
-    addButton(610, 430, '‹', () => this.cycleSlot('tutorial', -1));
-    addButton(830, 430, '›', () => this.cycleSlot('tutorial', 1));
+    addButton(320, 430, '‹', () => this.cycleSlot('tutorial', -1));
+    addButton(540, 430, '›', () => this.cycleSlot('tutorial', 1));
 
     addLabel(500, '正式关 BGM Slot');
-    this.levelSlotText = scene.add.text(720, 500, '', {
+    this.levelSlotText = scene.add.text(430, 500, '', {
       fontFamily: 'Arial', fontSize: '17px', color: '#fde68a'
     }).setOrigin(0.5);
     objects.push(this.levelSlotText);
-    addButton(610, 500, '‹', () => this.cycleSlot('level', -1));
-    addButton(830, 500, '›', () => this.cycleSlot('level', 1));
+    addButton(320, 500, '‹', () => this.cycleSlot('level', -1));
+    addButton(540, 500, '›', () => this.cycleSlot('level', 1));
 
     this.container = scene.add
       .container(screenLayerOffset(VIEW_WIDTH), screenLayerOffset(VIEW_HEIGHT), objects)
@@ -149,7 +149,7 @@ export class TuningEditor {
     return this.container.visible;
   }
 
-  /** P 面板保留统一快捷调参；Esc 设置提供各武器的独立参数。 */
+  /** P 调试菜单统一承载快捷调参与各武器独立战斗参数；Esc 只保留音量设置。 */
   get playerBulletSpeed(): number {
     return this.glowstickBulletSpeed;
   }

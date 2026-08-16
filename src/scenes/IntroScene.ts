@@ -7,6 +7,7 @@ export class IntroScene extends Phaser.Scene {
   private video?: Phaser.GameObjects.Video;
   private startUi?: Phaser.GameObjects.Container;
   private startButton?: Phaser.GameObjects.Rectangle;
+  private skipText?: Phaser.GameObjects.Text;
   private startButtonText?: Phaser.GameObjects.Text;
   private started = false;
   private finished = false;
@@ -21,6 +22,8 @@ export class IntroScene extends Phaser.Scene {
   }
 
   create(): void {
+    this.started = false;
+    this.finished = false;
     // 片头沿用旧 1280×720 排版，但在 1920×1080 内部画布上等比铺满。
     this.cameras.main.setZoom(UI_SCALE).centerOn(640, 360);
     this.cameras.main.setBackgroundColor('#000000');
@@ -75,7 +78,7 @@ export class IntroScene extends Phaser.Scene {
     this.startButton.on('pointerout', () => this.startButton?.setFillStyle(0xec4899));
     this.startButton.on('pointerdown', this.playIntro, this);
 
-    this.add
+    this.skipText = this.add
       .text(1248, 688, '空格跳过', {
         fontFamily: 'Arial, Microsoft YaHei, sans-serif',
         fontSize: '18px',
@@ -83,8 +86,9 @@ export class IntroScene extends Phaser.Scene {
       })
       .setOrigin(1)
       .setAlpha(0.75)
-      .setDepth(3);
-    this.input.keyboard?.on('keydown-SPACE', this.finishIntro, this);
+      .setDepth(3)
+      .setVisible(false);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.cleanup, this);
   }
 
   private playIntro(): void {
@@ -93,6 +97,8 @@ export class IntroScene extends Phaser.Scene {
     this.startButton?.disableInteractive();
     this.startUi?.setVisible(false);
     this.video.setVisible(true).setMute(false).setVolume(1);
+    this.skipText?.setVisible(true);
+    this.input.keyboard?.once('keydown-SPACE', this.finishIntro, this);
     this.video.play(false);
   }
 
@@ -101,6 +107,8 @@ export class IntroScene extends Phaser.Scene {
     this.started = false;
     this.video?.setVisible(false);
     this.startUi?.setVisible(true);
+    this.skipText?.setVisible(false);
+    this.input.keyboard?.off('keydown-SPACE', this.finishIntro, this);
     this.startButton?.setInteractive({ useHandCursor: true });
     this.startButtonText?.setText('点击继续');
   }
@@ -109,7 +117,15 @@ export class IntroScene extends Phaser.Scene {
     if (this.finished) return;
     this.finished = true;
     this.input.keyboard?.off('keydown-SPACE', this.finishIntro, this);
+    this.skipText?.setVisible(false);
     this.video?.stop(false);
     this.scene.start('MainScene');
+  }
+
+  private cleanup(): void {
+    this.input.keyboard?.off('keydown-SPACE', this.finishIntro, this);
+    this.video?.off(Phaser.GameObjects.Events.VIDEO_COMPLETE, this.finishIntro, this);
+    this.video?.off(Phaser.GameObjects.Events.VIDEO_ERROR, this.finishIntro, this);
+    this.video?.off(Phaser.GameObjects.Events.VIDEO_LOCKED, this.restoreStartButton, this);
   }
 }

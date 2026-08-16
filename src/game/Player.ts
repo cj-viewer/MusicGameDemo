@@ -210,6 +210,7 @@ export class Player {
   }
 
   onBeat(heavy: boolean): void {
+    if (this.isDodging) return;
     if (this.dead) return;
     this.scene.tweens.killTweensOf(this.go);
     const baseY = this.go.y;
