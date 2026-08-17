@@ -50,6 +50,7 @@ export class Player {
   private lastMoveAngle = 0;
   private action: PlayerAction = 'idle';
   private dead = false;
+  private cutsceneVelocityX?: number;
 
   constructor(scene: MainScene, x: number, y: number) {
     this.scene = scene;
@@ -83,8 +84,14 @@ export class Player {
     if (this.dead) return;
     this.updateDodgeCharges(timeMs);
 
-    // 移动（闪避期间由 tween 控制位移）
-    if (!this.isDodging) {
+    // 教学过场优先接管水平移动；其余时间才读取玩家输入。
+    if (this.cutsceneVelocityX !== undefined) {
+      this.body.setVelocity(this.cutsceneVelocityX, 0);
+      if (this.cutsceneVelocityX !== 0) {
+        this.aimAngle = this.cutsceneVelocityX > 0 ? 0 : Math.PI;
+        this.rawAimAngle = this.aimAngle;
+      }
+    } else if (!this.isDodging) {
       const dir = this.moveDir();
       const acceleration = dir.lengthSq() > 0 ? MOVE_ACCELERATION : MOVE_DECELERATION;
       const maxChange = acceleration * Math.min(dtMs, 50) / 1000;
@@ -94,8 +101,8 @@ export class Player {
       );
     }
 
-    // 自动瞄准：移动方向前方扇区内的目标享受两倍距离权重。
-    this.updateAutoAim();
+    // 强制过场期间保持跑动方向；开放控制后再恢复自动瞄准。
+    if (this.cutsceneVelocityX === undefined) this.updateAutoAim();
 
     // 朝向与走/停动画：素材只绘制朝右版本，锁定方向在左侧时水平翻转（与武器持有侧一致）
     this.go.setFlipX(Math.cos(this.aimAngle) < 0);
@@ -110,11 +117,28 @@ export class Player {
     this.drawOverlay(timeMs);
   }
 
+<<<<<<< Updated upstream
   playAttackAnimation(aimAngle: number): void {
     this.scene.tweens.killTweensOf(this.weaponSwing);
     this.weaponSwing.progress = 0;
     this.weaponSwingActive = true;
     this.weaponSwingDirection = Math.cos(aimAngle) >= 0 ? 1 : -1;
+=======
+  setCutsceneVelocity(velocityX?: number): void {
+    this.cutsceneVelocityX = velocityX;
+    this.isDodging = false;
+    this.body.enable = true;
+    this.body.setVelocity(velocityX ?? 0, 0);
+    if (velocityX === 0) this.setAction('idle', true);
+    else if (velocityX !== undefined) this.setAction('run', true);
+  }
+
+  /** 角色攻击统一从中心向当前朝向侧轻移，弹幕、扫击和特效共享该锚点。 */
+  getAttackOrigin(): { x: number; y: number } {
+    const side = Math.cos(this.aimAngle) >= 0 ? 1 : -1;
+    return { x: this.x + side * PLAYER_ATTACK_SIDE_OFFSET, y: this.y };
+  }
+>>>>>>> Stashed changes
 
     this.scene.tweens.add({
       targets: this.weaponSwing,
@@ -143,7 +167,7 @@ export class Player {
   }
 
   tryDodge(): boolean {
-    if (this.isDodging || this.dead) return false;
+    if (this.cutsceneVelocityX !== undefined || this.isDodging || this.dead) return false;
     const conductor = this.scene.conductor;
     if (!conductor.started) return false;
 

@@ -86,7 +86,7 @@ const BATON_BULLET_COLOR = 0xa855f7;
 const GLOWSTICK_KNOCKBACK_SPEED = 150;
 const BATON_KNOCKBACK_SPEED = GLOWSTICK_KNOCKBACK_SPEED * 1.25;
 
-type GameState = 'title' | 'tutorial' | 'tutorialConfirm' | 'playing' | 'intermission' | 'over';
+type GameState = 'title' | 'tutorialArrival' | 'tutorialVictory' | 'tutorial' | 'tutorialConfirm' | 'playing' | 'intermission' | 'over';
 
 /** 教学要求连续全对的小节数 */
 const TUTORIAL_TARGET_STREAK = 3;
@@ -175,6 +175,14 @@ export class MainScene extends Phaser.Scene {
   private confirmUi?: Phaser.GameObjects.Container;
   /** 教学场地上的操作图，位于底图之上、角色之下。 */
   private tutorialControlGuide?: Phaser.GameObjects.Container;
+  private tutorialArrivalTargetX = 0;
+  private tutorialArrivalDialogue?: Phaser.GameObjects.Container;
+  private tutorialArrivalText?: Phaser.GameObjects.Text;
+  private tutorialDialogueOffsetY = worldSize(90);
+  private tutorialPromptDialogues = new Set<Phaser.GameObjects.Container>();
+  private tutorialDialogueStep = 0;
+  private tutorialPhase: 'arrival' | 'move' | 'combat' | 'dodge' | 'defeat' = 'arrival';
+  private tutorialMoveStart = new Phaser.Math.Vector2();
   /** 确认按钮点击后短暂屏蔽攻击输入，避免同一次点击又触发挥击 */
   private suppressAttackUntil = 0;
   /** 进入游戏的节拍倒计时（每小节减一），-1 表示未激活 */
@@ -228,6 +236,10 @@ export class MainScene extends Phaser.Scene {
     this.patternIcons = [];
     this.confirmUi = undefined;
     this.tutorialControlGuide = undefined;
+    this.tutorialArrivalDialogue = undefined;
+    this.tutorialArrivalText = undefined;
+    this.tutorialDialogueStep = 0;
+    this.tutorialPhase = 'arrival';
     this.tutorialStreakText = undefined;
     this.tutorialStreak = 0;
     this.tutorialHitBeats.clear();
@@ -353,6 +365,22 @@ export class MainScene extends Phaser.Scene {
     }
 
     this.player.update(this.time.now, delta);
+    this.updateTutorialDialoguePositions();
+    if (this.state === 'tutorialArrival' && this.player.x >= this.tutorialArrivalTargetX) {
+      this.completeTutorialArrival();
+    }
+    if (
+      this.state === 'tutorial'
+      && this.tutorialPhase === 'move'
+      && Phaser.Math.Distance.Between(
+        this.tutorialMoveStart.x,
+        this.tutorialMoveStart.y,
+        this.player.x,
+        this.player.y
+      ) >= worldSize(100)
+    ) {
+      this.startTutorialCombatPhase();
+    }
     for (const enemy of this.enemies) enemy.update(delta);
     this.updateEnemyBulletBeatSurge(delta);
     this.updateStraightBulletHitboxes();
@@ -394,6 +422,14 @@ export class MainScene extends Phaser.Scene {
 
     this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       if (this.gamePaused || this.volumePanelVisible || this.tuningEditor.visible) return;
+      if (this.state === 'tutorialArrival') {
+        if (this.tutorialArrivalDialogue) this.advanceTutorialDialogue();
+        return;
+      }
+      if (this.state === 'tutorialVictory') {
+        if (this.tutorialArrivalDialogue) this.finishTutorial();
+        return;
+      }
       const btn = pointer.rightButtonDown() ? 'H' : pointer.leftButtonDown() ? 'L' : null;
       if (this.state === 'title') {
         this.startGame();
@@ -413,6 +449,7 @@ export class MainScene extends Phaser.Scene {
 
     this.input.keyboard!.on('keydown', (event: KeyboardEvent) => {
       if (event.repeat || this.gamePaused || this.volumePanelVisible || this.tuningEditor.visible) return;
+      if (this.state === 'tutorialArrival') return;
 
       if (event.code === 'Quote' || event.code === 'Enter') {
         event.preventDefault();
@@ -501,12 +538,24 @@ export class MainScene extends Phaser.Scene {
   private tryKeyboardDodge(): void {
     if (this.gamePaused) return;
     if (this.state === 'playing' || this.state === 'intermission' || this.state === 'tutorial') {
-      this.player.tryDodge();
+      const dodged = this.player.tryDodge();
+      if (dodged) this.registerTutorialDodge();
     }
   }
 
+  private registerTutorialDodge(): void {
+    if (this.state !== 'tutorial' || this.tutorialPhase !== 'dodge') return;
+    this.tutorialPhase = 'defeat';
+    this.createTutorialControlGuide('combat');
+    this.hud.setWave('教学 · 消灭敌人');
+    this.showTutorialPrompt('闪避成功！现在看准上方节奏，用轻重攻击杀死这个怪物！');
+  }
   private handleAttackInput(btn: 'L' | 'H', pad?: Phaser.Input.Gamepad.Gamepad): void {
     if (this.gamePaused) return;
+    if (
+      this.state === 'tutorial'
+      && (this.tutorialPhase === 'move' || this.tutorialPhase === 'dodge')
+    ) return;
     if (this.state === 'tutorial') this.recordTutorialCalibrationCandidate(btn);
     const result = this.combo.handleInput(btn, this.conductor.now());
     if (result.type === 'correct' || result.type === 'protectedCorrect') {
@@ -527,7 +576,8 @@ export class MainScene extends Phaser.Scene {
     if (this.state === 'tutorial') {
       if (result.type === 'correct' || result.type === 'protectedCorrect') {
         this.tutorialHitBeats.add(result.globalBeat);
-      } else if (result.type === 'wrong') {
+
+      } else if (result.type === 'wrong' && this.tutorialPhase === 'combat') {
         this.failTutorialMeasure();
       }
     }
@@ -571,7 +621,10 @@ export class MainScene extends Phaser.Scene {
     }
     if (this.state !== 'playing' && this.state !== 'intermission' && this.state !== 'tutorial') return;
 
-    if (pressed.dodge && this.player.tryDodge()) this.rumbleGamepad(pad, 'dodge');
+    if (pressed.dodge && this.player.tryDodge()) {
+      this.rumbleGamepad(pad, 'dodge');
+      this.registerTutorialDodge();
+    }
     if (pressed.attack) this.handleAttackInput(this.gamepadBeatKey(), pad);
   }
 
@@ -619,7 +672,7 @@ export class MainScene extends Phaser.Scene {
     this.conductor.start();
     this.bgmFirstBeat = 0;
     this.playBgmAlignedToBeat(this.bgmFirstBeat);
-    this.startTutorial();
+    this.startTutorialArrival();
   }
 
   /**
@@ -871,9 +924,73 @@ export class MainScene extends Phaser.Scene {
 
   // ---------- 教学 ----------
 
-  /** 开场教学：不生成敌人，玩家跟随上方节拍点连打，连续 3 个小节全对后确认进入游戏 */
+  private startTutorialArrival(): void {
+    this.state = 'tutorialArrival';
+    this.buildPatternPanel(false);
+    this.patternPanel?.setVisible(false);
+    this.tutorialControlGuide?.destroy(true);
+    this.tutorialControlGuide = undefined;
+    const startX = ARENA.x + this.player.body.halfWidth + worldSize(4);
+    const startY = ARENA.y + ARENA.height * 0.58;
+    this.tutorialArrivalTargetX = ARENA.x + ARENA.width * 0.38;
+    this.player.go.setPosition(startX, startY);
+    this.player.body.reset(startX, startY);
+    this.player.setCutsceneVelocity(210);
+    this.hud.setWave('');
+    this.hud.message('');
+  }
+
+  private completeTutorialArrival(): void {
+    if (this.tutorialArrivalDialogue || this.state !== 'tutorialArrival') return;
+    this.player.go.setX(this.tutorialArrivalTargetX);
+    this.player.body.reset(this.tutorialArrivalTargetX, this.player.y);
+    this.player.setCutsceneVelocity(0);
+
+    this.tutorialDialogueOffsetY = this.player.go.displayHeight * 0.62 + worldSize(34);
+    const bubbleY = this.player.y - this.tutorialDialogueOffsetY;
+    const panel = this.add.rectangle(0, 0, worldSize(310), worldSize(78), 0x120b24, 0.98)
+      .setStrokeStyle(worldSize(3), 0xf0abfc, 1);
+    const inner = this.add.rectangle(0, 0, worldSize(298), worldSize(66), 0x24113d, 0.98)
+      .setStrokeStyle(worldSize(1), 0x67e8f9, 0.9);
+    const tail = this.add.triangle(0, worldSize(47), -worldSize(10), 0, worldSize(10), 0, 0, worldSize(14), 0x24113d, 1)
+      .setStrokeStyle(worldSize(2), 0xf0abfc, 1);
+    this.tutorialArrivalText = this.add.text(0, 0, '终于到了节奏星球', {
+      fontFamily: 'Microsoft YaHei, Arial, sans-serif', fontSize: '20px', fontStyle: 'bold',
+      color: '#ffffff', stroke: '#000000', strokeThickness: worldSize(2), align: 'center'
+    }).setOrigin(0.5);
+    const clickHint = this.add.text(worldSize(140), worldSize(28), '点击继续', {
+      fontFamily: 'Microsoft YaHei, Arial, sans-serif', fontSize: '11px', color: '#c4b5fd'
+    }).setOrigin(1);
+    this.tutorialArrivalDialogue = this.add.container(
+      this.player.x, bubbleY, [panel, inner, tail, this.tutorialArrivalText, clickHint]
+    ).setDepth(18).setScale(0);
+    this.tweens.add({
+      targets: this.tutorialArrivalDialogue, scaleX: 1, scaleY: 1, duration: 180, ease: 'Back.easeOut'
+    });
+    this.tutorialDialogueStep = 0;
+  }
+
+  private advanceTutorialDialogue(): void {
+    if (!this.tutorialArrivalText) return;
+    if (this.tutorialDialogueStep === 0) {
+      this.tutorialDialogueStep = 1;
+      this.tutorialArrivalText.setText('听说这里人除了走路\n一切都要按照节奏来动');
+      return;
+    }
+    this.tutorialArrivalDialogue?.destroy(true);
+    this.tutorialArrivalDialogue = undefined;
+    this.tutorialArrivalText = undefined;
+    this.player.setCutsceneVelocity(undefined);
+    this.startTutorial();
+  }
+
   private startTutorial(): void {
     this.state = 'tutorial';
+<<<<<<< Updated upstream
+=======
+    this.tutorialPhase = 'move';
+    this.stageEnvironment.showTutorial();
+>>>>>>> Stashed changes
     this.tutorialStreak = 0;
     this.tutorialHitBeats.clear();
     this.tutorialFailedMeasures.clear();
@@ -883,13 +1000,15 @@ export class MainScene extends Phaser.Scene {
     this.combo.setInputLatencyOffset(0);
     this.hud.setBeatGuideVisible(false);
     this.arenaBeatCues.forEach((cue) => cue.setVisible(false));
-    this.buildPatternPanel(true);
-    this.createTutorialControlGuide();
-    this.updateTutorialStreakText();
-    this.hud.setWave('教学中');
-    this.flashMessage('跟随节拍！');
+    this.buildPatternPanel(false);
+    this.patternPanel?.setVisible(false);
+    this.createTutorialControlGuide('move');
+    this.tutorialMoveStart.set(this.player.x, this.player.y);
+    this.hud.setWave('教学 · 移动');
+    this.flashMessage('先试着用 WASD 走动');
   }
 
+<<<<<<< Updated upstream
   /** 在教学场地的地面层绘制键位卡，不参与碰撞、输入或 TopDown 排序。 */
   private createTutorialControlGuide(): void {
     this.tutorialControlGuide?.destroy(true);
@@ -899,47 +1018,169 @@ export class MainScene extends Phaser.Scene {
       .text(-168, -92, '基础操作', { fontFamily: 'Arial', fontSize: '22px', fontStyle: 'bold', color: '#f5d0fe' })
       .setOrigin(0, 0.5);
     const divider = this.add.rectangle(0, -68, 336, 1, 0x6b3b70, 0.65);
+=======
+  private startTutorialCombatPhase(): void {
+    if (this.tutorialPhase !== 'move') return;
+    this.tutorialPhase = 'dodge';
+    this.buildPatternPanel(false);
+    this.createTutorialControlGuide('dodge');
+    this.hud.setWave('教学 · 节拍闪避');
+    this.showTutorialPrompt('看准敌人的攻击节拍，移动时按 Shift 闪避！闪避期间不会受伤。');
+    this.spawnTutorialLakeEnemy();
+  }
+>>>>>>> Stashed changes
 
-    const keycap = (x: number, y: number, label: string, width = 42): Phaser.GameObjects.Container => {
-      const cap = this.add.rectangle(0, 0, width, 32, 0x1e293b, 0.92).setStrokeStyle(1.5, 0xe879f9, 0.82);
-      const text = this.add
-        .text(0, 0, label, { fontFamily: 'Arial', fontSize: '14px', fontStyle: 'bold', color: '#ffffff' })
-        .setOrigin(0.5);
-      return this.add.container(x, y, [cap, text]);
-    };
-    const description = (x: number, y: number, text: string): Phaser.GameObjects.Text =>
-      this.add.text(x, y, text, { fontFamily: 'Arial', fontSize: '14px', color: '#e2e8f0' }).setOrigin(0, 0.5);
-
-    const movementKeys = [
-      keycap(-120, -40, 'W'),
-      keycap(-162, -4, 'A'),
-      keycap(-120, -4, 'S'),
-      keycap(-78, -4, 'D')
-    ];
-    const quoteKey = keycap(58, -40, '" / 左键', 94);
-    const enterKey = keycap(58, 2, 'Enter / 右键', 116);
-    const shiftKey = keycap(-120, 70, 'L / R Shift', 116);
-    const escKey = keycap(58, 70, 'Esc', 54);
-
-    guide.add([
-      panel,
-      title,
-      divider,
-      ...movementKeys,
-      description(-54, -22, '移动'),
-      quoteKey,
-      description(122, -40, '轻攻击'),
-      enterKey,
-      description(122, 2, '重攻击'),
-      shiftKey,
-      description(-54, 70, '冲刺'),
-      escKey,
-      description(94, 70, '设置')
-    ]);
-    this.tutorialControlGuide = guide;
+  private showTutorialPrompt(message: string): void {
+    const box = this.add.rectangle(0, 0, worldSize(380), worldSize(54), 0x120b24, 0.96)
+      .setStrokeStyle(worldSize(3), 0xf0abfc, 1);
+    const text = this.add.text(0, 0, message, {
+      fontFamily: 'Microsoft YaHei, Arial, sans-serif', fontSize: '18px', color: '#ffffff'
+    }).setOrigin(0.5);
+    const dialogue = this.add.container(
+      this.player.x,
+      this.player.y - worldSize(95),
+      [box, text]
+    ).setDepth(18);
+    dialogue.setData('playerOffsetY', worldSize(95));
+    this.tutorialPromptDialogues.add(dialogue);
+    this.time.delayedCall(2600, () => {
+      this.tutorialPromptDialogues.delete(dialogue);
+      dialogue.destroy(true);
+    });
   }
 
+  private updateTutorialDialoguePositions(): void {
+    if (this.tutorialArrivalDialogue?.active) {
+      this.tutorialArrivalDialogue.setPosition(
+        this.player.x,
+        this.player.y - this.tutorialDialogueOffsetY
+      );
+    }
+    for (const dialogue of [...this.tutorialPromptDialogues]) {
+      if (!dialogue.active) {
+        this.tutorialPromptDialogues.delete(dialogue);
+        continue;
+      }
+      const offsetY = (dialogue.getData('playerOffsetY') as number | undefined) ?? worldSize(95);
+      dialogue.setPosition(this.player.x, this.player.y - offsetY);
+    }
+  }
+
+  private clearTutorialDialogues(): void {
+    this.tutorialArrivalDialogue?.destroy(true);
+    this.tutorialArrivalDialogue = undefined;
+    this.tutorialArrivalText = undefined;
+    for (const dialogue of this.tutorialPromptDialogues) dialogue.destroy(true);
+    this.tutorialPromptDialogues.clear();
+  }
+  private spawnTutorialLakeEnemy(): void {
+    // 教学背景的青绿色圆湖：按实机截图校准到场地中央偏右、下半区。
+    const lakeCenterX = ARENA.x + ARENA.width * 0.63;
+    const lakeCenterY = ARENA.y + ARENA.height * 0.66;
+    const x = lakeCenterX;
+    const targetY = lakeCenterY;
+    const enemy: Enemy = new FanEnemy(this, x, targetY);
+    this.enemies.push(enemy);
+    this.enemyGroup.add(enemy.go);
+    enemy.onSpawned();
+    const baseScaleX = enemy.go.scaleX;
+    const baseScaleY = enemy.go.scaleY;
+    enemy.go.body.enable = false;
+    enemy.go
+      .setPosition(lakeCenterX, targetY + worldSize(42))
+      .setAlpha(0)
+      .setScale(baseScaleX * 0.2, baseScaleY * 0.2);
+    this.spawnLakeEmergenceFx(x, targetY + worldSize(28));
+    this.tweens.add({
+      targets: enemy.go,
+      y: targetY,
+      alpha: 1,
+      scaleX: baseScaleX,
+      scaleY: baseScaleY,
+      duration: 720,
+      ease: 'Back.easeOut',
+      onComplete: () => { if (!enemy.dead) enemy.go.body.enable = true; }
+    });
+  }
+  private spawnLakeEmergenceFx(x: number, waterY: number): void {
+    const colors = [0x67e8f9, 0xa5f3fc, 0xf0abfc];
+    for (let ringIndex = 0; ringIndex < 3; ringIndex += 1) {
+      const ring = this.add
+        .ellipse(x, waterY, worldSize(34), worldSize(10), 0x000000, 0)
+        .setStrokeStyle(worldSize(2), colors[ringIndex], 0.9 - ringIndex * 0.18)
+        .setDepth(2.7)
+        .setScale(0.35);
+      this.tweens.add({
+        targets: ring,
+        scaleX: 2.1 + ringIndex * 0.35,
+        scaleY: 1.35 + ringIndex * 0.18,
+        alpha: 0,
+        delay: ringIndex * 90,
+        duration: 620,
+        ease: 'Quad.easeOut',
+        onComplete: () => ring.destroy()
+      });
+    }
+    for (let particleIndex = 0; particleIndex < 12; particleIndex += 1) {
+      const side = particleIndex % 2 === 0 ? -1 : 1;
+      const spread = worldSize(8 + (particleIndex % 6) * 5);
+      const particle = this.add
+        .circle(x + side * spread * 0.35, waterY, worldSize(2 + particleIndex % 3), colors[particleIndex % colors.length], 0.95)
+        .setDepth(3.2);
+      this.tweens.add({
+        targets: particle,
+        x: particle.x + side * spread,
+        y: waterY - worldSize(18 + (particleIndex % 4) * 9),
+        scaleX: 0.45,
+        scaleY: 0.45,
+        alpha: 0,
+        duration: 380 + (particleIndex % 4) * 55,
+        ease: 'Quad.easeOut',
+        onComplete: () => particle.destroy()
+      });
+    }
+  }
+  /** 在教学场地的地面层绘制键位卡，不参与碰撞、输入或 TopDown 排序。 */
+  private createTutorialControlGuide(phase: 'move' | 'combat' | 'dodge'): void {
+    this.tutorialControlGuide?.destroy(true);
+    const guide = this.add.container(hd(320), hd(430)).setDepth(1.5).setScale(UI_SCALE).setAlpha(0.9);
+    const panel = this.add.rectangle(0, 0, 390, 150, 0x0b1026, 0.72).setStrokeStyle(2, 0x6b3b70, 0.82);
+    const titleLabel = phase === 'move' ? '第一步 · 移动' : phase === 'combat' ? '第二步 · 节奏攻击' : '第三步 · 闪避';
+    const title = this.add.text(-168, -52, titleLabel, {
+      fontFamily: 'Arial', fontSize: '20px', fontStyle: 'bold', color: '#f5d0fe'
+    }).setOrigin(0, 0.5);
+    const keycap = (x: number, y: number, label: string, width = 54): Phaser.GameObjects.Container => {
+      const cap = this.add.rectangle(0, 0, width, 34, 0x1e293b, 0.94).setStrokeStyle(1.5, 0xe879f9, 0.88);
+      const text = this.add.text(0, 0, label, {
+        fontFamily: 'Arial', fontSize: '14px', fontStyle: 'bold', color: '#ffffff'
+      }).setOrigin(0.5);
+      return this.add.container(x, y, [cap, text]);
+    };
+    guide.add([panel, title]);
+    if (phase === 'move') {
+      guide.add([keycap(-70, 24, 'WASD', 100), this.add.text(0, 24, '自由走动', {
+        fontFamily: 'Arial', fontSize: '16px', color: '#e2e8f0'
+      }).setOrigin(0, 0.5)]);
+    } else if (phase === 'combat') {
+      guide.add([
+        keycap(-110, 20, '" / 左键', 105),
+        this.add.text(-48, 20, '轻攻击', { fontFamily: 'Arial', fontSize: '15px', color: '#67e8f9' }).setOrigin(0, 0.5),
+        keycap(90, 20, 'Enter / 右键', 125),
+        this.add.text(160, 20, '重攻击', { fontFamily: 'Arial', fontSize: '15px', color: '#fbbf24' }).setOrigin(0, 0.5)
+      ]);
+    } else {
+      guide.add([keycap(-75, 24, 'L / R Shift', 125), this.add.text(0, 24, '移动中闪避', {
+        fontFamily: 'Arial', fontSize: '16px', color: '#fca5a5'
+      }).setOrigin(0, 0.5)]);
+    }
+    this.tutorialControlGuide = guide;
+  }
+<<<<<<< Updated upstream
+
   /** 教学关专用的顶部连段面板；正式关调用时只负责彻底清除。 */
+=======
+  /** 教学显示完整说明；正式关仅保留四拍节奏图标。 */
+>>>>>>> Stashed changes
   private buildPatternPanel(tutorial: boolean): void {
     this.patternPanel?.destroy(true);
     this.patternPanel = undefined;
@@ -1110,6 +1351,37 @@ export class MainScene extends Phaser.Scene {
     this.tweens.add({ targets: text, y: 100, alpha: 0, duration: 500, ease: 'Sine.easeOut', onComplete: () => text.destroy() });
   }
 
+  private showTutorialVictoryDialogue(): void {
+    this.state = 'tutorialVictory';
+    this.tutorialControlGuide?.destroy(true);
+    this.tutorialControlGuide = undefined;
+    this.hud.setWave('教学完成');
+    this.tutorialDialogueOffsetY = this.player.go.displayHeight * 0.62 + worldSize(42);
+    const bubbleY = this.player.y - this.tutorialDialogueOffsetY;
+    const panel = this.add.rectangle(0, 0, worldSize(440), worldSize(86), 0x120b24, 0.98)
+      .setStrokeStyle(worldSize(3), 0xf0abfc, 1);
+    const inner = this.add.rectangle(0, 0, worldSize(428), worldSize(74), 0x24113d, 0.98)
+      .setStrokeStyle(worldSize(1), 0x67e8f9, 0.9);
+    const tail = this.add.triangle(0, worldSize(52), -worldSize(10), 0, worldSize(10), 0, 0, worldSize(14), 0x24113d, 1)
+      .setStrokeStyle(worldSize(2), 0xf0abfc, 1);
+    this.tutorialArrivalText = this.add.text(0, -worldSize(6), '太好了，我已经学会如何在这个星球战斗了！', {
+      fontFamily: 'Microsoft YaHei, Arial, sans-serif', fontSize: '19px', fontStyle: 'bold',
+      color: '#ffffff', stroke: '#000000', strokeThickness: worldSize(2), align: 'center'
+    }).setOrigin(0.5);
+    const clickHint = this.add.text(worldSize(205), worldSize(32), '点击确认', {
+      fontFamily: 'Microsoft YaHei, Arial, sans-serif', fontSize: '12px', color: '#c4b5fd'
+    }).setOrigin(1);
+    this.tutorialArrivalDialogue = this.add.container(
+      this.player.x, bubbleY, [panel, inner, tail, this.tutorialArrivalText, clickHint]
+    ).setDepth(22).setScale(0);
+    this.tweens.add({
+      targets: this.tutorialArrivalDialogue,
+      scaleX: 1,
+      scaleY: 1,
+      duration: 180,
+      ease: 'Back.easeOut'
+    });
+  }
   private showTutorialConfirm(): void {
     this.state = 'tutorialConfirm';
     const ui = this.add
@@ -1171,17 +1443,31 @@ export class MainScene extends Phaser.Scene {
     return [rect, text];
   }
 
+  private clearTutorialActors(): void {
+    this.clearAllProjectiles();
+    for (const enemy of this.enemies) enemy.destroy();
+    this.enemies = [];
+    this.enemyGroup.clear(false, false);
+  }
+
   private retryTutorial(): void {
+    this.clearTutorialActors();
     this.confirmUi?.destroy();
     this.confirmUi = undefined;
     this.startTutorial();
   }
 
   private finishTutorial(): void {
+    this.clearTutorialDialogues();
+    this.clearTutorialActors();
     this.confirmUi?.destroy();
     this.confirmUi = undefined;
     this.tutorialControlGuide?.destroy(true);
     this.tutorialControlGuide = undefined;
+    this.tutorialArrivalDialogue = undefined;
+    this.tutorialArrivalText = undefined;
+    this.tutorialDialogueStep = 0;
+    this.tutorialPhase = 'arrival';
     // 正式游戏彻底移除顶部连段面板与上下节拍提示，改由场地扩散框承担拍点预告。
     this.buildPatternPanel(false);
     this.hud.setBeatGuideVisible(false);
@@ -1250,6 +1536,11 @@ export class MainScene extends Phaser.Scene {
 
   onEnemyKilled(enemy: Enemy): void {
     this.enemies = this.enemies.filter((e) => e !== enemy);
+    if (this.state === 'tutorial' && this.tutorialPhase === 'defeat' && this.enemies.length === 0) {
+      this.clearAllProjectiles();
+      this.showTutorialVictoryDialogue();
+      return;
+    }
 
     // 保安掉警棍，粉丝掉荧光棒；玩家已持有或场上已有时不重复生成。
     const drop = enemy.kind === 'smallGuard' ? BATON : enemy.kind === 'fan' ? GLOWSTICKS : undefined;
@@ -1485,7 +1776,12 @@ export class MainScene extends Phaser.Scene {
     this.pulseArenaBeatJudgement(heavyBeat);
     this.pulsePickups();
     this.pulsePatternIcon(info.beatInMeasure);
+<<<<<<< Updated upstream
     if (this.state === 'tutorial') this.onTutorialBeat(info);
+=======
+    if (this.state === 'tutorial' && this.tutorialPhase === 'combat') this.onTutorialBeat(info);
+    if (this.lastRhythmHitBeat < info.globalBeat - 1) this.breakRhythmCombo();
+>>>>>>> Stashed changes
 
     // 进入游戏的倒计时：每小节第 1 拍减一
     if (this.state === 'intermission' && this.countdownRemaining >= 0 && info.beatInMeasure === 0) {
@@ -1519,8 +1815,20 @@ export class MainScene extends Phaser.Scene {
       this.tweens.add({ targets: this.feverBorder, alpha: 0.25, duration: 350 });
     }
 
+<<<<<<< Updated upstream
     if (this.state === 'playing') {
       for (const enemy of [...this.enemies]) enemy.onBeat(info);
+=======
+    if (this.state === 'playing' || (
+      this.state === 'tutorial'
+      && (this.tutorialPhase === 'dodge' || this.tutorialPhase === 'defeat')
+    )) {
+      for (const enemy of [...this.enemies]) {
+        if (!enemy.go.body.enable) continue;
+        enemy.pulseBeat(heavyBeat);
+        enemy.onBeat(info);
+      }
+>>>>>>> Stashed changes
     }
   }
 
