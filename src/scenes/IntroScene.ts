@@ -3,14 +3,15 @@ import { UI_SCALE } from '../game/displayConfig';
 import { queueCoreAssets, startBackgroundLoad } from '../game/assetManifest';
 
 const INTRO_VIDEO_KEY = 'intro-video';
+const ROCKET_VIDEO_KEY = 'intro-rocket-video';
 
 export class IntroScene extends Phaser.Scene {
   private video?: Phaser.GameObjects.Video;
+  private rocketVideo?: Phaser.GameObjects.Video;
   private startUi?: Phaser.GameObjects.Container;
   private startButton?: Phaser.GameObjects.Rectangle;
   private skipText?: Phaser.GameObjects.Text;
   private startButtonText?: Phaser.GameObjects.Text;
-  private bufferingText?: Phaser.GameObjects.Text;
   private warmupTimer?: Phaser.Time.TimerEvent;
   private warmed = false;
   private started = false;
@@ -23,6 +24,7 @@ export class IntroScene extends Phaser.Scene {
   preload(): void {
     const asset = (file: string): string => `${import.meta.env.BASE_URL}assets/${file}`;
     this.load.video(INTRO_VIDEO_KEY, asset('video/intro.mp4'));
+    this.load.video(ROCKET_VIDEO_KEY, asset('video/intro-rocket.mp4'));
   }
 
   create(): void {
@@ -74,12 +76,24 @@ export class IntroScene extends Phaser.Scene {
       const scale = Math.min(1280 / width, 720 / height);
       this.video?.setDisplaySize(width * scale, height * scale);
     });
-    this.video.on(Phaser.GameObjects.Events.VIDEO_COMPLETE, this.finishIntro, this);
+    this.video.on(Phaser.GameObjects.Events.VIDEO_COMPLETE, this.playRocketIntro, this);
     this.video.on(Phaser.GameObjects.Events.VIDEO_ERROR, this.onVideoError, this);
     this.video.on(Phaser.GameObjects.Events.VIDEO_LOCKED, this.restoreStartButton, this);
     // 片头真正开始播放后，用这段放映时间把 MainScene 的贴图和教学 BGM 预热到缓存里，
     // 玩家看完片头就能直接进教学关，而不是再等一轮几 MB 的下载。
     this.video.on(Phaser.GameObjects.Events.VIDEO_PLAYING, this.onVideoPlaying, this);
+
+    this.rocketVideo = this.add.video(640, 360, ROCKET_VIDEO_KEY).setDepth(1).setVisible(false);
+    this.rocketVideo.once(
+      Phaser.GameObjects.Events.VIDEO_CREATED,
+      (_video: Phaser.GameObjects.Video, width: number, height: number) => {
+        const scale = Math.min(1280 / width, 720 / height);
+        this.rocketVideo?.setDisplaySize(width * scale, height * scale);
+      }
+    );
+    this.rocketVideo.on(Phaser.GameObjects.Events.VIDEO_COMPLETE, this.finishIntro, this);
+    this.rocketVideo.on(Phaser.GameObjects.Events.VIDEO_ERROR, this.finishIntro, this);
+    this.rocketVideo.on(Phaser.GameObjects.Events.VIDEO_PLAYING, this.onVideoPlaying, this);
 
     this.startButton.on('pointerover', () => this.startButton?.setFillStyle(0xf472b6));
     this.startButton.on('pointerout', () => this.startButton?.setFillStyle(0xec4899));
@@ -95,15 +109,7 @@ export class IntroScene extends Phaser.Scene {
       .setAlpha(0.75)
       .setDepth(3)
       .setVisible(false);
-    this.bufferingText = this.add
-      .text(640, 360, '缓冲中…', {
-        fontFamily: 'Arial, Microsoft YaHei, sans-serif',
-        fontSize: '26px',
-        color: '#e9d5ff'
-      })
-      .setOrigin(0.5)
-      .setDepth(4)
-      .setVisible(false);
+
     // 玩家一直停在标题页时也别浪费带宽：稍等一会儿仍然开始预热。
     this.warmupTimer = this.time.delayedCall(5000, this.warmGameAssets, undefined, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.cleanup, this);
@@ -120,7 +126,6 @@ export class IntroScene extends Phaser.Scene {
   }
 
   private onVideoPlaying(): void {
-    this.bufferingText?.setVisible(false);
     this.warmGameAssets();
   }
 
@@ -136,9 +141,19 @@ export class IntroScene extends Phaser.Scene {
     this.startUi?.setVisible(false);
     this.video.setVisible(true).setMute(false).setVolume(1);
     this.skipText?.setVisible(true);
-    this.bufferingText?.setVisible(true);
     this.input.keyboard?.once('keydown-SPACE', this.finishIntro, this);
     this.video.play(false);
+  }
+
+  private playRocketIntro(): void {
+    if (this.finished || !this.rocketVideo) {
+      this.finishIntro();
+      return;
+    }
+    this.video?.stop(false);
+    this.video?.setVisible(false);
+    this.rocketVideo.setVisible(true).setMute(false).setVolume(1);
+    this.rocketVideo.play(false);
   }
 
   private restoreStartButton(): void {
@@ -147,7 +162,6 @@ export class IntroScene extends Phaser.Scene {
     this.video?.setVisible(false);
     this.startUi?.setVisible(true);
     this.skipText?.setVisible(false);
-    this.bufferingText?.setVisible(false);
     this.input.keyboard?.off('keydown-SPACE', this.finishIntro, this);
     this.startButton?.setInteractive({ useHandCursor: true });
     this.startButtonText?.setText('点击继续');
@@ -158,8 +172,8 @@ export class IntroScene extends Phaser.Scene {
     this.finished = true;
     this.input.keyboard?.off('keydown-SPACE', this.finishIntro, this);
     this.skipText?.setVisible(false);
-    this.bufferingText?.setVisible(false);
     this.video?.stop(false);
+    this.rocketVideo?.stop(false);
     this.scene.start('MainScene');
   }
 
@@ -167,9 +181,12 @@ export class IntroScene extends Phaser.Scene {
     this.warmupTimer?.remove();
     this.warmupTimer = undefined;
     this.input.keyboard?.off('keydown-SPACE', this.finishIntro, this);
-    this.video?.off(Phaser.GameObjects.Events.VIDEO_COMPLETE, this.finishIntro, this);
+    this.video?.off(Phaser.GameObjects.Events.VIDEO_COMPLETE, this.playRocketIntro, this);
     this.video?.off(Phaser.GameObjects.Events.VIDEO_ERROR, this.onVideoError, this);
     this.video?.off(Phaser.GameObjects.Events.VIDEO_LOCKED, this.restoreStartButton, this);
     this.video?.off(Phaser.GameObjects.Events.VIDEO_PLAYING, this.onVideoPlaying, this);
+    this.rocketVideo?.off(Phaser.GameObjects.Events.VIDEO_COMPLETE, this.finishIntro, this);
+    this.rocketVideo?.off(Phaser.GameObjects.Events.VIDEO_ERROR, this.finishIntro, this);
+    this.rocketVideo?.off(Phaser.GameObjects.Events.VIDEO_PLAYING, this.onVideoPlaying, this);
   }
 }
