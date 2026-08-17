@@ -132,9 +132,9 @@ type CombatSettingKey =
   | 'batonSweepSpeed'
   | 'batonAttackSpeed'
   | 'smallGuardBulletSpeed'
-  | 'smallGuardAttackIntervalBeats'
+  | 'smallGuardAttackFrequency'
   | 'fanBulletSpeed'
-  | 'fanAttackIntervalBeats'
+  | 'fanAttackFrequency'
   | 'glowstickPerfectDamageMultiplier'
   | 'glowstickGoodDamageMultiplier'
   | 'glowstickPoorDamageMultiplier'
@@ -518,6 +518,12 @@ export class MainScene extends Phaser.Scene {
       }
 
       if (event.repeat || this.gamePaused || this.volumePanelVisible || this.tuningEditor.visible) return;
+
+      if (event.code === 'Space' && this.state === 'tutorial') {
+        event.preventDefault();
+        this.finishTutorial();
+        return;
+      }
 
       if (event.code === 'Quote' || event.code === 'Enter') {
         event.preventDefault();
@@ -1000,9 +1006,9 @@ export class MainScene extends Phaser.Scene {
     addCombatRow(speedPageObjects, 'batonSweepSpeed', 270, '警棍弧弹飞行速度', 0.1);
     addCombatRow(speedPageObjects, 'batonAttackSpeed', 325, '警棍攻击速度', 0.1);
     addCombatRow(speedPageObjects, 'smallGuardBulletSpeed', 380, '保安弹速', 20);
-    addCombatRow(speedPageObjects, 'smallGuardAttackIntervalBeats', 435, '保安攻击间隔', 1);
+    addCombatRow(speedPageObjects, 'smallGuardAttackFrequency', 435, '保安攻击频率', 0.25);
     addCombatRow(speedPageObjects, 'fanBulletSpeed', 490, '粉丝弹速', 20);
-    addCombatRow(speedPageObjects, 'fanAttackIntervalBeats', 545, '粉丝攻击间隔', 1);
+    addCombatRow(speedPageObjects, 'fanAttackFrequency', 545, '粉丝攻击频率', 0.25);
 
     const damageRows: Array<[CombatSettingKey, string, number]> = [
       ['glowstickPerfectDamageMultiplier', '荧光棒 PERFECT 伤害', 0.1],
@@ -1218,9 +1224,9 @@ export class MainScene extends Phaser.Scene {
       case 'fanBulletSpeed':
         this.tuningEditor[key] = Phaser.Math.Clamp(this.tuningEditor[key] + delta, 40, 600);
         break;
-      case 'smallGuardAttackIntervalBeats':
-      case 'fanAttackIntervalBeats':
-        this.tuningEditor[key] = Phaser.Math.Clamp(this.tuningEditor[key] + delta, 1, 8);
+      case 'smallGuardAttackFrequency':
+      case 'fanAttackFrequency':
+        this.tuningEditor[key] = Phaser.Math.Clamp(this.tuningEditor[key] + delta, 0.25, 8);
         break;
       case 'glowstickPerfectDamageMultiplier':
         this.tuningEditor.weaponJudgementDamageMultipliers.glowsticks.perfect = Phaser.Math.Clamp(
@@ -1306,9 +1312,9 @@ export class MainScene extends Phaser.Scene {
       batonSweepSpeed: percent(this.tuningEditor.batonSweepSpeed),
       batonAttackSpeed: percent(this.tuningEditor.batonAttackSpeed),
       smallGuardBulletSpeed: `${Math.round(this.tuningEditor.smallGuardBulletSpeed)} px/s`,
-      smallGuardAttackIntervalBeats: `${Math.round(this.tuningEditor.smallGuardAttackIntervalBeats)} 拍`,
+      smallGuardAttackFrequency: `${this.tuningEditor.smallGuardAttackFrequency.toFixed(2)} 次/拍`,
       fanBulletSpeed: `${Math.round(this.tuningEditor.fanBulletSpeed)} px/s`,
-      fanAttackIntervalBeats: `${Math.round(this.tuningEditor.fanAttackIntervalBeats)} 拍`,
+      fanAttackFrequency: `${this.tuningEditor.fanAttackFrequency.toFixed(2)} 次/拍`,
       glowstickPerfectDamageMultiplier: percent(
         this.tuningEditor.weaponJudgementDamageMultipliers.glowsticks.perfect
       ),
@@ -1428,7 +1434,7 @@ export class MainScene extends Phaser.Scene {
       .setDepth(15)
       .setScale(UI_SCALE / MAIN_CAMERA_BASE_ZOOM)
       .setScrollFactor(0);
-    ui.add(this.add.rectangle(0, 126, 560, 154, 0x0f172a, 0.72).setStrokeStyle(1, 0x334155));
+    ui.add(this.add.rectangle(0, 150, 560, 202, 0x0f172a, 0.72).setStrokeStyle(1, 0x334155));
     ui.add(
       this.add
         .text(0, 62, '教学 · 按节拍打出连段', { fontFamily: 'Arial', fontSize: '22px', color: '#e2e8f0' })
@@ -1455,6 +1461,13 @@ export class MainScene extends Phaser.Scene {
       .text(0, 192, '', { fontFamily: 'Arial', fontSize: '17px', color: '#facc15' })
       .setOrigin(0.5);
     ui.add(this.tutorialStreakText);
+    const skipBg = this.add.rectangle(0, 226, 230, 34, 0x1e293b, 0.92).setStrokeStyle(1, 0x94a3b8);
+    const skipText = this.add
+      .text(0, 226, 'SPACE  跳过教学', {
+        fontFamily: 'Arial', fontSize: '15px', fontStyle: 'bold', color: '#ffffff'
+      })
+      .setOrigin(0.5);
+    ui.add([skipBg, skipText]);
     this.patternPanel = ui;
   }
 
@@ -1840,11 +1853,18 @@ export class MainScene extends Phaser.Scene {
       : this.tuningEditor.glowstickAttackSpeed;
   }
 
-  shouldEnemyAttack(kind: EnemyKind, globalBeat: number): boolean {
-    const interval = kind === 'fan'
-      ? this.tuningEditor.fanAttackIntervalBeats
-      : this.tuningEditor.smallGuardAttackIntervalBeats;
-    return (globalBeat + 1) % Math.max(1, Math.round(interval)) === 0;
+  scheduleEnemyAttacks(kind: EnemyKind, globalBeat: number, attack: () => void): void {
+    const frequency = kind === 'fan'
+      ? this.tuningEditor.fanAttackFrequency
+      : this.tuningEditor.smallGuardAttackFrequency;
+    const shotsBeforeBeat = Math.floor(globalBeat * frequency + 0.000001);
+    const shotsThroughBeat = Math.floor((globalBeat + 1) * frequency + 0.000001);
+    const shotCount = shotsThroughBeat - shotsBeforeBeat;
+    for (let index = 0; index < shotCount; index += 1) {
+      const delayMs = (this.conductor.beatDur * 1000 * index) / shotCount;
+      if (delayMs <= 0) attack();
+      else this.time.delayedCall(delayMs, attack);
+    }
   }
 
   private getEnemyBulletSpeed(kind: EnemyKind): number {

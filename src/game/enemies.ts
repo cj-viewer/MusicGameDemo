@@ -293,12 +293,14 @@ export class SmallGuard extends Enemy {
   onBeat(info: BeatInfo): void {
     if (this.dead) return;
     this.chooseMovementAngle();
-    if (!this.scene.shouldEnemyAttack(this.kind, info.globalBeat)) return;
-    const angle = this.scene.quantizeEnemyAttackAngle(this.angleToPlayer());
-    this.facingAngle = angle;
-    this.attackFacingUntil = this.scene.time.now + GUARD_ATTACK_DURATION_MS;
-    playGuardAttackEffect(this.attackFx, 'attack-light');
-    this.scene.spawnEnemyProjectile(this.x, this.y, angle, 0x3b82f6, this.kind);
+    this.scene.scheduleEnemyAttacks(this.kind, info.globalBeat, () => {
+      if (this.dead) return;
+      const angle = this.scene.quantizeEnemyAttackAngle(this.angleToPlayer());
+      this.facingAngle = angle;
+      this.attackFacingUntil = this.scene.time.now + GUARD_ATTACK_DURATION_MS;
+      playGuardAttackEffect(this.attackFx, 'attack-light');
+      this.scene.spawnEnemyProjectile(this.x, this.y, angle, 0x3b82f6, this.kind);
+    });
   }
 
   protected move(_dtMs: number): void {
@@ -348,13 +350,16 @@ export class MidGuard extends Enemy {
   }
 
   onBeat(info: BeatInfo): void {
-    if (this.dead || !this.scene.shouldEnemyAttack(this.kind, info.globalBeat)) return;
-    this.lockedAngle = this.scene.quantizeEnemyAttackAngle(this.angleToPlayer());
-    this.facingAngle = this.lockedAngle;
-    this.attackFacingUntil = this.scene.time.now + GUARD_ATTACK_DURATION_MS;
-    this.aiming = false;
-    this.scene.spawnEnemyProjectile(this.x, this.y, this.lockedAngle, 0x3b82f6, this.kind);
-    this.flashLaser(this.lockedAngle);
+    if (this.dead) return;
+    this.scene.scheduleEnemyAttacks(this.kind, info.globalBeat, () => {
+      if (this.dead) return;
+      this.lockedAngle = this.scene.quantizeEnemyAttackAngle(this.angleToPlayer());
+      this.facingAngle = this.lockedAngle;
+      this.attackFacingUntil = this.scene.time.now + GUARD_ATTACK_DURATION_MS;
+      this.aiming = false;
+      this.scene.spawnEnemyProjectile(this.x, this.y, this.lockedAngle, 0x3b82f6, this.kind);
+      this.flashLaser(this.lockedAngle);
+    });
   }
 
   update(dtMs: number): void {
@@ -465,10 +470,12 @@ export class FanEnemy extends Enemy {
   onBeat(info: BeatInfo): void {
     if (this.dead) return;
     this.chooseMovementAngle();
-    if (!this.scene.shouldEnemyAttack(this.kind, info.globalBeat)) return;
-    this.aimAngle = this.scene.quantizeEnemyAttackAngle(this.angleToPlayer());
-    this.playAttack(this.aimAngle);
-    this.scene.spawnEnemyProjectile(this.x, this.y, this.aimAngle, 0x3b82f6, this.kind);
+    this.scene.scheduleEnemyAttacks(this.kind, info.globalBeat, () => {
+      if (this.dead) return;
+      this.aimAngle = this.scene.quantizeEnemyAttackAngle(this.angleToPlayer());
+      this.playAttack(this.aimAngle);
+      this.scene.spawnEnemyProjectile(this.x, this.y, this.aimAngle, 0x3b82f6, this.kind);
+    });
   }
 
   protected move(_dtMs: number): void {

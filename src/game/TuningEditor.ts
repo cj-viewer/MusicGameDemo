@@ -20,9 +20,9 @@ export class TuningEditor {
   batonSweepSpeed = 1;
   batonAttackSpeed = 1;
   smallGuardBulletSpeed = 144;
-  smallGuardAttackIntervalBeats = 4;
+  smallGuardAttackFrequency = 1;
   fanBulletSpeed = 144;
-  fanAttackIntervalBeats = 4;
+  fanAttackFrequency = 1;
   weaponJudgementDamageMultipliers: Record<WeaponId, Record<AttackJudgement, number>> = {
     glowsticks: { perfect: 1.2, good: 1, poor: 0.5 },
     baton: { perfect: 1.2, good: 1, poor: 0.5 }
@@ -136,6 +136,7 @@ export class TuningEditor {
     addButton(320, 500, '‹', () => this.cycleSlot('level', -1));
     addButton(540, 500, '›', () => this.cycleSlot('level', 1));
 
+
     this.container = scene.add
       .container(screenLayerOffset(VIEW_WIDTH), screenLayerOffset(VIEW_HEIGHT), objects)
       .setDepth(31)
@@ -157,6 +158,7 @@ export class TuningEditor {
   set playerBulletSpeed(value: number) {
     this.glowstickBulletSpeed = value;
   }
+
 
   get enemyBulletSpeed(): number {
     return this.smallGuardBulletSpeed;
