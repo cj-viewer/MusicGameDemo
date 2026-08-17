@@ -14,6 +14,7 @@ import {
   guardAttackEffectTextureKey
 } from './guardAnimation';
 import { BGM_TRACKS, DEFAULT_TUTORIAL_BGM_SLOT, bgmAssetPath, type BgmTrack } from './bgmTracks';
+import { preloadStageEnvironments } from './PinkStageEnvironment';
 
 const asset = (file: string): string => `${import.meta.env.BASE_URL}assets/${file}`;
 
@@ -23,6 +24,7 @@ const asset = (file: string): string => `${import.meta.env.BASE_URL}assets/${fil
  * MainScene.preload() 再调用一次时基本全是缓存命中。
  */
 export function queueCoreAssets(scene: Phaser.Scene): void {
+  preloadStageEnvironments(scene, asset);
   scene.load.image('guard', asset('images/characters/guard.png'));
   for (const action of ['idle', 'run'] as const) {
     for (let frame = 1; frame <= FAN_CHARACTER_FRAME_COUNT; frame++) {

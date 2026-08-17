@@ -7,7 +7,7 @@ import {
   type AttackJudgement
 } from '../game/ComboSystem';
 import { HUD } from '../game/HUD';
-import { Player, PLAYER_RADIUS } from '../game/Player';
+import { Player } from '../game/Player';
 import { registerPlayerAnimations } from '../game/playerAnimation';
 import { BATON, GLOWSTICKS, getAttackSpec, type WeaponDef, type WeaponId } from '../game/weapons';
 import { Enemy, FanEnemy, SmallGuard, type EnemyKind } from '../game/enemies';
@@ -37,6 +37,10 @@ import {
   queueDeferredBgm,
   startBackgroundLoad
 } from '../game/assetManifest';
+import {
+  createStageEnvironments,
+  type StageEnvironmentController
+} from '../game/PinkStageEnvironment';
 
 /** 试玩中的统一节拍速度；BGM 按各自原始 BPM 等比变速到该值。 */
 const BPM = 132;
@@ -93,6 +97,19 @@ const ENEMY_BULLET_BEAT_SURGE_WINDOW = 0.2;
 const RHYTHM_HEAVY_COLOR_TRANSITION_DURATION = 0.2;
 const PLAYER_BULLET_COLOR = 0xef4444;
 const BATON_BULLET_COLOR = 0xa855f7;
+const GUARD_BULLET_COLOR = 0x52efff;
+const FAN_BULLET_COLOR = 0xff543d;
+const PROJECTILE_SOFT_GLOW_TEXTURE = 'fx-projectile-soft-glow';
+const PROJECTILE_POINT_GLOW_TEXTURE = 'fx-projectile-point-glow';
+const BATON_PROJECTILE_GLOW_DISTANCE = worldSize(15);
+/** 与“点/线特效自发光”任务一致的玩家直射亮芯与连续 Bloom 比例。 */
+const PLAYER_LINE_CORE_LENGTH_SCALE = 1.35;
+const PLAYER_LINE_CORE_THICKNESS_SCALE = 0.52;
+const PLAYER_LINE_GLOW_LENGTH_SCALE = 1.95;
+const PLAYER_LINE_GLOW_THICKNESS_SCALE = 3.2;
+/** 参考旧版画面，在武器发光端与直射亮芯之间保留约 19px 的 720p 屏幕间距。 */
+const PLAYER_STRAIGHT_MUZZLE_GAP = worldSize(24);
+const ENEMY_PROJECTILE_GLOW_DISTANCE = worldSize(13);
 const GLOWSTICK_KNOCKBACK_SPEED = 150;
 const BATON_KNOCKBACK_SPEED = GLOWSTICK_KNOCKBACK_SPEED * 1.25;
 
@@ -178,6 +195,7 @@ export class MainScene extends Phaser.Scene {
   private gamePaused = false;
   private cameraLookX = 0;
   private cameraLookY = 0;
+  private stageEnvironment!: StageEnvironmentController;
 
   private enemies: Enemy[] = [];
   private enemyGroup!: Phaser.Physics.Arcade.Group;
@@ -316,6 +334,7 @@ export class MainScene extends Phaser.Scene {
     this.cameras.main.setZoom(MAIN_CAMERA_BASE_ZOOM).setScroll(CAMERA_BASE_SCROLL_X, CAMERA_BASE_SCROLL_Y);
     this.createFanAnimations();
     registerPlayerAnimations(this);
+    this.stageEnvironment = createStageEnvironments(this);
 
     this.physics.world.setBounds(ARENA.x, ARENA.y, ARENA.width, ARENA.height);
     this.arenaBorder = this.add
@@ -1355,6 +1374,7 @@ export class MainScene extends Phaser.Scene {
   /** 开场教学：不生成敌人，玩家跟随上方节拍点连打，连续 3 个小节全对后确认进入游戏 */
   private startTutorial(): void {
     this.state = 'tutorial';
+    this.stageEnvironment.showTutorial();
     this.tutorialStreak = 0;
     this.tutorialHitBeats.clear();
     this.tutorialFailedMeasures.clear();
@@ -1682,6 +1702,7 @@ export class MainScene extends Phaser.Scene {
     this.combo.progress = 0;
     this.lastComboLevel = 0;
     this.hud.setCombo(0, 0);
+    this.stageEnvironment.showSecondLevel();
     this.state = 'intermission';
     this.switchBgmTrack(BGM_TRACKS[this.tuningEditor.levelBgmSlot]);
     this.hud.setWave('准备…');
@@ -1937,12 +1958,135 @@ export class MainScene extends Phaser.Scene {
     return hitboxes;
   }
 
+  /** 来自“点/线特效自发光”版本：连续 Alpha 衰减的胶囊光晕。 */
+  private ensureProjectileSoftGlowTexture(): string {
+    if (this.textures.exists(PROJECTILE_SOFT_GLOW_TEXTURE)) return PROJECTILE_SOFT_GLOW_TEXTURE;
+
+    const width = 128;
+    const height = 64;
+    const texture = this.textures.createCanvas(PROJECTILE_SOFT_GLOW_TEXTURE, width, height);
+    if (!texture) return '__WHITE';
+
+    const context = texture.context;
+    const image = context.createImageData(width, height);
+    const startX = 28;
+    const endX = width - startX;
+    const centerY = height / 2;
+    const coreRadius = 3.5;
+    const sigma = 10.5;
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const nearestX = Phaser.Math.Clamp(x, startX, endX);
+        const distanceToAxis = Math.hypot(x - nearestX, y - centerY);
+        const distanceFromCore = Math.max(0, distanceToAxis - coreRadius);
+        const falloff = Math.exp(-(distanceFromCore * distanceFromCore) / (2 * sigma * sigma));
+        const index = (y * width + x) * 4;
+        image.data[index] = 255;
+        image.data[index + 1] = 255;
+        image.data[index + 2] = 255;
+        image.data[index + 3] = Math.round(255 * falloff * 0.52);
+      }
+    }
+    context.putImageData(image, 0, 0);
+    texture.refresh();
+    texture.setFilter(Phaser.Textures.FilterMode.LINEAR);
+    return PROJECTILE_SOFT_GLOW_TEXTURE;
+  }
+
+  /** 来自“点/线特效自发光”版本：敌弹使用连续径向衰减的点光源。 */
+  private ensureProjectilePointGlowTexture(): string {
+    if (this.textures.exists(PROJECTILE_POINT_GLOW_TEXTURE)) return PROJECTILE_POINT_GLOW_TEXTURE;
+
+    const size = 64;
+    const texture = this.textures.createCanvas(PROJECTILE_POINT_GLOW_TEXTURE, size, size);
+    if (!texture) return '__WHITE';
+
+    const context = texture.context;
+    const image = context.createImageData(size, size);
+    const center = size / 2;
+    const coreRadius = 3;
+    const sigma = 8.5;
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const distance = Math.max(0, Math.hypot(x - center, y - center) - coreRadius);
+        const falloff = Math.exp(-(distance * distance) / (2 * sigma * sigma));
+        const index = (y * size + x) * 4;
+        image.data[index] = 255;
+        image.data[index + 1] = 255;
+        image.data[index + 2] = 255;
+        image.data[index + 3] = Math.round(255 * falloff);
+      }
+    }
+    context.putImageData(image, 0, 0);
+    texture.refresh();
+    texture.setFilter(Phaser.Textures.FilterMode.LINEAR);
+    return PROJECTILE_POINT_GLOW_TEXTURE;
+  }
+
+  /** 只替换自发光合成：尺寸由调用方现有参数提供，不触碰判定或运动逻辑。 */
+  private attachProjectileGlowLayer(
+    bullet: Phaser.GameObjects.Rectangle,
+    textureKey: string,
+    color: number,
+    width: number,
+    height: number,
+    offsetX: number,
+    offsetY: number,
+    alpha: number
+  ): Phaser.GameObjects.Image {
+    const glow = this.add
+      .image(bullet.x + offsetX, bullet.y + offsetY, textureKey)
+      .setDisplaySize(width, height)
+      .setRotation(bullet.rotation)
+      .setTintMode(Phaser.TintModes.FILL)
+      .setTint(color)
+      .setAlpha(alpha)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setDepth(bullet.depth - 0.003);
+    bullet.setData('projectileGlowLayers', [glow]);
+    bullet.setData('projectileGlowOffsetX', offsetX);
+    bullet.setData('projectileGlowOffsetY', offsetY);
+    return glow;
+  }
+
+  private syncProjectileGlowLayers(bullet: Phaser.GameObjects.Rectangle): void {
+    const layers = bullet.getData('projectileGlowLayers') as Phaser.GameObjects.Image[] | undefined;
+    if (!layers) return;
+    const offsetX = (bullet.getData('projectileGlowOffsetX') as number | undefined) ?? 0;
+    const offsetY = (bullet.getData('projectileGlowOffsetY') as number | undefined) ?? 0;
+    for (const layer of layers) {
+      if (!layer.active) continue;
+      layer
+        .setPosition(bullet.x + offsetX, bullet.y + offsetY)
+        .setRotation(bullet.rotation)
+        .setVisible(bullet.visible)
+        .setDepth(bullet.depth - 0.003);
+    }
+  }
+
+  private destroyProjectileGlowLayers(bullet: Phaser.GameObjects.Rectangle): void {
+    const layers = bullet.getData('projectileGlowLayers') as Phaser.GameObjects.Image[] | undefined;
+    for (const layer of layers ?? []) {
+      if (layer.active) layer.destroy();
+    }
+    bullet.setData('projectileGlowLayers', undefined);
+  }
+
   private positionStraightBulletHitboxes(
     bullet: Phaser.GameObjects.Rectangle,
     length: number,
     size: number,
     angle: number
   ): void {
+    const projectileVisual = bullet.getData('projectileVisual') as Phaser.GameObjects.Shape | undefined;
+    if (projectileVisual?.active) {
+      const offsetX = (bullet.getData('projectileVisualOffsetX') as number | undefined) ?? 0;
+      const offsetY = (bullet.getData('projectileVisualOffsetY') as number | undefined) ?? 0;
+      projectileVisual
+        .setPosition(bullet.x + offsetX, bullet.y + offsetY)
+        .setRotation(bullet.rotation);
+    }
+    this.syncProjectileGlowLayers(bullet);
     const hitboxes = bullet.getData('hitboxes') as Phaser.GameObjects.Rectangle[] | undefined;
     if (!hitboxes) return;
     const offset = Math.max(0, (length - size) * 0.5);
@@ -2018,6 +2162,7 @@ export class MainScene extends Phaser.Scene {
 
     const heavyBeat = this.combo.pattern[info.beatInMeasure] === 'H';
     this.player.onBeat(heavyBeat);
+    this.stageEnvironment.pulse(heavyBeat);
     this.hud.onBeat(info.beatInMeasure);
     this.getFpvMiniScene()?.onBeat(heavyBeat);
     this.pulseRhythmEdgeBlocks(heavyBeat);
@@ -2086,14 +2231,19 @@ export class MainScene extends Phaser.Scene {
       : [angle];
     this.sfx.attack(heavy);
     this.player.playAttackAnimation(heavy);
+    // playAttackAnimation 会先把武器放到本次挥击的起手角；此后读取发光端，
+    // 才能让直射亮芯在左右朝向和轻 / 重挥击下都从武器尖端出发。
+    const glowstickEmitter = weapon.id === 'baton'
+      ? attackOrigin
+      : this.player.getGlowstickEmitterPosition();
     if (onBeat) {
+      const feedbackOrigin = weapon.id === 'baton' ? attackOrigin : glowstickEmitter;
       this.spawnOnBeatAttackFx(
-        attackOrigin.x,
-        attackOrigin.y,
-        angle,
+        feedbackOrigin.x,
+        feedbackOrigin.y,
         heavy,
         spec.color,
-        weapon.id !== 'baton'
+        weapon.id === 'baton'
       );
     }
     for (const attackAngle of attackAngles) {
@@ -2111,8 +2261,8 @@ export class MainScene extends Phaser.Scene {
         );
       } else {
         this.spawnPlayerShotgun(
-          attackOrigin.x,
-          attackOrigin.y,
+          glowstickEmitter.x,
+          glowstickEmitter.y,
           attackAngle,
           heavy ? 560 : 480,
           tunedDamage,
@@ -2123,14 +2273,6 @@ export class MainScene extends Phaser.Scene {
           projectileRangeScale
         );
       }
-    }
-
-    if (weapon.id !== 'baton' && spec.kind === 'charge') {
-      const ring = this.add
-        .circle(attackOrigin.x, attackOrigin.y, worldSize(20))
-        .setStrokeStyle(worldSize(3), spec.color, 0.9)
-        .setDepth(6);
-      this.tweens.add({ targets: ring, scale: 1.8, alpha: 0, duration: 250, onComplete: () => ring.destroy() });
     }
 
     // Fever Time：每次成功攻击额外释放清屏音波（轻=扇形，重=全圆）
@@ -2145,45 +2287,35 @@ export class MainScene extends Phaser.Scene {
   }
 
   /**
-   * 踩拍攻击的强调特效：双层冲击环 + 瞄准方向楔形闪光 + 音符飘散 + 相机微推拉。
-   * 与普通（错拍）攻击形成明显区分；重拍整体比轻拍更夸张。
+   * 踩拍攻击的强调反馈：警棍保留局部冲击环，荧光棒只强化实际线性亮芯；
+   * 两者继续保留音符与相机微推拉，避免荧光棒尖端附近出现错位的圆形叠层。
    */
   private spawnOnBeatAttackFx(
     x: number,
     y: number,
-    angle: number,
     heavy: boolean,
     color: number,
-    showDirectionWedge: boolean
+    showRadialBurst: boolean
   ): void {
-    // 双层冲击环：外环用本拍攻击色，内环白色、更快消散
-    const outer = this.add.circle(x, y, 16).setStrokeStyle(heavy ? 5 : 4, color, 0.95).setDepth(6);
-    const inner = this.add.circle(x, y, 10).setStrokeStyle(3, 0xffffff, 0.9).setDepth(6);
-    this.tweens.add({
-      targets: outer,
-      scale: heavy ? 3.4 : 2.6,
-      alpha: 0,
-      duration: heavy ? 260 : 200,
-      ease: 'Cubic.easeOut',
-      onComplete: () => outer.destroy()
-    });
-    this.tweens.add({
-      targets: inner,
-      scale: 2,
-      alpha: 0,
-      duration: 140,
-      ease: 'Cubic.easeOut',
-      onComplete: () => inner.destroy()
-    });
-
-    // 警棍只保留弧线扫击，不叠加扇形纯色方向图形。
-    if (showDirectionWedge) {
-      const wedge = this.add.graphics().setDepth(6);
-      const halfRad = Phaser.Math.DegToRad(heavy ? 34 : 22);
-      wedge.fillStyle(0xffffff, 0.5);
-      wedge.slice(x, y, heavy ? 64 : 48, angle - halfRad, angle + halfRad, false);
-      wedge.fillPath();
-      this.tweens.add({ targets: wedge, alpha: 0, duration: 130, onComplete: () => wedge.destroy() });
+    if (showRadialBurst) {
+      const outer = this.add.circle(x, y, 16).setStrokeStyle(heavy ? 5 : 4, color, 0.95).setDepth(6);
+      const inner = this.add.circle(x, y, 10).setStrokeStyle(3, 0xffffff, 0.9).setDepth(6);
+      this.tweens.add({
+        targets: outer,
+        scale: heavy ? 3.4 : 2.6,
+        alpha: 0,
+        duration: heavy ? 260 : 200,
+        ease: 'Cubic.easeOut',
+        onComplete: () => outer.destroy()
+      });
+      this.tweens.add({
+        targets: inner,
+        scale: 2,
+        alpha: 0,
+        duration: 140,
+        ease: 'Cubic.easeOut',
+        onComplete: () => inner.destroy()
+      });
     }
 
     // 音符飘散：音游主题的踩拍标记
@@ -2314,15 +2446,20 @@ export class MainScene extends Phaser.Scene {
     angle: number,
     speed: number,
     damage: number,
-    color: number,
     sourceKind: EnemyKind
   ): void {
     const fanOrbDiameter = worldSize(9);
-    const bullet = (sourceKind === 'fan'
-      ? this.add.circle(x, y, fanOrbDiameter / 2, color).setStrokeStyle(worldSize(1.5), 0xffd6e7, 0.95)
-      : this.add.rectangle(x, y, ENEMY_BULLET_LENGTH, ENEMY_BULLET_THICKNESS, color)
-    ) as unknown as Phaser.GameObjects.Rectangle;
-    bullet.setRotation(angle).setDepth(4);
+    const displayColor = sourceKind === 'fan' ? FAN_BULLET_COLOR : GUARD_BULLET_COLOR;
+    const coreColor = this.mixColorWithWhite(displayColor, 0.66);
+    const visualDiameter = sourceKind === 'fan' ? fanOrbDiameter : ENEMY_BULLET_THICKNESS;
+    const bullet = this.add
+      .rectangle(x, y, ENEMY_BULLET_THICKNESS, ENEMY_BULLET_THICKNESS, coreColor, 0)
+      .setRotation(angle)
+      .setDepth(4);
+    const projectileVisual = this.add
+      .circle(x, y, visualDiameter * 0.48, coreColor, 1)
+      .setDepth(4)
+      .setBlendMode(Phaser.BlendModes.ADD);
     this.bullets.add(bullet);
     const body = bullet.body as Phaser.Physics.Arcade.Body;
     const hitboxSize = sourceKind === 'fan' ? fanOrbDiameter : ENEMY_BULLET_THICKNESS;
@@ -2334,8 +2471,19 @@ export class MainScene extends Phaser.Scene {
     bullet.setData('baseSpeed', speed);
     bullet.setData('sourceKind', sourceKind);
     bullet.setData('despawnBeat', Math.floor(this.conductor.beatFloatAt(this.conductor.now())) + 8);
-    bullet.setData('trailColor', color);
+    bullet.setData('projectileVisual', projectileVisual);
+    bullet.setData('trailColor', displayColor);
     bullet.setData('trailThickness', hitboxSize);
+    this.attachProjectileGlowLayer(
+      bullet,
+      this.ensureProjectilePointGlowTexture(),
+      displayColor,
+      visualDiameter * 0.96 + ENEMY_PROJECTILE_GLOW_DISTANCE * 2,
+      visualDiameter * 0.96 + ENEMY_PROJECTILE_GLOW_DISTANCE * 2,
+      0,
+      0,
+      1
+    );
     bullet.setData('bursting', this.tuningEditor.enemyBulletBeatSurgeEnabled);
     bullet.setData('hitboxMode', 'straight');
     bullet.setData('hitboxLength', hitboxLength);
@@ -2405,7 +2553,6 @@ export class MainScene extends Phaser.Scene {
     x: number,
     y: number,
     angle: number,
-    color: number,
     sourceKind: EnemyKind
   ): void {
     const shotAngle = this.quantizeEnemyAttackAngle(angle);
@@ -2431,15 +2578,14 @@ export class MainScene extends Phaser.Scene {
         attackAngle,
         this.getEnemyBulletSpeed(sourceKind),
         this.tuningEditor.getEnemyProjectileDamage(sourceKind),
-        color,
         sourceKind
       );
     }
   }
 
   private spawnPlayerShotgun(
-    x: number,
-    y: number,
+    emitterX: number,
+    emitterY: number,
     angle: number,
     _speed: number,
     damage: number,
@@ -2463,15 +2609,31 @@ export class MainScene extends Phaser.Scene {
     });
     for (const offset of offsets) {
       const shotAngle = angle + Phaser.Math.DegToRad(offset);
+      const directionX = Math.cos(shotAngle);
+      const directionY = Math.sin(shotAngle);
+      const visualStartX = emitterX + directionX * PLAYER_STRAIGHT_MUZZLE_GAP;
+      const visualStartY = emitterY + directionY * PLAYER_STRAIGHT_MUZZLE_GAP;
+      // 判定段仍从武器端前置后的点开始，宿主位于原判定段中点；
+      // 源任务的短亮芯与胶囊外晕均以该中心为锚，不改变三点方盒覆盖。
+      const spawnX = visualStartX + directionX * bulletLength * 0.5;
+      const spawnY = visualStartY + directionY * bulletLength * 0.5;
+      const coreColor = onBeat ? 0xffffff : this.mixColorWithWhite(color, 0.66);
       const bullet = this.add.rectangle(
-        x + Math.cos(shotAngle) * (PLAYER_RADIUS + worldSize(8)),
-        y + Math.sin(shotAngle) * (PLAYER_RADIUS + worldSize(8)),
+        spawnX,
+        spawnY,
         bulletLength,
         BULLET_THICKNESS,
-        color
-      ).setRotation(shotAngle).setDepth(4);
-      // 踩拍弹丸带白色描边发光，与错拍的普通弹丸区分
-      if (onBeat) bullet.setStrokeStyle(2, 0xffffff, 0.95);
+        coreColor,
+        onBeat ? 0.96 : 0.94
+      )
+        .setDisplaySize(
+          bulletLength * PLAYER_LINE_CORE_LENGTH_SCALE,
+          BULLET_THICKNESS * PLAYER_LINE_CORE_THICKNESS_SCALE
+        )
+        .setRotation(shotAngle)
+        .setDepth(4)
+        .setBlendMode(Phaser.BlendModes.ADD)
+        .setStrokeStyle();
       this.playerBullets.add(bullet);
       const body = bullet.body as Phaser.Physics.Arcade.Body;
       body.setSize(BULLET_THICKNESS, BULLET_THICKNESS, true);
@@ -2481,6 +2643,16 @@ export class MainScene extends Phaser.Scene {
       bullet.setData('despawnBeat', despawnBeat);
       bullet.setData('trailColor', color);
       bullet.setData('trailThickness', BULLET_THICKNESS);
+      this.attachProjectileGlowLayer(
+        bullet,
+        this.ensureProjectileSoftGlowTexture(),
+        color,
+        bulletLength * PLAYER_LINE_GLOW_LENGTH_SCALE,
+        BULLET_THICKNESS * PLAYER_LINE_GLOW_THICKNESS_SCALE,
+        0,
+        0,
+        0.74
+      );
       bullet.setData('knockbackAngle', shotAngle);
       bullet.setData('knockbackSpeed', GLOWSTICK_KNOCKBACK_SPEED);
       bullet.setData('hitboxMode', 'straight');
@@ -2519,7 +2691,31 @@ export class MainScene extends Phaser.Scene {
     const bullets = activeLayers.map(({ radius, lengthScale: layerLengthScale }) => {
       const arcLength = baseLength * layerLengthScale * lengthScale;
       const halfArcAngle = arcLength / (2 * radius);
-      const visual = this.add.graphics().setDepth(4);
+      const visual = this.add
+        .graphics()
+        .setDepth(4)
+        .setBlendMode(Phaser.BlendModes.ADD)
+        .enableFilters();
+      const visualFilters = visual.filters;
+      if (visualFilters) {
+        const glow = visualFilters.internal.addGlow(
+          BATON_BULLET_COLOR,
+          0.9,
+          0.05,
+          1,
+          false,
+          2,
+          BATON_PROJECTILE_GLOW_DISTANCE
+        );
+        glow.setPaddingOverride(null);
+        const bloom = visualFilters.internal.addParallelFilters();
+        bloom.top.addThreshold(0.05, 1);
+        const blur = bloom.top.addBlur(2, 8, 8, 0.78, BATON_BULLET_COLOR, 3);
+        blur.setPaddingOverride(null);
+        bloom.blend.blendMode = Phaser.BlendModes.ADD;
+        bloom.blend.amount = 0.42;
+        bloom.setPaddingOverride(null);
+      }
       const bullet = this.add
         .rectangle(originX, originY, arcLength, BULLET_THICKNESS + 4, BATON_BULLET_COLOR, 0)
         .setDepth(4);
@@ -2529,8 +2725,8 @@ export class MainScene extends Phaser.Scene {
       body.setVelocity(0, 0);
       bullet.setData('damage', damage);
       bullet.setData('despawnBeat', Infinity);
-      bullet.setData('trailColor', BATON_BULLET_COLOR);
       bullet.setData('batonVisual', visual);
+      bullet.setData('trailColor', BATON_BULLET_COLOR);
       bullet.setData('trailThickness', BULLET_THICKNESS + 4);
       bullet.setData('knockbackSpeed', BATON_KNOCKBACK_SPEED);
       bullet.setData('hitboxMode', 'arc');
@@ -2551,14 +2747,11 @@ export class MainScene extends Phaser.Scene {
         this.positionArcBulletHitboxes(bullet, originX, originY, radius, angle, halfArcAngle);
         bullet.setData('knockbackAngle', angle + (clockwise ? Math.PI / 2 : -Math.PI / 2));
         visual.clear();
-        // 踩拍扫击带白色光晕底层
-        if (onBeat) {
-          visual.lineStyle(BULLET_THICKNESS + 8, 0xffffff, 0.22);
-          visual.beginPath();
-          visual.arc(originX, originY, radius, angle - halfArcAngle * 1.15, angle + halfArcAngle * 1.15, false);
-          visual.strokePath();
-        }
-        visual.lineStyle(BULLET_THICKNESS, BATON_BULLET_COLOR, 1);
+        visual.lineStyle(
+          BULLET_THICKNESS,
+          this.mixColorWithWhite(BATON_BULLET_COLOR, onBeat ? 0.82 : 0.7),
+          1
+        );
         visual.beginPath();
         visual.arc(originX, originY, radius, angle - halfArcAngle, angle + halfArcAngle, false);
         visual.strokePath();
@@ -2579,6 +2772,10 @@ export class MainScene extends Phaser.Scene {
     });
   }
 
+  /**
+   * 保留既有运动尾迹的尺寸、生成频率和寿命；只把合成改为 ADD，
+   * 使尾迹与迁移后的自发光配色自然融合。
+   */
   private updateBulletTrails(deltaMs: number): void {
     const now = this.time.now;
     const dt = Math.max(deltaMs, 1) / 1000;
@@ -2615,7 +2812,8 @@ export class MainScene extends Phaser.Scene {
             alpha
           )
           .setRotation(angle)
-          .setDepth(3);
+          .setDepth(3)
+          .setBlendMode(Phaser.BlendModes.ADD);
         this.tweens.add({
           targets: trail,
           alpha: 0,
@@ -2628,8 +2826,11 @@ export class MainScene extends Phaser.Scene {
   }
 
   private destroyPlayerBullet(bullet: Phaser.GameObjects.Rectangle): void {
-    const visual = bullet.getData('batonVisual') as Phaser.GameObjects.Graphics | undefined;
-    if (visual?.active) visual.destroy();
+    const batonVisual = bullet.getData('batonVisual') as Phaser.GameObjects.Graphics | undefined;
+    if (batonVisual?.active) batonVisual.destroy();
+    const projectileVisual = bullet.getData('projectileVisual') as Phaser.GameObjects.Shape | undefined;
+    if (projectileVisual?.active) projectileVisual.destroy();
+    this.destroyProjectileGlowLayers(bullet);
     this.destroyBulletHitboxes(bullet);
     if (bullet.active) bullet.destroy();
   }
@@ -2638,6 +2839,9 @@ export class MainScene extends Phaser.Scene {
   private destroyEnemyBullet(bullet: Phaser.GameObjects.Rectangle): void {
     const heldTrail = bullet.getData('heldTrail') as Phaser.GameObjects.Rectangle | undefined;
     if (heldTrail?.active) heldTrail.destroy();
+    const projectileVisual = bullet.getData('projectileVisual') as Phaser.GameObjects.Shape | undefined;
+    if (projectileVisual?.active) projectileVisual.destroy();
+    this.destroyProjectileGlowLayers(bullet);
     this.destroyBulletHitboxes(bullet);
     if (bullet.active) bullet.destroy();
   }
@@ -2651,6 +2855,19 @@ export class MainScene extends Phaser.Scene {
     }
     this.playerBulletHitboxes.clear(true, true);
     this.enemyBulletHitboxes.clear(true, true);
+  }
+
+  /** 将弹体颜色向白色抬亮，保留色相并给 Glow 留出自然的亮芯。 */
+  private mixColorWithWhite(color: number, amount: number): number {
+    const ratio = Phaser.Math.Clamp(amount, 0, 1);
+    const red = (color >> 16) & 0xff;
+    const green = (color >> 8) & 0xff;
+    const blue = color & 0xff;
+    return (
+      Math.round(Phaser.Math.Linear(red, 255, ratio)) << 16
+      | Math.round(Phaser.Math.Linear(green, 255, ratio)) << 8
+      | Math.round(Phaser.Math.Linear(blue, 255, ratio))
+    );
   }
 
   spawnImpactFx(x: number, y: number, color: number, strong: boolean): void {

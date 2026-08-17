@@ -16,6 +16,11 @@ import {
 import type { MainScene } from '../scenes/MainScene';
 import { UI_SCALE } from './displayConfig';
 import { worldDepth, worldSize } from './visualScale';
+import {
+  enableEmissiveBloom,
+  setEmissiveBloomColor,
+  type EmissiveBloomHandle
+} from './EmissiveFx';
 
 export const PLAYER_RADIUS = worldSize(16);
 const MOVE_SPEED = 260;
@@ -34,10 +39,11 @@ const DODGE_BEAT_WINDOW = 0.12;
 const ATTACK_EFFECT_DURATION_MS = 200;
 const PLAYER_ATTACK_SIDE_OFFSET = 5.12 * 1.5;
 const PLAYER_WEAPON_WAIST_OFFSET_Y = 15 * UI_SCALE;
-const LIGHT_ATTACK_EFFECT_ALPHA = 0.45;
+const LIGHT_ATTACK_EFFECT_ALPHA = 0.72;
+const HARD_ATTACK_EFFECT_ALPHA = 0.92;
 const HARD_ATTACK_EFFECT_SCALE = 1.18;
-const LIGHT_ATTACK_GLOW_ALPHA = 0.3;
-const HARD_ATTACK_GLOW_ALPHA = 0.68;
+const LIGHT_ATTACK_EMISSIVE_COLOR = 0xfff36b;
+const HARD_ATTACK_EMISSIVE_COLOR = 0xf28cff;
 /** 角色脚底锚定的 Y 轴上弹：轻拍 +5%、重拍 +10%，横轴和镜像不参与缩放。 */
 const CHARACTER_BEAT_PULSE_LIGHT_SCALE_Y = 1.05;
 const CHARACTER_BEAT_PULSE_HEAVY_SCALE_Y = 1.1;
@@ -46,6 +52,8 @@ const CHARACTER_BEAT_PULSE_HEAVY_DURATION_MS = 220;
 /** 武器透明内容的握把末端；旋转与镜像都必须围绕此点。 */
 const LIGHT_STICK_ORIGIN = { x: 101 / 128, y: 98 / 128 };
 const BATON_ORIGIN = { x: 123 / 128, y: 121 / 128 };
+/** 荧光棒源图中发光帽外沿的连续中心点，用于把直射亮芯接到可见武器尖端。 */
+const LIGHT_STICK_EMITTER_SOURCE = { x: 29.5, y: 27.5 };
 
 export class Player {
   scene: MainScene;
@@ -61,7 +69,7 @@ export class Player {
   isDodging = false;
 
   private attackFx: Phaser.GameObjects.Sprite;
-  private attackGlowFx: Phaser.GameObjects.Sprite;
+  private attackBloom: EmissiveBloomHandle;
   private weaponSprite: Phaser.GameObjects.Image;
   private keys: Record<'W' | 'A' | 'S' | 'D', Phaser.Input.Keyboard.Key>;
   private invulnUntil = 0;
@@ -88,17 +96,24 @@ export class Player {
     this.attackFx = scene.add
       .sprite(x, y, 'player-attack-light-1')
       .setScale(PLAYER_SPRITE_SCALE)
-      .setVisible(false);
-    this.attackFx.on(Phaser.Animations.Events.ANIMATION_COMPLETE, () => this.attackFx.setVisible(false));
-    this.attackGlowFx = scene.add
-      .sprite(x, y, 'player-attack-light-1')
-      .setScale(PLAYER_SPRITE_SCALE)
       .setBlendMode(Phaser.BlendModes.ADD)
+      .setTintMode(Phaser.TintModes.FILL)
+      .setTint(LIGHT_ATTACK_EMISSIVE_COLOR)
       .setVisible(false);
-    this.attackGlowFx.on(
-      Phaser.Animations.Events.ANIMATION_COMPLETE,
-      () => this.attackGlowFx.setVisible(false)
+    this.attackBloom = enableEmissiveBloom(
+      this.attackFx,
+      LIGHT_ATTACK_EMISSIVE_COLOR,
+      {
+        glowStrength: 1.05,
+        innerStrength: 0.08,
+        glowDistance: 22,
+        glowQuality: 2,
+        blurRadius: 9,
+        bloomAmount: 0.44,
+        threshold: 0.06
+      }
     );
+    this.attackFx.on(Phaser.Animations.Events.ANIMATION_COMPLETE, () => this.attackFx.setVisible(false));
     this.weaponSprite = scene.add
       .image(x, y, 'player-weapon-glowsticks')
       .setOrigin(LIGHT_STICK_ORIGIN.x, LIGHT_STICK_ORIGIN.y)
@@ -154,12 +169,6 @@ export class Player {
         .setFlipX(this.go.flipX)
         .setDepth(playerDepth - 0.002);
     }
-    if (this.attackGlowFx.visible) {
-      this.attackGlowFx
-        .setPosition(this.x, this.y)
-        .setFlipX(this.go.flipX)
-        .setDepth(playerDepth - 0.003);
-    }
     this.updateWeaponVisual();
     this.updateInvulnerabilityBlink(timeMs);
   }
@@ -168,6 +177,25 @@ export class Player {
   getAttackOrigin(): { x: number; y: number } {
     const side = Math.cos(this.aimAngle) >= 0 ? 1 : -1;
     return { x: this.x + side * PLAYER_ATTACK_SIDE_OFFSET, y: this.y };
+  }
+
+  /**
+   * 读取荧光棒发光端的实时世界坐标。
+   * 武器使用非中心 Origin、负 scaleX 镜像和出手旋转，不能用角色固定偏移近似。
+   */
+  getGlowstickEmitterPosition(): { x: number; y: number } {
+    const localX = (
+      LIGHT_STICK_EMITTER_SOURCE.x - this.weaponSprite.displayOriginX
+    ) * this.weaponSprite.scaleX;
+    const localY = (
+      LIGHT_STICK_EMITTER_SOURCE.y - this.weaponSprite.displayOriginY
+    ) * this.weaponSprite.scaleY;
+    const cos = Math.cos(this.weaponSprite.rotation);
+    const sin = Math.sin(this.weaponSprite.rotation);
+    return {
+      x: this.weaponSprite.x + localX * cos - localY * sin,
+      y: this.weaponSprite.y + localX * sin + localY * cos
+    };
   }
 
   playAttackAnimation(heavy: boolean): void {
@@ -179,32 +207,17 @@ export class Player {
       this.actionLockedUntil = this.scene.time.now + attackDuration;
       this.setAction(attackAction, true);
       this.scene.tweens.killTweensOf(this.attackFx);
-      this.scene.tweens.killTweensOf(this.attackGlowFx);
       playPlayerAttackEffect(this.attackFx, attackAction, attackSpeed);
-      playPlayerAttackEffect(this.attackGlowFx, attackAction, attackSpeed);
+      const emissiveColor = heavy ? HARD_ATTACK_EMISSIVE_COLOR : LIGHT_ATTACK_EMISSIVE_COLOR;
+      setEmissiveBloomColor(this.attackFx, this.attackBloom, emissiveColor);
       this.attackFx
         .setPosition(this.x, this.y)
         .setFlipX(this.go.flipX)
         .setScale(PLAYER_SPRITE_SCALE * (heavy ? HARD_ATTACK_EFFECT_SCALE : 1))
-        .setAlpha(heavy ? 1 : LIGHT_ATTACK_EFFECT_ALPHA)
+        .setAlpha(heavy ? HARD_ATTACK_EFFECT_ALPHA : LIGHT_ATTACK_EFFECT_ALPHA)
+        .setTintMode(Phaser.TintModes.FILL)
+        .setTint(emissiveColor)
         .setDepth(playerDepth - 0.002);
-      const glowStartScale = PLAYER_SPRITE_SCALE * (heavy ? HARD_ATTACK_EFFECT_SCALE * 1.08 : 1.04);
-      this.attackGlowFx
-        .setPosition(this.x, this.y)
-        .setFlipX(this.go.flipX)
-        .setScale(glowStartScale)
-        .setAlpha(heavy ? HARD_ATTACK_GLOW_ALPHA : LIGHT_ATTACK_GLOW_ALPHA)
-        .setTint(heavy ? 0xffb347 : 0xb9f8ff)
-        .setDepth(playerDepth - 0.003);
-      this.scene.tweens.add({
-        targets: this.attackGlowFx,
-        scaleX: glowStartScale * (heavy ? 1.28 : 1.14),
-        scaleY: glowStartScale * (heavy ? 1.28 : 1.14),
-        alpha: 0,
-        duration: attackDuration,
-        ease: 'Cubic.easeOut',
-        onComplete: () => this.attackGlowFx.setVisible(false)
-      });
       this.playWeaponAttackMotion(heavy, attackDuration);
     }
   }
@@ -323,7 +336,6 @@ export class Player {
     this.setAction(Math.random() < 0.5 ? 'death-1' : 'death-2', true);
     this.go.setAlpha(1);
     this.attackFx.setVisible(false);
-    this.attackGlowFx.setVisible(false);
     this.weaponSprite.setVisible(false);
   }
 
@@ -331,7 +343,7 @@ export class Player {
   enterGameOverIdle(): void {
     this.dead = true;
     this.isDodging = false;
-    this.scene.tweens.killTweensOf([this.go, this.weaponSprite, this.attackFx, this.attackGlowFx]);
+    this.scene.tweens.killTweensOf([this.go, this.weaponSprite, this.attackFx]);
     this.body.setVelocity(0, 0);
     this.body.enable = false;
     this.actionLockedUntil = Infinity;
@@ -339,7 +351,6 @@ export class Player {
     playPlayerAnimation(this.go, 'idle', true);
     this.go.setAlpha(1);
     this.attackFx.setVisible(false);
-    this.attackGlowFx.setVisible(false);
     this.weaponSprite.setVisible(true).setRotation(0);
     this.updateWeaponVisual();
   }

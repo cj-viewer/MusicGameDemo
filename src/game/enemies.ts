@@ -13,12 +13,15 @@ import {
 } from './fanAnimation';
 import { worldDepth, worldSize } from './visualScale';
 
-const FAN_BULLET_COLOR = 0xff4f9a;
 import {
   GUARD_ATTACK_DURATION_MS,
   GUARD_ATTACK_EFFECT_SCALE,
   playGuardAttackEffect
 } from './guardAnimation';
+import { enableEmissiveBloom } from './EmissiveFx';
+
+const GUARD_EMISSIVE_COLOR = 0x52efff;
+const FAN_EMISSIVE_COLOR = 0xff543d;
 
 export type EnemyKind = 'smallGuard' | 'midGuard' | 'fan';
 
@@ -273,8 +276,16 @@ export class SmallGuard extends Enemy {
     this.attackFx = scene.add
       .sprite(x, y, 'npc-guard-attack-light-fx-1')
       .setScale(GUARD_ATTACK_EFFECT_SCALE)
-      .setBlendMode(Phaser.BlendModes.ADD)
       .setVisible(false);
+    enableEmissiveBloom(this.attackFx, GUARD_EMISSIVE_COLOR, {
+      glowStrength: 0.9,
+      innerStrength: 0.06,
+      glowDistance: 19,
+      glowQuality: 2,
+      blurRadius: 8,
+      bloomAmount: 0.36,
+      threshold: 0.07
+    });
     this.chooseMovementAngle();
   }
 
@@ -301,7 +312,7 @@ export class SmallGuard extends Enemy {
       this.facingAngle = angle;
       this.attackFacingUntil = this.scene.time.now + GUARD_ATTACK_DURATION_MS;
       playGuardAttackEffect(this.attackFx, 'attack-light');
-      this.scene.spawnEnemyProjectile(this.x, this.y, angle, 0x3b82f6, this.kind);
+      this.scene.spawnEnemyProjectile(this.x, this.y, angle, this.kind);
     });
   }
 
@@ -359,7 +370,7 @@ export class MidGuard extends Enemy {
       this.facingAngle = this.lockedAngle;
       this.attackFacingUntil = this.scene.time.now + GUARD_ATTACK_DURATION_MS;
       this.aiming = false;
-      this.scene.spawnEnemyProjectile(this.x, this.y, this.lockedAngle, 0x3b82f6, this.kind);
+      this.scene.spawnEnemyProjectile(this.x, this.y, this.lockedAngle, this.kind);
       this.flashLaser(this.lockedAngle);
     });
   }
@@ -447,8 +458,16 @@ export class FanEnemy extends Enemy {
     this.attackFx = scene.add
       .sprite(x, y, 'npc-fan-attack-hard-fx-2')
       .setScale(FAN_SPRITE_SCALE)
-      .setBlendMode(Phaser.BlendModes.ADD)
       .setVisible(false);
+    enableEmissiveBloom(this.attackFx, FAN_EMISSIVE_COLOR, {
+      glowStrength: 1.05,
+      innerStrength: 0.08,
+      glowDistance: 21,
+      glowQuality: 2,
+      blurRadius: 9,
+      bloomAmount: 0.4,
+      threshold: 0.06
+    });
     this.weaponSprite = scene.add
       .image(x, y, 'npc-fan-weapon-glowstick')
       .setOrigin(FAN_WEAPON_ORIGIN.x, FAN_WEAPON_ORIGIN.y)
@@ -476,7 +495,7 @@ export class FanEnemy extends Enemy {
       if (this.dead) return;
       this.aimAngle = this.scene.quantizeEnemyAttackAngle(this.angleToPlayer());
       this.playAttack(this.aimAngle);
-      this.scene.spawnEnemyProjectile(this.x, this.y, this.aimAngle, FAN_BULLET_COLOR, this.kind);
+      this.scene.spawnEnemyProjectile(this.x, this.y, this.aimAngle, this.kind);
     });
   }
 

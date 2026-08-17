@@ -75,7 +75,12 @@ export class FpvMiniScene extends Phaser.Scene {
       this.freeEnemySprites.push(this.add.image(0, 0, 'guard').setOrigin(0.5, 1).setVisible(false));
     }
     for (let index = 0; index < BULLET_POOL; index++) {
-      this.freeBulletSprites.push(this.add.rectangle(0, 0, 4, 4, 0xffffff).setVisible(false));
+      this.freeBulletSprites.push(
+        this.add
+          .rectangle(0, 0, 4, 4, 0xffffff)
+          .setBlendMode(Phaser.BlendModes.ADD)
+          .setVisible(false)
+      );
     }
     for (let x = ARENA_LEFT; x <= ARENA_RIGHT; x += ui(180)) this.addPost(x, ARENA_TOP), this.addPost(x, ARENA_BOTTOM);
     for (let y = ARENA_TOP + ui(160); y < ARENA_BOTTOM; y += ui(180)) this.addPost(ARENA_LEFT, y), this.addPost(ARENA_RIGHT, y);
@@ -206,7 +211,13 @@ export class FpvMiniScene extends Phaser.Scene {
           if (!billboard) continue;
           this.bulletBillboards.set(bullet, billboard);
         }
-        billboard.setVisible(true).setPosition(projected.screenX, HORIZON_Y + (projected.bottomY - HORIZON_Y) * 0.55).setDisplaySize(Math.max(2, projected.width), Math.max(2, projected.height)).setFillStyle(bullet.fillColor).setDepth(-projected.dist);
+        billboard
+          .setVisible(true)
+          .setPosition(projected.screenX, HORIZON_Y + (projected.bottomY - HORIZON_Y) * 0.55)
+          .setDisplaySize(Math.max(2, projected.width), Math.max(2, projected.height))
+          .setFillStyle(bullet.fillColor)
+          .setStrokeStyle()
+          .setDepth(-projected.dist);
       }
     }
     for (const [bullet, billboard] of [...this.bulletBillboards]) {
