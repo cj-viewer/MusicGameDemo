@@ -3,7 +3,6 @@ import { Conductor, type BeatInfo } from '../core/Conductor';
 import { Sfx, type SfxCategory } from '../core/Sfx';
 import {
   ComboSystem,
-  INPUT_EARLY_WINDOW,
   type AttackJudgement
 } from '../game/ComboSystem';
 import { HUD } from '../game/HUD';
@@ -13,7 +12,7 @@ import { BATON, GLOWSTICKS, getAttackSpec, type WeaponDef, type WeaponId } from 
 import { Enemy, FanEnemy, SmallGuard, type EnemyKind } from '../game/enemies';
 import { registerFanAnimations } from '../game/fanAnimation';
 import { GAMEPAD_BUTTON, rumbleParameters, type RumbleKind } from '../game/GamepadControls';
-import { WORLD_OBJECT_SCALE, worldDepth, worldSize } from '../game/visualScale';
+import { WORLD_OBJECT_SCALE, worldSize } from '../game/visualScale';
 import type { FpvMiniScene } from './FpvMiniScene';
 import { passesDropChance, TuningEditor } from '../game/TuningEditor';
 import {
@@ -35,7 +34,8 @@ import {
   queueBgmTrack,
   queueCoreAssets,
   queueDeferredBgm,
-  startBackgroundLoad
+  startBackgroundLoad,
+  TUTORIAL_PATTERN_PANEL_KEY
 } from '../game/assetManifest';
 import {
   createStageEnvironments,
@@ -58,28 +58,15 @@ const SETTINGS_VOLUME_TRACK_WIDTH = 250;
 const CAMERA_BASE_SCROLL_X = screenLayerOffset(VIEW_WIDTH);
 const CAMERA_BASE_SCROLL_Y = screenLayerOffset(VIEW_HEIGHT);
 const ARENA_MARGIN = hd(12);
-const RHYTHM_EDGE_BAND = hd(82);
+const ARENA_EDGE_INSET = hd(82);
 const ARENA = {
-  x: ARENA_MARGIN + RHYTHM_EDGE_BAND,
+  x: ARENA_MARGIN + ARENA_EDGE_INSET,
   y: ARENA_MARGIN,
-  width: VIEW_WIDTH - (ARENA_MARGIN + RHYTHM_EDGE_BAND) * 2,
-  height: VIEW_HEIGHT - ARENA_MARGIN * 2 - RHYTHM_EDGE_BAND
+  width: VIEW_WIDTH - (ARENA_MARGIN + ARENA_EDGE_INSET) * 2,
+  height: VIEW_HEIGHT - ARENA_MARGIN * 2 - ARENA_EDGE_INSET
 };
-const ARENA_BORDER_BASE_COLOR = 0x6b3b70;
 const ARENA_BEAT_LIGHT_COLOR = 0xe879f9;
 const ARENA_BEAT_HEAVY_COLOR = 0xf97316;
-/** 同时预告未来三拍。 */
-const ARENA_BEAT_CUE_START_SCALE = 0.7;
-const ARENA_BEAT_CUE_COUNT = 3;
-/** 预告框出现时机后移原时长的五分之一：2.4 拍完成，平均下落速度为原来的 1.25 倍。 */
-const ARENA_BEAT_CUE_DURATION_BEATS = 2.4;
-/**
- * 场地内框走完一半视觉路程时，正好进入攻击判定的提前窗口。
- * 这个值与 INPUT_EARLY_WINDOW 联动，避免只改判定而预告仍在错误的时间位置。
- */
-const ARENA_BEAT_CUE_JUDGEMENT_SCALE_PROGRESS = 0.5;
-const ARENA_BEAT_CUE_MIN_ALPHA = 0;
-const ARENA_BEAT_HEAVY_ALPHA_PEAK_PROGRESS = 0.9;
 const TUTORIAL_CALIBRATION_SAMPLES = 12;
 const TUTORIAL_CALIBRATION_MAX_ABS_OFFSET = 0.12;
 const TUTORIAL_CALIBRATION_CANDIDATE_WINDOW = 0.18;
@@ -93,8 +80,6 @@ const DEFAULT_PLAYER_BULLET_SPEED = 360;
 const DEFAULT_ENEMY_BULLET_SPEED = 180 * 0.8;
 /** 每拍前 0.2 秒以归一化 easeInExpo 重分配位移，总行程仍为基础速度 × 0.2 秒。 */
 const ENEMY_BULLET_BEAT_SURGE_WINDOW = 0.2;
-/** 重拍橙色只在正确输入窗口开始前的最后 0.2 秒内完成过渡。 */
-const RHYTHM_HEAVY_COLOR_TRANSITION_DURATION = 0.2;
 const PLAYER_BULLET_COLOR = 0xef4444;
 const BATON_BULLET_COLOR = 0xa855f7;
 const GUARD_BULLET_COLOR = 0x52efff;
@@ -110,6 +95,16 @@ const PLAYER_LINE_GLOW_THICKNESS_SCALE = 3.2;
 /** 参考旧版画面，在武器发光端与直射亮芯之间保留约 19px 的 720p 屏幕间距。 */
 const PLAYER_STRAIGHT_MUZZLE_GAP = worldSize(24);
 const ENEMY_PROJECTILE_GLOW_DISTANCE = worldSize(13);
+const TUTORIAL_PATTERN_PANEL_X = 284;
+const TUTORIAL_PATTERN_PANEL_Y = 211;
+const TUTORIAL_PATTERN_PANEL_WIDTH = 366;
+const TUTORIAL_PATTERN_PANEL_HEIGHT = 176;
+const TUTORIAL_PATTERN_PANEL_CROPS = [
+  { x: 63, y: 124, width: 94, height: 95 },
+  { x: 174, y: 124, width: 94, height: 95 },
+  { x: 286, y: 124, width: 94, height: 95 },
+  { x: 397, y: 124, width: 95, height: 95 }
+] as const;
 const GLOWSTICK_KNOCKBACK_SPEED = 150;
 const BATON_KNOCKBACK_SPEED = GLOWSTICK_KNOCKBACK_SPEED * 1.25;
 
@@ -209,13 +204,9 @@ export class MainScene extends Phaser.Scene {
   private displayedWaveNumber = 0;
   private victoryAchieved = false;
   private lastComboLevel = 0;
-  private arenaBorder!: Phaser.GameObjects.Rectangle;
-  private arenaBeatCues: Phaser.GameObjects.Rectangle[] = [];
   private arenaCorrectFeedback!: Phaser.GameObjects.Rectangle;
   private feverBorder!: Phaser.GameObjects.Graphics;
-  private rhythmBlocks: Phaser.GameObjects.Rectangle[] = [];
-  private rhythmPulseUntil = 0;
-  /** 连续踩拍积累的场地框亮度；拍间持续衰减，断拍后自然回暗。 */
+  /** 连续踩拍积累的命中与连段短效亮度；拍间持续衰减，断拍后自然回暗。 */
   private arenaRhythmIntensity = 0;
   private rhythmComboStreak = 0;
   private lastRhythmHitBeat = -Infinity;
@@ -225,9 +216,12 @@ export class MainScene extends Phaser.Scene {
   private debugHitboxes = false;
   private debugGfx!: Phaser.GameObjects.Graphics;
 
-  // 顶部连段面板只在教学模式显示；正式游戏改用场地扩散框提示拍点
+  // 教学使用透明连段面板；正式关保留紧凑四拍图标条。
   private patternPanel?: Phaser.GameObjects.Container;
   private patternIcons: Phaser.GameObjects.Shape[] = [];
+  private patternPanelMode: 'tutorial' | 'compact' = 'compact';
+  private tutorialBeatHighlights: Phaser.GameObjects.Image[] = [];
+  private tutorialHitHighlights: Phaser.GameObjects.Image[] = [];
 
   // 教学状态
   private tutorialStreakText?: Phaser.GameObjects.Text;
@@ -312,8 +306,6 @@ export class MainScene extends Phaser.Scene {
     this.displayedWaveNumber = 0;
     this.victoryAchieved = false;
     this.lastComboLevel = 0;
-    this.rhythmBlocks = [];
-    this.rhythmPulseUntil = 0;
     this.arenaRhythmIntensity = 0;
     this.rhythmComboStreak = 0;
     this.lastRhythmHitBeat = -Infinity;
@@ -321,6 +313,9 @@ export class MainScene extends Phaser.Scene {
     this.gamepadButtonState = { dodge: false, attack: false };
     this.patternPanel = undefined;
     this.patternIcons = [];
+    this.patternPanelMode = 'compact';
+    this.tutorialBeatHighlights = [];
+    this.tutorialHitHighlights = [];
     this.confirmUi = undefined;
     this.tutorialControlGuide = undefined;
     this.tutorialStreakText = undefined;
@@ -337,27 +332,12 @@ export class MainScene extends Phaser.Scene {
     this.stageEnvironment = createStageEnvironments(this);
 
     this.physics.world.setBounds(ARENA.x, ARENA.y, ARENA.width, ARENA.height);
-    this.arenaBorder = this.add
-      .rectangle(ARENA.x + ARENA.width / 2, ARENA.y + ARENA.height / 2, ARENA.width, ARENA.height)
-      .setStrokeStyle(3, ARENA_BORDER_BASE_COLOR, 1)
-      .setDepth(1);
-    this.arenaBeatCues = Array.from({ length: ARENA_BEAT_CUE_COUNT }, () =>
-      this.add
-        .rectangle(ARENA.x + ARENA.width / 2, ARENA.y + ARENA.height / 2, ARENA.width, ARENA.height)
-        .setStrokeStyle(3, ARENA_BEAT_LIGHT_COLOR, 1)
-        .setScale(ARENA_BEAT_CUE_START_SCALE)
-        .setAlpha(0)
-        .setVisible(false)
-        .setDepth(6)
-    );
     this.arenaCorrectFeedback = this.add
       .rectangle(ARENA.x + ARENA.width / 2, ARENA.y + ARENA.height / 2, ARENA.width, ARENA.height)
       .setStrokeStyle(6, ARENA_BEAT_LIGHT_COLOR, 0)
       .setFillStyle(0, 0)
       .setVisible(false)
       .setDepth(8);
-    this.createRhythmEdgeBlocks();
-
     this.debugGfx = this.add.graphics().setDepth(20);
 
     // Fever Time 期间的橙色边框光效（随节拍脉冲）
@@ -438,8 +418,6 @@ export class MainScene extends Phaser.Scene {
     this.conductor.update();
     this.hud.update();
     this.updateArenaRhythmIntensity(delta);
-    this.updateArenaBeatCue();
-    this.updateRhythmEdgeAnticipation();
     if (this.combo.updateFever()) this.endFever();
     this.handleGamepadInput();
     this.updateCameraLookAhead(delta);
@@ -1383,7 +1361,6 @@ export class MainScene extends Phaser.Scene {
     this.tutorialCalibratedOffset = 0;
     this.combo.setInputLatencyOffset(0);
     this.hud.setBeatGuideVisible(false);
-    this.arenaBeatCues.forEach((cue) => cue.setVisible(false));
     this.buildPatternPanel(true);
     this.createTutorialControlGuide();
     this.updateTutorialStreakText();
@@ -1440,69 +1417,71 @@ export class MainScene extends Phaser.Scene {
     this.tutorialControlGuide = guide;
   }
 
-  /** 教学显示完整说明；正式关仅保留四拍节奏图标。 */
+  /** 教学使用项目方提供的透明连段面板；正式关仅保留紧凑四拍节奏图标。 */
   private buildPatternPanel(tutorial: boolean): void {
     this.patternPanel?.destroy(true);
     this.patternPanel = undefined;
     this.patternIcons = [];
+    this.patternPanelMode = tutorial ? 'tutorial' : 'compact';
+    this.tutorialBeatHighlights = [];
+    this.tutorialHitHighlights = [];
     this.tutorialStreakText = undefined;
 
     const ui = this.add
-      .container(CAMERA_BASE_SCROLL_X + hd(640) / MAIN_CAMERA_BASE_ZOOM, CAMERA_BASE_SCROLL_Y)
+      .container(
+        CAMERA_BASE_SCROLL_X + (tutorial ? TUTORIAL_PATTERN_PANEL_X : hd(640) / MAIN_CAMERA_BASE_ZOOM),
+        CAMERA_BASE_SCROLL_Y
+      )
       .setDepth(15)
-      .setScale(UI_SCALE / MAIN_CAMERA_BASE_ZOOM)
+      .setScale(tutorial ? 1 : UI_SCALE / MAIN_CAMERA_BASE_ZOOM)
       .setScrollFactor(0);
-    const iconY = tutorial ? 128 : 72;
+
     if (tutorial) {
-      ui.add(this.add.rectangle(0, 150, 560, 202, 0x0f172a, 0.72).setStrokeStyle(1, 0x334155));
-      ui.add(
-        this.add
-          .text(0, 62, '教学 · 按节拍打出连段', {
-            fontFamily: 'Arial', fontSize: '22px', color: '#e2e8f0'
-          })
-          .setOrigin(0.5)
-      );
+      const panel = this.add
+        .image(0, TUTORIAL_PATTERN_PANEL_Y, TUTORIAL_PATTERN_PANEL_KEY)
+        .setDisplaySize(TUTORIAL_PATTERN_PANEL_WIDTH, TUTORIAL_PATTERN_PANEL_HEIGHT);
+      ui.add(panel);
+
+      const createHighlightLayer = (): Phaser.GameObjects.Image[] =>
+        TUTORIAL_PATTERN_PANEL_CROPS.map((crop) => {
+          const highlight = this.add
+            .image(0, TUTORIAL_PATTERN_PANEL_Y, TUTORIAL_PATTERN_PANEL_KEY)
+            .setDisplaySize(TUTORIAL_PATTERN_PANEL_WIDTH, TUTORIAL_PATTERN_PANEL_HEIGHT)
+            .setCrop(crop.x, crop.y, crop.width, crop.height)
+            .setBlendMode(Phaser.BlendModes.ADD)
+            .setAlpha(0);
+          ui.add(highlight);
+          return highlight;
+        });
+
+      this.tutorialBeatHighlights = createHighlightLayer();
+      this.tutorialHitHighlights = createHighlightLayer();
     } else {
+      const iconY = 72;
       ui.add(this.add.rectangle(0, iconY, 320, 64, 0x0f172a, 0.68).setStrokeStyle(1, 0x334155));
-    }
-
-    const xs = [-108, -36, 36, 108];
-    this.combo.pattern.forEach((key, i) => {
-      const icon: Phaser.GameObjects.Shape = key === 'L'
-        ? this.add.circle(xs[i], iconY, 14).setStrokeStyle(3, 0x67e8f9)
-        : this.add.rectangle(xs[i], iconY, 22, 22, 0xfbbf24).setAngle(45);
-      ui.add(icon);
-      this.patternIcons.push(icon);
-      if (tutorial) {
-        ui.add(
-          this.add
-            .text(xs[i], 160, key === 'L' ? '轻' : '重', {
-              fontFamily: 'Arial',
-              fontSize: '16px',
-              color: key === 'L' ? '#67e8f9' : '#fbbf24'
-            })
-            .setOrigin(0.5)
-        );
-      }
-    });
-
-    if (tutorial) {
-      this.tutorialStreakText = this.add
-        .text(0, 192, '', { fontFamily: 'Arial', fontSize: '17px', color: '#facc15' })
-        .setOrigin(0.5);
-      ui.add(this.tutorialStreakText);
-      const skipBg = this.add.rectangle(0, 226, 230, 34, 0x1e293b, 0.92).setStrokeStyle(1, 0x94a3b8);
-      const skipText = this.add
-        .text(0, 226, 'SPACE  跳过教学', {
-          fontFamily: 'Arial', fontSize: '15px', fontStyle: 'bold', color: '#ffffff'
-        })
-        .setOrigin(0.5);
-      ui.add([skipBg, skipText]);
+      const xs = [-108, -36, 36, 108];
+      this.combo.pattern.forEach((key, i) => {
+        const icon: Phaser.GameObjects.Shape = key === 'L'
+          ? this.add.circle(xs[i], iconY, 14).setStrokeStyle(3, 0x67e8f9)
+          : this.add.rectangle(xs[i], iconY, 22, 22, 0xfbbf24).setAngle(45);
+        ui.add(icon);
+        this.patternIcons.push(icon);
+      });
     }
     this.patternPanel = ui;
   }
+
   /** 每拍高亮当前拍的节拍块（教学与游戏通用） */
   private pulsePatternIcon(beatIdx: number): void {
+    if (this.patternPanelMode === 'tutorial') {
+      const highlight = this.tutorialBeatHighlights[beatIdx];
+      if (!highlight) return;
+      this.tweens.killTweensOf(highlight);
+      highlight.setAlpha(0.42);
+      this.tweens.add({ targets: highlight, alpha: 0, duration: 150, ease: 'Sine.easeOut' });
+      return;
+    }
+
     const icon = this.patternIcons[beatIdx];
     if (!icon) return;
     icon.setScale(1.35);
@@ -1603,6 +1582,15 @@ export class MainScene extends Phaser.Scene {
 
   /** 命中反馈：对应节拍块处扩散绿环（教学与游戏通用） */
   private flashPatternIcon(beatIdx: number): void {
+    if (this.patternPanelMode === 'tutorial') {
+      const highlight = this.tutorialHitHighlights[beatIdx];
+      if (!highlight) return;
+      this.tweens.killTweensOf(highlight);
+      highlight.setAlpha(0.9);
+      this.tweens.add({ targets: highlight, alpha: 0, duration: 220, ease: 'Sine.easeOut' });
+      return;
+    }
+
     const icon = this.patternIcons[beatIdx];
     if (!icon || !this.patternPanel) return;
     const ring = this.add.circle(icon.x, icon.y, 16).setStrokeStyle(3, 0x4ade80, 0.95);
@@ -1695,7 +1683,7 @@ export class MainScene extends Phaser.Scene {
     this.confirmUi = undefined;
     this.tutorialControlGuide?.destroy(true);
     this.tutorialControlGuide = undefined;
-    // 正式游戏彻底移除顶部连段面板与上下节拍提示，改由场地扩散框承担拍点预告。
+    // 正式关切换为紧凑四拍图标条；两关均不再创建整场扩散框。
     this.buildPatternPanel(false);
     this.hud.setBeatGuideVisible(false);
     // 教学期间积累的 Fever 能量清零，正式开局从零开始
@@ -1827,7 +1815,6 @@ export class MainScene extends Phaser.Scene {
     this.clearAllProjectiles();
     this.player.enterGameOverIdle();
     for (const enemy of this.enemies) enemy.enterGameOverIdle();
-    this.arenaBeatCues.forEach((cue) => cue.setVisible(false));
     this.arenaCorrectFeedback.setVisible(false);
     this.showGameOverMessage();
   }
@@ -2165,8 +2152,6 @@ export class MainScene extends Phaser.Scene {
     this.stageEnvironment.pulse(heavyBeat);
     this.hud.onBeat(info.beatInMeasure);
     this.getFpvMiniScene()?.onBeat(heavyBeat);
-    this.pulseRhythmEdgeBlocks(heavyBeat);
-    this.pulseArenaBeatJudgement(heavyBeat);
     this.pulsePickups();
     this.pulsePatternIcon(info.beatInMeasure);
     if (this.state === 'tutorial') this.onTutorialBeat(info);
@@ -2901,62 +2886,6 @@ export class MainScene extends Phaser.Scene {
     if (strong) this.cameras.main.flash(90, 255, 40, 40, false);
   }
 
-  /**
-   * 同时预告未来三拍，每个缩放框从 0.7 倍尺寸出发，在 2.4 拍内抵达场地边框。
-   * 轻重框从相同透明度起步并统一按 Expo.In 淡入；橙色框压缩透明度进度，稍早抵达峰值。
-   */
-  private updateArenaBeatCue(): void {
-    const active = this.conductor.started && (this.state === 'tutorial' || this.state === 'playing' || this.state === 'intermission');
-    if (!active) {
-      this.arenaBeatCues.forEach((cue) => cue.setVisible(false));
-      return;
-    }
-
-    const beatFloat = this.conductor.beatFloatAt(this.conductor.now());
-    if (beatFloat < 0) {
-      this.arenaBeatCues.forEach((cue) => cue.setVisible(false));
-      return;
-    }
-
-    // 大场地框是固定判定边界；扩散框只在其内侧运行。
-    // 不在这里重置边框颜色，让命中时的短暂亮起完整播放完毕。
-    const nextBeat = Math.floor(beatFloat) + 1;
-    for (let index = 0; index < ARENA_BEAT_CUE_COUNT; index++) {
-      const cue = this.arenaBeatCues[index];
-      const targetBeat = nextBeat + index;
-      const elapsedBeats = beatFloat - (targetBeat - ARENA_BEAT_CUE_DURATION_BEATS);
-      const progress = Phaser.Math.Clamp(elapsedBeats / ARENA_BEAT_CUE_DURATION_BEATS, 0, 1);
-      const scaleProgress = this.getArenaBeatCueScaleProgress(progress);
-      const scale = Phaser.Math.Linear(ARENA_BEAT_CUE_START_SCALE, 1, scaleProgress);
-      const beatInMeasure = ((targetBeat % 4) + 4) % 4;
-      const heavy = this.combo.pattern[beatInMeasure] === 'H';
-      const baseColor = heavy ? ARENA_BEAT_HEAVY_COLOR : ARENA_BEAT_LIGHT_COLOR;
-      const color = this.interpolateRgb(baseColor, 0xffffff, this.arenaRhythmIntensity * 0.32);
-      const alpha = this.getArenaBeatCueAlpha(progress, heavy)
-        * Phaser.Math.Linear(0.42, 1, this.arenaRhythmIntensity);
-      cue
-        .setVisible(progress < 1)
-        .setScale(scale)
-        .setAlpha(alpha)
-        .setStrokeStyle(
-          (heavy ? 5 : 3) + this.arenaRhythmIntensity * (heavy ? 4 : 3),
-          color,
-          1
-        );
-    }
-  }
-
-  /** 到拍时只点亮场地大框；扩散内框在越界前已经隐藏。 */
-  private pulseArenaBeatJudgement(heavy: boolean): void {
-    if (this.state !== 'tutorial' && this.state !== 'playing' && this.state !== 'intermission') return;
-    const color = heavy ? ARENA_BEAT_HEAVY_COLOR : ARENA_BEAT_LIGHT_COLOR;
-    this.arenaBeatCues.forEach((cue) => cue.setVisible(false));
-    this.arenaBorder.setStrokeStyle(heavy ? 6 : 4, color, 1);
-    this.time.delayedCall(heavy ? 120 : 90, () => {
-      if (this.arenaBorder.active) this.arenaBorder.setStrokeStyle(3, ARENA_BORDER_BASE_COLOR, 1);
-    });
-  }
-
   /** 正确踩拍时叠加一次比普通拍点更粗、更亮并向外淡出的场地框反馈。 */
   private flashArenaCorrectJudgement(heavy: boolean): void {
     if (this.state !== 'tutorial' && this.state !== 'playing' && this.state !== 'intermission') return;
@@ -3145,157 +3074,6 @@ export class MainScene extends Phaser.Scene {
     });
 
     this.cameras.main.shake(heavy ? 115 : 90, heavy ? 0.0028 : 0.0021);
-    this.arenaBorder.setStrokeStyle(heavy ? 18 : 15, impactColor, 1);
-    this.time.delayedCall(210, () => {
-      if (this.arenaBorder.active) this.arenaBorder.setStrokeStyle(3, ARENA_BORDER_BASE_COLOR, 1);
-    });
-  }
-
-  private createRhythmEdgeBlocks(): void {
-    const colors = [0x4c1d6f, 0x63356f, 0x70234e, 0x75405c];
-    const brightenAndDesaturate = (colorValue: number, lighten: number, desaturate: number): number => {
-      const color = Phaser.Display.Color.ValueToColor(colorValue);
-      color.lighten(lighten);
-      color.desaturate(desaturate);
-      return color.color;
-    };
-    const addCrowdBar = (
-      x: number,
-      y: number,
-      edge: 'side' | 'bottom',
-      maxHeight = hd(58),
-      minHeight = hd(46)
-    ): void => {
-      const width = Phaser.Math.Between(hd(22), hd(26));
-      const height = Phaser.Math.Between(minHeight, maxHeight);
-      const baseColor = Phaser.Utils.Array.GetRandom(colors);
-      const block = this.add
-        .rectangle(x, y, width, height, baseColor, 1)
-        .setOrigin(0.5, 1)
-        .setDepth(worldDepth(y));
-      block.setData('baseColor', baseColor);
-      block.setData('lightColor', brightenAndDesaturate(baseColor, 3, 3));
-      block.setData('heavyColor', brightenAndDesaturate(baseColor, 5, 5));
-      block.setData('edge', edge);
-      block.setData('anticipationDelay', Phaser.Math.FloatBetween(0, 0.12));
-      block.setData('jumpVariance', Phaser.Math.FloatBetween(0.88, 1.12));
-      this.rhythmBlocks.push(block);
-    };
-
-    // 下边缘采用两条交错轨道：保持安全间距，再加入受控随机错落，避免整齐得像栅栏。
-    const bottomPitch = hd(39);
-    for (let lane = 0; lane < 2; lane++) {
-      for (let index = 0; index < 32; index++) {
-        addCrowdBar(
-          hd(20) + lane * (bottomPitch / 2) + index * bottomPitch + Phaser.Math.FloatBetween(-hd(5), hd(5)),
-          VIEW_HEIGHT - hd(3) - lane * hd(30) + Phaser.Math.FloatBetween(-hd(4), hd(4)),
-          'bottom',
-          hd(50),
-          hd(42)
-        );
-      }
-    }
-
-    // 左右边缘使用三列近似等距轨道，共 38 根；错落控制在安全间距内，避免整条完全重叠。
-    const sideTracks = [13, 13, 12];
-    const leftXs = [hd(14), hd(44), hd(74)];
-    const rightXs = leftXs.map((offset) => ARENA.x + ARENA.width + offset);
-    sideTracks.forEach((count, track) => {
-      const yStart = hd(76) + track * hd(5);
-      const yEnd = track === 2 ? hd(595) : yStart + hd(516);
-      const pitch = (yEnd - yStart) / (count - 1);
-      for (let index = 0; index < count; index++) {
-        const y = yStart + index * pitch + Phaser.Math.FloatBetween(-hd(2.5), hd(2.5));
-        addCrowdBar(leftXs[track] + Phaser.Math.FloatBetween(-hd(4), hd(4)), y, 'side', hd(40), hd(36));
-        addCrowdBar(rightXs[track] + Phaser.Math.FloatBetween(-hd(4), hd(4)), y, 'side', hd(40), hd(36));
-      }
-    });
-  }
-
-  private pulseRhythmEdgeBlocks(heavy: boolean): void {
-    this.tweens.killTweensOf(this.rhythmBlocks);
-    this.rhythmPulseUntil = this.time.now + (heavy ? 230 : 180);
-    for (const block of this.rhythmBlocks) {
-      const variance = block.getData('jumpVariance') as number;
-      const jumpScale = heavy ? 1.85 : 1.3;
-      block.setScale(heavy ? 0.93 : 0.97, jumpScale * variance);
-      block.setAlpha(1);
-    }
-    this.tweens.add({
-      targets: this.rhythmBlocks,
-      scaleX: 1,
-      scaleY: 1,
-      duration: heavy ? 220 : 170,
-      ease: 'Back.easeOut',
-      onComplete: () => {
-        for (const block of this.rhythmBlocks) {
-          block.setAlpha(1);
-        }
-      }
-    });
-  }
-
-  private updateRhythmEdgeAnticipation(): void {
-    if (!this.conductor.started) return;
-
-    const now = this.conductor.now();
-    const timeToBeat = this.conductor.timeToNextBeat(now);
-    const rhythmPulseActive = this.time.now < this.rhythmPulseUntil;
-    const anticipationWindow = this.conductor.beatDur * 0.42;
-    const motionProgress = Phaser.Math.Clamp(1 - timeToBeat / anticipationWindow, 0, 1);
-    const nextBeat = Math.floor(this.conductor.beatFloatAt(now)) + 1;
-    const beatInMeasure = ((nextBeat % 4) + 4) % 4;
-    const heavy = this.combo.pattern[beatInMeasure] === 'H';
-    const heavyColorStart = INPUT_EARLY_WINDOW + RHYTHM_HEAVY_COLOR_TRANSITION_DURATION;
-    const heavyColorProgress = heavy
-      ? Phaser.Math.Clamp(
-        (heavyColorStart - timeToBeat) / RHYTHM_HEAVY_COLOR_TRANSITION_DURATION,
-        0,
-        1
-      )
-      : 0;
-
-    for (const block of this.rhythmBlocks) {
-      const delay = block.getData('anticipationDelay') as number;
-      const localMotionProgress = Phaser.Math.Clamp((motionProgress - delay) / (1 - delay), 0, 1);
-      const motionEased = localMotionProgress * localMotionProgress;
-      const compressedScale = heavy ? 0.52 : 0.82;
-      // 拍点跳高由 Tween 独立控制；颜色仍逐帧读取下一拍，避免上一拍 pulse 截短 0.2 秒转色窗。
-      if (!rhythmPulseActive) {
-        block.setScale(
-          1 + motionEased * (heavy ? 0.12 : 0.04),
-          Phaser.Math.Linear(1, compressedScale, motionEased)
-        );
-      }
-      const baseColor = block.getData('baseColor') as number;
-      if (heavy) {
-        const localColorProgress = Phaser.Math.Clamp((heavyColorProgress - delay) / (1 - delay), 0, 1);
-        const colorEased = Phaser.Math.Easing.Sine.InOut(localColorProgress);
-        const brightenedColor = this.interpolateRgb(
-          baseColor,
-          block.getData('heavyColor') as number,
-          colorEased
-        );
-        block.setFillStyle(
-          this.interpolateHue(brightenedColor, ARENA_BEAT_HEAVY_COLOR, colorEased),
-          1
-        );
-      } else {
-        block.setFillStyle(
-          this.interpolateRgb(baseColor, block.getData('lightColor') as number, motionEased),
-          1
-        );
-      }
-      block.setAlpha(1);
-    }
-  }
-
-  private getArenaBeatCueAlpha(progress: number, heavy: boolean): number {
-    const adjustedProgress = heavy
-      ? Phaser.Math.Clamp(progress / ARENA_BEAT_HEAVY_ALPHA_PEAK_PROGRESS, 0, 1)
-      : progress;
-    const alphaProgress = Phaser.Math.Easing.Expo.In(adjustedProgress);
-    return Phaser.Math.Linear(ARENA_BEAT_CUE_MIN_ALPHA, 1, alphaProgress);
   }
 
   /** 正确输入时，不同武器按 ComboMeter 使用各自的弹幕层数上限。 */
@@ -3304,35 +3082,6 @@ export class MainScene extends Phaser.Scene {
       return Math.min(3, 1 + Math.floor(this.combo.level / 2));
     }
     return Math.min(5, 1 + this.combo.level);
-  }
-
-  /**
-   * 将预告框的视觉路程锚定在攻击提前窗口：
-   * 在距拍点 INPUT_EARLY_WINDOW 秒时，框已从 0.7x 走到 0.85x（全程的一半）。
-   * 使用一条归一化的连续指数曲线，而不是在窗口起点拼接两段曲线，避免视觉速度突变。
-   */
-  private getArenaBeatCueScaleProgress(progress: number): number {
-    const cueDuration = this.conductor.beatDur * ARENA_BEAT_CUE_DURATION_BEATS;
-    const judgementStartProgress = Phaser.Math.Clamp(
-      1 - INPUT_EARLY_WINDOW / cueDuration,
-      0.5001,
-      0.999
-    );
-    const halfDistance = ARENA_BEAT_CUE_JUDGEMENT_SCALE_PROGRESS;
-    let lowerExponent = 0;
-    let upperExponent = 24;
-
-    // f(x) = (exp(kx) - 1) / (exp(k) - 1) 是 0→1 的归一化 ease-in 指数曲线。
-    // 通过二分求 k，使 f(判定窗口开启时刻) 精确等于 0.5。
-    for (let iteration = 0; iteration < 20; iteration++) {
-      const exponent = (lowerExponent + upperExponent) * 0.5;
-      const valueAtJudgementStart = Math.expm1(exponent * judgementStartProgress) / Math.expm1(exponent);
-      if (valueAtJudgementStart > halfDistance) lowerExponent = exponent;
-      else upperExponent = exponent;
-    }
-    const exponent = (lowerExponent + upperExponent) * 0.5;
-    const clampedProgress = Phaser.Math.Clamp(progress, 0, 1);
-    return Math.expm1(exponent * clampedProgress) / Math.expm1(exponent);
   }
 
   private interpolateRgb(from: number, to: number, amount: number): number {
@@ -3346,50 +3095,6 @@ export class MainScene extends Phaser.Scene {
     const g = Math.round(Phaser.Math.Linear(fromG, toG, amount));
     const b = Math.round(Phaser.Math.Linear(fromB, toB, amount));
     return (r << 16) | (g << 8) | b;
-  }
-
-  /** 只沿最短 HSV 色相路径过渡，保留律动条当下的饱和度和明度。 */
-  private interpolateHue(from: number, to: number, amount: number): number {
-    const rgbToHsv = (value: number): { h: number; s: number; v: number } => {
-      const r = ((value >> 16) & 0xff) / 255;
-      const g = ((value >> 8) & 0xff) / 255;
-      const b = (value & 0xff) / 255;
-      const max = Math.max(r, g, b);
-      const min = Math.min(r, g, b);
-      const delta = max - min;
-      let h = 0;
-      if (delta > 0) {
-        if (max === r) h = ((g - b) / delta) % 6;
-        else if (max === g) h = (b - r) / delta + 2;
-        else h = (r - g) / delta + 4;
-        h /= 6;
-        if (h < 0) h += 1;
-      }
-      return { h, s: max === 0 ? 0 : delta / max, v: max };
-    };
-    const hsvToColor = (h: number, s: number, v: number): number => {
-      const scaled = ((h % 1) + 1) % 1 * 6;
-      const sector = Math.floor(scaled);
-      const fraction = scaled - sector;
-      const p = v * (1 - s);
-      const q = v * (1 - fraction * s);
-      const t = v * (1 - (1 - fraction) * s);
-      const channels = [
-        [v, t, p], [q, v, p], [p, v, t],
-        [p, q, v], [t, p, v], [v, p, q]
-      ][sector % 6];
-      return (Math.round(channels[0] * 255) << 16)
-        | (Math.round(channels[1] * 255) << 8)
-        | Math.round(channels[2] * 255);
-    };
-
-    const fromHsv = rgbToHsv(from);
-    const toHsv = rgbToHsv(to);
-    let hueDelta = toHsv.h - fromHsv.h;
-    if (hueDelta > 0.5) hueDelta -= 1;
-    else if (hueDelta < -0.5) hueDelta += 1;
-    const ratio = Phaser.Math.Clamp(amount, 0, 1);
-    return hsvToColor(fromHsv.h + hueDelta * ratio, fromHsv.s, fromHsv.v);
   }
 
   private cleanupBullets(): void {

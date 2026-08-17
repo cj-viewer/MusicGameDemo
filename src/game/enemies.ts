@@ -115,7 +115,7 @@ export abstract class Enemy {
   abstract onBeat(info: BeatInfo): void;
   protected abstract move(dtMs: number): void;
 
-  /** 所有敌人复用边缘律动的轻 / 重拍节奏，脚底锚定，只做纵向上弹。 */
+  /** 所有敌人按轻 / 重拍节奏脚底锚定，只做纵向上弹。 */
   pulseBeat(heavy: boolean): void {
     if (this.dead) return;
     const peakScaleY = heavy ? 1.1 : 1.05;

@@ -17,6 +17,7 @@ import { BGM_TRACKS, DEFAULT_TUTORIAL_BGM_SLOT, bgmAssetPath, type BgmTrack } fr
 import { preloadStageEnvironments } from './PinkStageEnvironment';
 
 const asset = (file: string): string => `${import.meta.env.BASE_URL}assets/${file}`;
+export const TUTORIAL_PATTERN_PANEL_KEY = 'tutorial-pattern-panel';
 
 /**
  * 进入教学关之前必须就绪的资源：全部贴图、打击音效、以及教学关默认使用的那一首 BGM。
@@ -25,6 +26,10 @@ const asset = (file: string): string => `${import.meta.env.BASE_URL}assets/${fil
  */
 export function queueCoreAssets(scene: Phaser.Scene): void {
   preloadStageEnvironments(scene, asset);
+  scene.load.image(
+    TUTORIAL_PATTERN_PANEL_KEY,
+    asset('images/ui/tutorial/tutorial-pattern-panel.png')
+  );
   scene.load.image('guard', asset('images/characters/guard.png'));
   for (const action of ['idle', 'run'] as const) {
     for (let frame = 1; frame <= FAN_CHARACTER_FRAME_COUNT; frame++) {
