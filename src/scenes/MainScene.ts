@@ -1421,56 +1421,67 @@ export class MainScene extends Phaser.Scene {
     this.tutorialControlGuide = guide;
   }
 
-  /** 教学关专用的顶部连段面板；正式关调用时只负责彻底清除。 */
+  /** 教学显示完整说明；正式关仅保留四拍节奏图标。 */
   private buildPatternPanel(tutorial: boolean): void {
     this.patternPanel?.destroy(true);
     this.patternPanel = undefined;
     this.patternIcons = [];
     this.tutorialStreakText = undefined;
-    if (!tutorial) return;
 
     const ui = this.add
       .container(CAMERA_BASE_SCROLL_X + hd(640) / MAIN_CAMERA_BASE_ZOOM, CAMERA_BASE_SCROLL_Y)
       .setDepth(15)
       .setScale(UI_SCALE / MAIN_CAMERA_BASE_ZOOM)
       .setScrollFactor(0);
-    ui.add(this.add.rectangle(0, 150, 560, 202, 0x0f172a, 0.72).setStrokeStyle(1, 0x334155));
-    ui.add(
-      this.add
-        .text(0, 62, '教学 · 按节拍打出连段', { fontFamily: 'Arial', fontSize: '22px', color: '#e2e8f0' })
-        .setOrigin(0.5)
-    );
+    const iconY = tutorial ? 128 : 72;
+    if (tutorial) {
+      ui.add(this.add.rectangle(0, 150, 560, 202, 0x0f172a, 0.72).setStrokeStyle(1, 0x334155));
+      ui.add(
+        this.add
+          .text(0, 62, '教学 · 按节拍打出连段', {
+            fontFamily: 'Arial', fontSize: '22px', color: '#e2e8f0'
+          })
+          .setOrigin(0.5)
+      );
+    } else {
+      ui.add(this.add.rectangle(0, iconY, 320, 64, 0x0f172a, 0.68).setStrokeStyle(1, 0x334155));
+    }
 
     const xs = [-108, -36, 36, 108];
     this.combo.pattern.forEach((key, i) => {
       const icon: Phaser.GameObjects.Shape = key === 'L'
-        ? this.add.circle(xs[i], 128, 14).setStrokeStyle(3, 0x67e8f9)
-        : this.add.rectangle(xs[i], 128, 22, 22, 0xfbbf24).setAngle(45);
-      const label = this.add
-        .text(xs[i], 160, key === 'L' ? '轻' : '重', {
-          fontFamily: 'Arial',
-          fontSize: '16px',
-          color: key === 'L' ? '#67e8f9' : '#fbbf24'
-        })
-        .setOrigin(0.5);
-      ui.add([icon, label]);
+        ? this.add.circle(xs[i], iconY, 14).setStrokeStyle(3, 0x67e8f9)
+        : this.add.rectangle(xs[i], iconY, 22, 22, 0xfbbf24).setAngle(45);
+      ui.add(icon);
       this.patternIcons.push(icon);
+      if (tutorial) {
+        ui.add(
+          this.add
+            .text(xs[i], 160, key === 'L' ? '轻' : '重', {
+              fontFamily: 'Arial',
+              fontSize: '16px',
+              color: key === 'L' ? '#67e8f9' : '#fbbf24'
+            })
+            .setOrigin(0.5)
+        );
+      }
     });
 
-    this.tutorialStreakText = this.add
-      .text(0, 192, '', { fontFamily: 'Arial', fontSize: '17px', color: '#facc15' })
-      .setOrigin(0.5);
-    ui.add(this.tutorialStreakText);
-    const skipBg = this.add.rectangle(0, 226, 230, 34, 0x1e293b, 0.92).setStrokeStyle(1, 0x94a3b8);
-    const skipText = this.add
-      .text(0, 226, 'SPACE  跳过教学', {
-        fontFamily: 'Arial', fontSize: '15px', fontStyle: 'bold', color: '#ffffff'
-      })
-      .setOrigin(0.5);
-    ui.add([skipBg, skipText]);
+    if (tutorial) {
+      this.tutorialStreakText = this.add
+        .text(0, 192, '', { fontFamily: 'Arial', fontSize: '17px', color: '#facc15' })
+        .setOrigin(0.5);
+      ui.add(this.tutorialStreakText);
+      const skipBg = this.add.rectangle(0, 226, 230, 34, 0x1e293b, 0.92).setStrokeStyle(1, 0x94a3b8);
+      const skipText = this.add
+        .text(0, 226, 'SPACE  跳过教学', {
+          fontFamily: 'Arial', fontSize: '15px', fontStyle: 'bold', color: '#ffffff'
+        })
+        .setOrigin(0.5);
+      ui.add([skipBg, skipText]);
+    }
     this.patternPanel = ui;
   }
-
   /** 每拍高亮当前拍的节拍块（教学与游戏通用） */
   private pulsePatternIcon(beatIdx: number): void {
     const icon = this.patternIcons[beatIdx];
@@ -2307,13 +2318,17 @@ export class MainScene extends Phaser.Scene {
     color: number,
     sourceKind: EnemyKind
   ): void {
-    const bullet = this.add
-      .rectangle(x, y, ENEMY_BULLET_LENGTH, ENEMY_BULLET_THICKNESS, color)
-      .setRotation(angle)
-      .setDepth(4);
+    const fanOrbDiameter = worldSize(9);
+    const bullet = (sourceKind === 'fan'
+      ? this.add.circle(x, y, fanOrbDiameter / 2, color).setStrokeStyle(worldSize(1.5), 0xffd6e7, 0.95)
+      : this.add.rectangle(x, y, ENEMY_BULLET_LENGTH, ENEMY_BULLET_THICKNESS, color)
+    ) as unknown as Phaser.GameObjects.Rectangle;
+    bullet.setRotation(angle).setDepth(4);
     this.bullets.add(bullet);
     const body = bullet.body as Phaser.Physics.Arcade.Body;
-    body.setSize(ENEMY_BULLET_THICKNESS, ENEMY_BULLET_THICKNESS, true);
+    const hitboxSize = sourceKind === 'fan' ? fanOrbDiameter : ENEMY_BULLET_THICKNESS;
+    const hitboxLength = sourceKind === 'fan' ? fanOrbDiameter : ENEMY_BULLET_LENGTH;
+    body.setSize(hitboxSize, hitboxSize, true);
     body.setVelocity(Math.cos(angle) * speed, Math.sin(angle) * speed);
     bullet.setData('damage', damage);
     bullet.setData('angle', angle);
@@ -2321,14 +2336,14 @@ export class MainScene extends Phaser.Scene {
     bullet.setData('sourceKind', sourceKind);
     bullet.setData('despawnBeat', Math.floor(this.conductor.beatFloatAt(this.conductor.now())) + 8);
     bullet.setData('trailColor', color);
-    bullet.setData('trailThickness', ENEMY_BULLET_THICKNESS);
+    bullet.setData('trailThickness', hitboxSize);
     bullet.setData('bursting', this.tuningEditor.enemyBulletBeatSurgeEnabled);
     bullet.setData('hitboxMode', 'straight');
-    bullet.setData('hitboxLength', ENEMY_BULLET_LENGTH);
-    bullet.setData('hitboxSize', ENEMY_BULLET_THICKNESS);
+    bullet.setData('hitboxLength', hitboxLength);
+    bullet.setData('hitboxSize', hitboxSize);
     bullet.setData('hitboxAngle', angle);
-    this.createBulletHitboxes(bullet, this.enemyBulletHitboxes, ENEMY_BULLET_THICKNESS);
-    this.positionStraightBulletHitboxes(bullet, ENEMY_BULLET_LENGTH, ENEMY_BULLET_THICKNESS, angle);
+    this.createBulletHitboxes(bullet, this.enemyBulletHitboxes, hitboxSize);
+    this.positionStraightBulletHitboxes(bullet, hitboxLength, hitboxSize, angle);
   }
 
   /**
@@ -2376,6 +2391,7 @@ export class MainScene extends Phaser.Scene {
       const body = bullet.body as Phaser.Physics.Arcade.Body;
       const angle = bullet.getData('angle') as number;
       const sourceKind = bullet.getData('sourceKind') as EnemyKind;
+
       const baseSpeed = this.getEnemyBulletSpeed(sourceKind);
       bullet.setData('baseSpeed', baseSpeed);
       const speed = this.tuningEditor.enemyBulletBeatSurgeEnabled
@@ -2394,15 +2410,32 @@ export class MainScene extends Phaser.Scene {
     sourceKind: EnemyKind
   ): void {
     const shotAngle = this.quantizeEnemyAttackAngle(angle);
-    this.spawnBullet(
-      x + Math.cos(shotAngle) * worldSize(26),
-      y + Math.sin(shotAngle) * worldSize(26),
-      shotAngle,
-      this.getEnemyBulletSpeed(sourceKind),
-      this.tuningEditor.getEnemyProjectileDamage(sourceKind),
-      color,
-      sourceKind
-    );
+    const attackAngles: number[] = [];
+    if (sourceKind === 'fan') {
+      const ballsPerArc = 10;
+      const arcSpan = Phaser.Math.DegToRad(54);
+      for (let arcIndex = 0; arcIndex < 3; arcIndex += 1) {
+        const arcCenter = shotAngle + Phaser.Math.DegToRad(arcIndex * 120);
+        for (let ballIndex = 0; ballIndex < ballsPerArc; ballIndex += 1) {
+          const arcProgress = ballIndex / (ballsPerArc - 1) - 0.5;
+          attackAngles.push(arcCenter + arcProgress * arcSpan);
+        }
+      }
+    } else {
+      attackAngles.push(shotAngle);
+    }
+    const spawnRadius = sourceKind === 'fan' ? worldSize(8) : worldSize(26);
+    for (const attackAngle of attackAngles) {
+      this.spawnBullet(
+        x + Math.cos(attackAngle) * spawnRadius,
+        y + Math.sin(attackAngle) * spawnRadius,
+        attackAngle,
+        this.getEnemyBulletSpeed(sourceKind),
+        this.tuningEditor.getEnemyProjectileDamage(sourceKind),
+        color,
+        sourceKind
+      );
+    }
   }
 
   private spawnPlayerShotgun(

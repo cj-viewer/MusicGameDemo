@@ -12,6 +12,8 @@ import {
   playFanAttackEffect
 } from './fanAnimation';
 import { worldDepth, worldSize } from './visualScale';
+
+const FAN_BULLET_COLOR = 0xff4f9a;
 import {
   GUARD_ATTACK_DURATION_MS,
   GUARD_ATTACK_EFFECT_SCALE,
@@ -474,7 +476,7 @@ export class FanEnemy extends Enemy {
       if (this.dead) return;
       this.aimAngle = this.scene.quantizeEnemyAttackAngle(this.angleToPlayer());
       this.playAttack(this.aimAngle);
-      this.scene.spawnEnemyProjectile(this.x, this.y, this.aimAngle, 0x3b82f6, this.kind);
+      this.scene.spawnEnemyProjectile(this.x, this.y, this.aimAngle, FAN_BULLET_COLOR, this.kind);
     });
   }
 

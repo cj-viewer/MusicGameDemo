@@ -22,7 +22,7 @@ export class TuningEditor {
   smallGuardBulletSpeed = 144;
   smallGuardAttackFrequency = 1;
   fanBulletSpeed = 144;
-  fanAttackFrequency = 1;
+  fanAttackFrequency = 0.25;
   weaponJudgementDamageMultipliers: Record<WeaponId, Record<AttackJudgement, number>> = {
     glowsticks: { perfect: 1.2, good: 1, poor: 0.5 },
     baton: { perfect: 1.2, good: 1, poor: 0.5 }
