@@ -14,8 +14,14 @@ import {
 import { worldDepth, worldSize } from './visualScale';
 
 import {
+  GUARD_BODY_SOURCE_BOUNDS,
   GUARD_ATTACK_DURATION_MS,
   GUARD_ATTACK_EFFECT_SCALE,
+  GUARD_SPRITE_SCALE,
+  GUARD_WEAPON_ORIGIN,
+  GUARD_WEAPON_SCALE,
+  guardCharacterTextureKey,
+  playGuardAnimation,
   playGuardAttackEffect
 } from './guardAnimation';
 import { enableEmissiveBloom } from './EmissiveFx';
@@ -267,13 +273,24 @@ export abstract class Enemy {
 export class SmallGuard extends Enemy {
   readonly kind = 'smallGuard';
   private static readonly MOVE_SPEED = 44;
+  /** 以握把锚点把警棍贴到保安当前朝向一侧，而非悬在身体外侧。 */
+  private static readonly WEAPON_SIDE_OFFSET = 38 * GUARD_SPRITE_SCALE;
+  private static readonly WEAPON_OFFSET_Y = 16 * GUARD_SPRITE_SCALE;
   private movementAngle = 0;
   private facingAngle = Math.PI;
   private attackFacingUntil = 0;
+  private weaponAttackUntil = 0;
+  private weaponBaseRotation = 0;
+  private readonly sprite: Phaser.GameObjects.Sprite;
   private readonly attackFx: Phaser.GameObjects.Sprite;
+  private readonly weaponSprite: Phaser.GameObjects.Image;
 
   constructor(scene: MainScene, x: number, y: number) {
-    super(scene, scene.add.image(x, y, 'guard').setDisplaySize(worldSize(46), worldSize(70)), 40, 0xffffff);
+    const sprite = scene.add
+      .sprite(x, y, guardCharacterTextureKey('run', 1))
+      .setScale(GUARD_SPRITE_SCALE);
+    super(scene, sprite, 40, 0xffffff, GUARD_BODY_SOURCE_BOUNDS);
+    this.sprite = sprite;
     this.attackFx = scene.add
       .sprite(x, y, 'npc-guard-attack-light-fx-1')
       .setScale(GUARD_ATTACK_EFFECT_SCALE)
@@ -287,6 +304,12 @@ export class SmallGuard extends Enemy {
       bloomAmount: 0.36,
       threshold: 0.07
     });
+    this.weaponSprite = scene.add
+      .image(x, y, 'npc-guard-weapon-baton')
+      .setOrigin(GUARD_WEAPON_ORIGIN.x, GUARD_WEAPON_ORIGIN.y)
+      .setScale(GUARD_WEAPON_SCALE);
+    scene.textures.get('npc-guard-weapon-baton').setFilter(Phaser.Textures.FilterMode.NEAREST);
+    playGuardAnimation(this.sprite, 'run');
     this.chooseMovementAngle();
   }
 
@@ -294,6 +317,7 @@ export class SmallGuard extends Enemy {
     super.update(dtMs);
     if (this.dead) return;
     if (this.scene.time.now >= this.attackFacingUntil) this.facingAngle = this.movementAngle;
+    playGuardAnimation(this.sprite, 'run');
     const facingRight = Math.cos(this.facingAngle) >= 0;
     const characterDepth = worldDepth(this.go.y + this.go.body.halfHeight);
     this.setFacingFlip(this.facingAngle);
@@ -302,6 +326,26 @@ export class SmallGuard extends Enemy {
       // Attack FX source frames face right, while the guard body source faces left.
       .setFlipX(!facingRight)
       .setDepth(characterDepth - 0.002);
+    const side = facingRight ? 1 : -1;
+    // 把源图的斜向棍旋到竖直，贴在角色身体侧边；反向时同步取镜像角。
+    // 源贴图的斜向与负 scaleX 镜像会反转视觉朝向，因此旋转符号须与角色朝向相反。
+    // 源警棍以右下握把为锚点，默认已指向左上；镜像后自然指向右上。
+    // 这样无需再叠加旋转，左朝向明确朝左上、右朝向朝右上。
+    this.weaponBaseRotation = 0;
+    this.weaponSprite
+      .setVisible(true)
+      .setPosition(
+        this.x + side * SmallGuard.WEAPON_SIDE_OFFSET,
+        this.y + SmallGuard.WEAPON_OFFSET_Y
+      )
+      .setFlipX(false)
+      .setScale(
+        facingRight ? -GUARD_WEAPON_SCALE : GUARD_WEAPON_SCALE,
+        GUARD_WEAPON_SCALE
+      )
+      // 警棍随身体脚底深度排序，但始终在保安本体动画之后绘制。
+      .setDepth(characterDepth - 0.003);
+    if (this.scene.time.now >= this.weaponAttackUntil) this.weaponSprite.setRotation(this.weaponBaseRotation);
   }
 
   onBeat(info: BeatInfo): void {
@@ -313,6 +357,7 @@ export class SmallGuard extends Enemy {
       this.facingAngle = angle;
       this.attackFacingUntil = this.scene.time.now + GUARD_ATTACK_DURATION_MS;
       playGuardAttackEffect(this.attackFx, 'attack-light');
+      this.playWeaponAttack(angle);
       this.scene.spawnEnemyProjectile(this.x, this.y, angle, this.kind);
     });
   }
@@ -331,17 +376,47 @@ export class SmallGuard extends Enemy {
   }
 
   protected die(): void {
+    this.scene.tweens.killTweensOf(this.weaponSprite);
     if (this.attackFx.active) this.attackFx.destroy();
+    if (this.weaponSprite.active) this.weaponSprite.destroy();
     super.die();
   }
 
   destroy(): void {
     if (this.attackFx.active) this.attackFx.destroy();
+    if (this.weaponSprite.active) this.weaponSprite.destroy();
     super.destroy();
   }
 
   protected onGameOverIdle(): void {
     this.attackFx.setVisible(false);
+    this.scene.tweens.killTweensOf(this.weaponSprite);
+    this.weaponSprite.setRotation(this.weaponBaseRotation);
+    playGuardAnimation(this.sprite, 'idle', true);
+  }
+
+  private playWeaponAttack(angle: number): void {
+    const facingRight = Math.cos(angle) >= 0;
+    const swingDirection = facingRight ? 1 : -1;
+    const windup = this.weaponBaseRotation + Phaser.Math.DegToRad(-10 * swingDirection);
+    const strike = this.weaponBaseRotation + Phaser.Math.DegToRad(42 * swingDirection);
+    this.weaponAttackUntil = this.scene.time.now + 200;
+    this.scene.tweens.killTweensOf(this.weaponSprite);
+    this.weaponSprite.setRotation(windup);
+    this.scene.tweens.add({
+      targets: this.weaponSprite,
+      rotation: strike,
+      duration: 80,
+      ease: 'Cubic.easeIn',
+      onComplete: () => {
+        this.scene.tweens.add({
+          targets: this.weaponSprite,
+          rotation: this.weaponBaseRotation,
+          duration: 120,
+          ease: 'Back.easeOut'
+        });
+      }
+    });
   }
 }
 
@@ -355,10 +430,16 @@ export class MidGuard extends Enemy {
   private lockedAngle = 0;
   private facingAngle = Math.PI;
   private attackFacingUntil = 0;
+  private readonly sprite: Phaser.GameObjects.Sprite;
   private laserGfx: Phaser.GameObjects.Graphics;
 
   constructor(scene: MainScene, x: number, y: number) {
-    super(scene, scene.add.image(x, y, 'guard').setDisplaySize(worldSize(52), worldSize(78)), 60, 0xffffff);
+    const sprite = scene.add
+      .sprite(x, y, guardCharacterTextureKey('idle', 1))
+      .setScale(GUARD_SPRITE_SCALE);
+    super(scene, sprite, 60, 0xffffff, GUARD_BODY_SOURCE_BOUNDS);
+    this.sprite = sprite;
+    playGuardAnimation(this.sprite, 'idle');
     this.lockedAngle = this.scene.quantizeEnemyAttackAngle(this.angleToPlayer());
     this.laserGfx = scene.add.graphics().setDepth(2);
   }
@@ -378,6 +459,8 @@ export class MidGuard extends Enemy {
 
   update(dtMs: number): void {
     super.update(dtMs);
+    if (this.dead) return;
+    playGuardAnimation(this.sprite, this.go.body.velocity.lengthSq() > 1 ? 'run' : 'idle');
     if (this.scene.time.now >= this.attackFacingUntil) this.facingAngle = this.lockedAngle;
     this.setFacingFlip(this.facingAngle);
     this.laserGfx.clear();
@@ -422,6 +505,7 @@ export class MidGuard extends Enemy {
   protected onGameOverIdle(): void {
     this.aiming = false;
     this.laserGfx.clear();
+    playGuardAnimation(this.sprite, 'idle', true);
   }
 
   private flashLaser(angle: number): void {
@@ -449,13 +533,15 @@ export class FanEnemy extends Enemy {
   private attackUntil = 0;
   private weaponAttackUntil = 0;
   private aimAngle = Math.PI;
+  private readonly tutorialSpectator: boolean;
 
-  constructor(scene: MainScene, x: number, y: number) {
+  constructor(scene: MainScene, x: number, y: number, options: { tutorialSpectator?: boolean } = {}) {
     const sprite = scene.add
       .sprite(x, y, fanCharacterTextureKey('run', 1))
       .setScale(FAN_SPRITE_SCALE);
     super(scene, sprite, 40, 0xffffff, FAN_BODY_SOURCE_BOUNDS);
     this.sprite = sprite;
+    this.tutorialSpectator = options.tutorialSpectator ?? false;
     this.attackFx = scene.add
       .sprite(x, y, 'npc-fan-attack-hard-fx-2')
       .setScale(FAN_SPRITE_SCALE)
@@ -472,7 +558,8 @@ export class FanEnemy extends Enemy {
     this.weaponSprite = scene.add
       .image(x, y, 'npc-fan-weapon-glowstick')
       .setOrigin(FAN_WEAPON_ORIGIN.x, FAN_WEAPON_ORIGIN.y)
-      .setScale(FAN_WEAPON_SCALE);
+      .setScale(FAN_WEAPON_SCALE)
+      .setVisible(!this.tutorialSpectator);
     scene.textures.get('npc-fan-weapon-glowstick').setFilter(Phaser.Textures.FilterMode.NEAREST);
     playFanAnimation(this.sprite, 'run');
     this.chooseMovementAngle();
@@ -491,6 +578,7 @@ export class FanEnemy extends Enemy {
 
   onBeat(info: BeatInfo): void {
     if (this.dead) return;
+    if (this.tutorialSpectator) return;
     this.chooseMovementAngle();
     this.scene.scheduleEnemyAttacks(this.kind, info.globalBeat, () => {
       if (this.dead) return;
@@ -501,6 +589,14 @@ export class FanEnemy extends Enemy {
   }
 
   protected move(_dtMs: number): void {
+    if (this.tutorialSpectator) {
+      this.movementAngle = this.angleToPlayer();
+      const v = this.scene.physics.velocityFromRotation(this.movementAngle, FanEnemy.MOVE_SPEED * 0.68);
+      this.go.body.setVelocity(v.x, v.y);
+      this.aimAngle = this.movementAngle;
+      playFanAnimation(this.sprite, 'run');
+      return;
+    }
     this.applyMovementVelocity();
     if (this.scene.time.now >= this.attackUntil && this.sprite.anims.currentAnim?.key !== 'fan-run') {
       playFanAnimation(this.sprite, 'run', true);

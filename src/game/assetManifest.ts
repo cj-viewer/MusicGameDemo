@@ -10,8 +10,11 @@ import {
 } from './fanAnimation';
 import {
   GUARD_ATTACK_EFFECT_FRAMES,
+  GUARD_CHARACTER_FRAME_COUNT,
   guardAttackEffectAssetPath,
-  guardAttackEffectTextureKey
+  guardAttackEffectTextureKey,
+  guardCharacterAssetPath,
+  guardCharacterTextureKey
 } from './guardAnimation';
 import { BGM_TRACKS, DEFAULT_TUTORIAL_BGM_SLOT, bgmAssetPath, type BgmTrack } from './bgmTracks';
 import { preloadStageEnvironments } from './PinkStageEnvironment';
@@ -31,6 +34,14 @@ export function queueCoreAssets(scene: Phaser.Scene): void {
     asset('images/ui/tutorial/tutorial-pattern-panel.png')
   );
   scene.load.image('guard', asset('images/characters/guard.png'));
+  for (const action of ['idle', 'run'] as const) {
+    for (let frame = 1; frame <= GUARD_CHARACTER_FRAME_COUNT; frame++) {
+      scene.load.image(
+        guardCharacterTextureKey(action, frame),
+        asset(guardCharacterAssetPath(action, frame))
+      );
+    }
+  }
   for (const action of ['idle', 'run'] as const) {
     for (let frame = 1; frame <= FAN_CHARACTER_FRAME_COUNT; frame++) {
       scene.load.image(
@@ -62,6 +73,7 @@ export function queueCoreAssets(scene: Phaser.Scene): void {
   }
   scene.load.image('player-weapon-glowsticks', asset('images/weapons/light_stick/player/light_stick_player.png'));
   scene.load.image('player-weapon-baton', asset('images/weapons/baton/player/baton_player01.png'));
+  scene.load.image('npc-guard-weapon-baton', asset('images/weapons/baton/npc_guard01/baton_guard01.png'));
   scene.load.image(
     'npc-fan-weapon-glowstick',
     asset('images/weapons/light_stick/npc_fan01/light_stick_fan01.png')

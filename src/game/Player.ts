@@ -204,8 +204,12 @@ export class Player {
       const playerDepth = worldDepth(this.y + this.body.halfHeight);
       const attackSpeed = this.scene.getPlayerWeaponAttackSpeed(this.weapon.id, heavy);
       const attackDuration = ATTACK_EFFECT_DURATION_MS / attackSpeed;
-      this.actionLockedUntil = this.scene.time.now + attackDuration;
-      this.setAction(attackAction, true);
+      // 警棍的攻击表现由独立武器挥击与特效承担。若此时仍有移动输入，
+      // 不再用攻击序列锁住角色本体动画，避免跑步画面在每次出手时断帧，
+      // 从而保持 WASD 位移和步态连续；站定攻击仍完整播放角色攻击动画。
+      const preserveRunMotion = this.weapon.id === 'baton' && this.moveDir().lengthSq() > 0;
+      this.actionLockedUntil = preserveRunMotion ? 0 : this.scene.time.now + attackDuration;
+      if (!preserveRunMotion) this.setAction(attackAction, true);
       this.scene.tweens.killTweensOf(this.attackFx);
       playPlayerAttackEffect(this.attackFx, attackAction, attackSpeed);
       const emissiveColor = heavy ? HARD_ATTACK_EMISSIVE_COLOR : LIGHT_ATTACK_EMISSIVE_COLOR;
@@ -225,6 +229,9 @@ export class Player {
   onBeat(heavy: boolean): void {
     if (this.isDodging) return;
     if (this.dead) return;
+    // 仅上下输入时保持角色原高度，避免垂直行走的视觉节奏干扰位移读感。
+    const movement = this.moveDir();
+    if (Math.abs(movement.x) < 0.001 && Math.abs(movement.y) > 0.001) return;
     this.scene.tweens.killTweensOf(this.go);
     const baseY = this.go.y;
     const baseDisplayHeight = this.go.height * PLAYER_SPRITE_SCALE;
