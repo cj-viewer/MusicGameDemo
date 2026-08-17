@@ -179,15 +179,16 @@ export abstract class Enemy {
       this.knockbackUntil = this.scene.time.now + 160;
       this.go.body.setVelocity(this.knockbackVelocity.x, this.knockbackVelocity.y);
     }
-    this.scene.queueBeatSfx('enemyHurt');
     this.scene.spawnImpactFx(this.x, this.y, 0xef4444, false);
     this.showHitFlash();
+    if (this.hp <= 0) {
+      this.die();
+      return;
+    }
+    this.scene.queueBeatSfx('enemyHurt');
     this.scene.time.delayedCall(120, () => {
       if (!this.dead) this.restoreVisualColor();
     });
-    if (this.hp <= 0) {
-      this.die();
-    }
   }
 
   protected die(): void {

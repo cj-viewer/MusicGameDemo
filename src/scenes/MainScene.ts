@@ -107,6 +107,7 @@ const TUTORIAL_PATTERN_PANEL_CROPS = [
 ] as const;
 const GLOWSTICK_KNOCKBACK_SPEED = 150;
 const BATON_KNOCKBACK_SPEED = GLOWSTICK_KNOCKBACK_SPEED * 1.25;
+const BATON_CRESCENT_KNOCKBACK_SPEED = 320;
 
 type GameState = 'title' | 'tutorial' | 'tutorialConfirm' | 'playing' | 'intermission' | 'over';
 
@@ -114,16 +115,28 @@ type GameState = 'title' | 'tutorial' | 'tutorialConfirm' | 'playing' | 'intermi
 const TUTORIAL_TARGET_STREAK = 3;
 type BeatSfxCue = 'playerHurt' | 'feverStart' | 'enemyHurt' | 'pickup';
 type AudioChannel = 'master' | 'bgm' | 'rhythm' | SfxCategory;
-type CombatSettingsPage = 'speed' | 'damage';
+type VolumeControlChannel = AudioChannel | 'enemyDeath';
+type CombatSettingsPage = 'speed' | 'playerDamage' | 'enemy' | 'mode';
 type CombatSettingKey =
   | 'glowstickBulletSpeed'
-  | 'glowstickAttackSpeed'
+  | 'glowstickLightAttackSpeed'
+  | 'glowstickHeavyAttackSpeed'
   | 'batonSweepSpeed'
-  | 'batonAttackSpeed'
+  | 'batonLightAttackSpeed'
+  | 'batonHeavyAttackSpeed'
   | 'smallGuardBulletSpeed'
   | 'smallGuardAttackFrequency'
   | 'fanBulletSpeed'
   | 'fanAttackFrequency'
+  | 'glowstickHeavyChargeDelayMs'
+  | 'glowstickHeavyLaserThickness'
+  | 'batonHeavyCrescentRange'
+  | 'batonLightSweepAngle'
+  | 'batonLightSweepRange'
+  | 'glowstickLightDamage'
+  | 'glowstickHeavyDamage'
+  | 'batonLightDamage'
+  | 'batonHeavyDamage'
   | 'glowstickPerfectDamageMultiplier'
   | 'glowstickGoodDamageMultiplier'
   | 'glowstickPoorDamageMultiplier'
@@ -142,7 +155,7 @@ interface VolumeSliderVisual {
   max: number;
 }
 
-const WAVE_ENEMY_COUNTS = [2, 4, 8, 16, 32];
+const WAVE_ENEMY_COUNTS = [2, 4, 6, 10, 16];
 
 interface Pickup {
   go: Phaser.GameObjects.Container;
@@ -176,13 +189,15 @@ export class MainScene extends Phaser.Scene {
     fever: 1
   };
   private volumePanel!: Phaser.GameObjects.Container;
-  private volumeSliders: Partial<Record<AudioChannel, VolumeSliderVisual>> = {};
+  private volumeSliders: Partial<Record<VolumeControlChannel, VolumeSliderVisual>> = {};
   private combatValueTexts: Partial<Record<CombatSettingKey, Phaser.GameObjects.Text>> = {};
   private combatSettingsPage: CombatSettingsPage = 'speed';
   private combatPageContainers: Partial<Record<CombatSettingsPage, Phaser.GameObjects.Container>> = {};
   private combatTabButtons: Partial<Record<CombatSettingsPage, Phaser.GameObjects.Rectangle>> = {};
+  private heavyModeToggleButtons: Partial<Record<WeaponId, Phaser.GameObjects.Rectangle>> = {};
+  private heavyModeToggleTexts: Partial<Record<WeaponId, Phaser.GameObjects.Text>> = {};
   private volumePanelVisible = false;
-  private volumeDragging: AudioChannel | null = null;
+  private volumeDragging: VolumeControlChannel | null = null;
   private fpvWindowEnabled = true;
   private fpvToggleButton!: Phaser.GameObjects.Rectangle;
   private fpvToggleText!: Phaser.GameObjects.Text;
@@ -191,6 +206,18 @@ export class MainScene extends Phaser.Scene {
   private cameraLookX = 0;
   private cameraLookY = 0;
   private stageEnvironment!: StageEnvironmentController;
+  /** 在 Window 捕获阶段接管 Escape，避免浏览器焦点或 Phaser 暂停状态吞掉设置入口。 */
+  private readonly handleGlobalEscape = (event: KeyboardEvent): void => {
+    if ((event.code !== 'Escape' && event.key !== 'Escape') || event.repeat || !this.sys.isActive()) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (this.tuningEditor.visible) {
+      this.setTuningEditorVisible(false);
+      this.setVolumePanelVisible(true);
+    } else {
+      this.setVolumePanelVisible(!this.volumePanelVisible);
+    }
+  };
 
   private enemies: Enemy[] = [];
   private enemyGroup!: Phaser.Physics.Arcade.Group;
@@ -198,6 +225,8 @@ export class MainScene extends Phaser.Scene {
   private playerBullets!: Phaser.Physics.Arcade.Group;
   private enemyBulletHitboxes!: Phaser.Physics.Arcade.Group;
   private playerBulletHitboxes!: Phaser.Physics.Arcade.Group;
+  private activeSpecialAttackFx = new Set<Phaser.GameObjects.Graphics>();
+  private activeSpecialAttackTimers = new Map<Phaser.GameObjects.Graphics, Phaser.Time.TimerEvent>();
   private pickups: Pickup[] = [];
   private state: GameState = 'title';
   private waveIdx = -1;
@@ -292,6 +321,8 @@ export class MainScene extends Phaser.Scene {
     for (const track of BGM_TRACKS) this.sound.stopByKey(track.key);
     // 教学关只需要教学 BGM；其余曲目在这里挂后台下载，等玩家打完教学早就就绪了。
     this.pendingBgmSwitch = undefined;
+    this.activeSpecialAttackFx.clear();
+    this.activeSpecialAttackTimers.clear();
     this.load.off(Phaser.Loader.Events.FILE_COMPLETE, this.onDeferredFileComplete, this);
     this.load.on(Phaser.Loader.Events.FILE_COMPLETE, this.onDeferredFileComplete, this);
     queueDeferredBgm(this);
@@ -465,39 +496,19 @@ export class MainScene extends Phaser.Scene {
   // ---------- 输入 ----------
 
   private setupInput(): void {
-    this.input.mouse?.disableContextMenu();
     this.input.keyboard!.addCapture(Phaser.Input.Keyboard.KeyCodes.ESC);
+    this.input.keyboard!.addCapture(Phaser.Input.Keyboard.KeyCodes.C);
 
-    this.input.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
-      if (this.gamePaused || this.volumePanelVisible || this.tuningEditor.visible) return;
-      const btn = pointer.rightButtonDown() ? 'H' : pointer.leftButtonDown() ? 'L' : null;
-      if (this.state === 'title') {
-        this.startGame();
-        return;
-      }
-      if (this.state === 'tutorialConfirm') {
-        // 点击确认页按钮时由按钮自身决定进入或重练，避免全屏左键轻攻击先行吞掉按钮语义。
-        if (this.input.hitTestPointer(pointer).length > 0) return;
-        if (btn) this.handleTutorialConfirmInput(btn);
-        return;
-      }
-      if (this.state === 'over') return;
-      if (this.time.now < this.suppressAttackUntil) return;
-
-      if (btn) this.handleAttackInput(btn);
-    });
-
+    window.removeEventListener('keydown', this.handleGlobalEscape, true);
+    window.addEventListener('keydown', this.handleGlobalEscape, true);
     this.input.keyboard!.on('keydown', (event: KeyboardEvent) => {
-      // Escape 必须先于暂停拦截处理，否则面板打开后同一入口无法再收到关闭操作。
-      if (event.code === 'Escape') {
+      if (event.repeat || this.gamePaused || this.volumePanelVisible || this.tuningEditor.visible) return;
+
+      if (event.code === 'KeyC') {
         event.preventDefault();
-        if (!event.repeat && !this.tuningEditor.visible) {
-          this.setVolumePanelVisible(!this.volumePanelVisible);
-        }
+        this.triggerFeverScreenClear();
         return;
       }
-
-      if (event.repeat || this.gamePaused || this.volumePanelVisible || this.tuningEditor.visible) return;
 
       if (event.code === 'Space' && this.state === 'tutorial') {
         event.preventDefault();
@@ -559,6 +570,7 @@ export class MainScene extends Phaser.Scene {
   }
 
   private cleanupForRestart(): void {
+    window.removeEventListener('keydown', this.handleGlobalEscape, true);
     this.bgm?.off(Phaser.Sound.Events.COMPLETE, this.onBgmComplete, this);
     this.bgm?.stop();
     this.conductor?.off('beat', this.onBeat, this);
@@ -879,6 +891,8 @@ export class MainScene extends Phaser.Scene {
     this.combatValueTexts = {};
     this.combatPageContainers = {};
     this.combatTabButtons = {};
+    this.heavyModeToggleButtons = {};
+    this.heavyModeToggleTexts = {};
     const debugObjects: Phaser.GameObjects.GameObject[] = [
       this.add.text(690, 84, '战斗参数', {
         fontFamily: 'Arial', fontSize: '20px', fontStyle: 'bold', color: '#67e8f9'
@@ -886,12 +900,12 @@ export class MainScene extends Phaser.Scene {
       this.add.rectangle(640, 360, 2, 510, 0x334155, 0.9)
     ];
 
-    const beginDrag = (channel: AudioChannel, pointer: Phaser.Input.Pointer): void => {
+    const beginDrag = (channel: VolumeControlChannel, pointer: Phaser.Input.Pointer): void => {
       this.volumeDragging = channel;
       this.updateVolumeFromPointer(channel, pointer.x / UI_SCALE);
     };
     const addVolumeRow = (
-      channel: AudioChannel,
+      channel: VolumeControlChannel,
       y: number,
       label: string,
       color: number,
@@ -926,7 +940,7 @@ export class MainScene extends Phaser.Scene {
       objects.push(labelText, track, fill, thumb, valueText);
     };
 
-    const audioRows: Array<[AudioChannel, string, number, number]> = [
+    const audioRows: Array<[VolumeControlChannel, string, number, number]> = [
       ['master', '主音量', 0x67e8f9, MAX_MASTER_VOLUME],
       ['bgm', 'BGM', 0xa78bfa, MAX_CHANNEL_VOLUME],
       ['rhythm', '节拍喊声', 0xf9a8d4, MAX_CHANNEL_VOLUME],
@@ -934,14 +948,15 @@ export class MainScene extends Phaser.Scene {
       ['damage', '受伤与敌亡', 0xf97316, MAX_CHANNEL_VOLUME],
       ['combo', 'Combo 提示', 0xfacc15, MAX_CHANNEL_VOLUME],
       ['fever', 'Fever 音效', 0x4ade80, MAX_CHANNEL_VOLUME],
-      ['pickup', '拾取音效', 0x60a5fa, MAX_CHANNEL_VOLUME]
+      ['pickup', '拾取音效', 0x60a5fa, MAX_CHANNEL_VOLUME],
+      ['enemyDeath', '敌人死亡音效', 0xef4444, 1]
     ];
     audioRows.forEach(([channel, label, color, max], index) => {
       addVolumeRow(channel, 135 + index * 50, label, color, max);
     });
 
     const addCombatTab = (page: CombatSettingsPage, x: number, label: string): void => {
-      const rect = this.add.rectangle(x, 116, 150, 30, 0x334155)
+      const rect = this.add.rectangle(x, 116, 126, 30, 0x334155)
         .setStrokeStyle(1, 0x64748b)
         .setInteractive({ useHandCursor: true });
       const text = this.add.text(x, 116, label, {
@@ -954,11 +969,15 @@ export class MainScene extends Phaser.Scene {
       this.combatTabButtons[page] = rect;
       debugObjects.push(rect, text);
     };
-    addCombatTab('speed', 830, '速度 / 频率');
-    addCombatTab('damage', 1010, '伤害 / 掉落');
+    addCombatTab('speed', 720, '速度 / 频率');
+    addCombatTab('playerDamage', 850, '玩家伤害');
+    addCombatTab('enemy', 980, '敌人 / 掉落');
+    addCombatTab('mode', 1110, '模式 / 导出');
 
     const speedPageObjects: Phaser.GameObjects.GameObject[] = [];
-    const damagePageObjects: Phaser.GameObjects.GameObject[] = [];
+    const playerDamagePageObjects: Phaser.GameObjects.GameObject[] = [];
+    const enemyPageObjects: Phaser.GameObjects.GameObject[] = [];
+    const modePageObjects: Phaser.GameObjects.GameObject[] = [];
     const addStepButton = (
       target: Phaser.GameObjects.GameObject[],
       x: number,
@@ -997,53 +1016,118 @@ export class MainScene extends Phaser.Scene {
       addStepButton(target, 1100, y, '+', () => this.adjustCombatSetting(key, step));
     };
 
-    addCombatRow(speedPageObjects, 'glowstickBulletSpeed', 160, '荧光棒弹速', 20);
-    addCombatRow(speedPageObjects, 'glowstickAttackSpeed', 215, '荧光棒攻击速度', 0.1);
-    addCombatRow(speedPageObjects, 'batonSweepSpeed', 270, '警棍弧弹飞行速度', 0.1);
-    addCombatRow(speedPageObjects, 'batonAttackSpeed', 325, '警棍攻击速度', 0.1);
-    addCombatRow(speedPageObjects, 'smallGuardBulletSpeed', 380, '保安弹速', 20);
-    addCombatRow(speedPageObjects, 'smallGuardAttackFrequency', 435, '保安攻击频率', 0.25);
-    addCombatRow(speedPageObjects, 'fanBulletSpeed', 490, '粉丝弹速', 20);
-    addCombatRow(speedPageObjects, 'fanAttackFrequency', 545, '粉丝攻击频率', 0.25);
+    addCombatRow(speedPageObjects, 'glowstickBulletSpeed', 145, '荧光棒弹速', 20);
+    addCombatRow(speedPageObjects, 'glowstickLightAttackSpeed', 190, '荧光棒轻击速度', 0.1);
+    addCombatRow(speedPageObjects, 'glowstickHeavyAttackSpeed', 235, '荧光棒重击速度', 0.1);
+    addCombatRow(speedPageObjects, 'batonSweepSpeed', 280, '警棍弧弹飞行速度', 0.1);
+    addCombatRow(speedPageObjects, 'batonLightAttackSpeed', 325, '警棍轻击速度', 0.1);
+    addCombatRow(speedPageObjects, 'batonHeavyAttackSpeed', 370, '警棍重击速度', 0.1);
+    addCombatRow(speedPageObjects, 'smallGuardBulletSpeed', 415, '保安弹速', 20);
+    addCombatRow(speedPageObjects, 'smallGuardAttackFrequency', 460, '保安攻击频率', 0.25);
+    addCombatRow(speedPageObjects, 'fanBulletSpeed', 505, '粉丝弹速', 20);
+    addCombatRow(speedPageObjects, 'fanAttackFrequency', 550, '粉丝攻击频率', 0.25);
 
-    const damageRows: Array<[CombatSettingKey, string, number]> = [
+    const playerDamageRows: Array<[CombatSettingKey, string, number]> = [
+      ['glowstickLightDamage', '荧光棒轻击基础伤害', 1],
+      ['glowstickHeavyDamage', '荧光棒重击基础伤害', 1],
+      ['batonLightDamage', '警棍轻击基础伤害', 1],
+      ['batonHeavyDamage', '警棍重击基础伤害', 1],
       ['glowstickPerfectDamageMultiplier', '荧光棒 PERFECT 伤害', 0.1],
       ['glowstickGoodDamageMultiplier', '荧光棒 GOOD 伤害', 0.1],
       ['glowstickPoorDamageMultiplier', '荧光棒 POOR 伤害', 0.1],
       ['batonPerfectDamageMultiplier', '警棍 PERFECT 伤害', 0.1],
       ['batonGoodDamageMultiplier', '警棍 GOOD 伤害', 0.1],
-      ['batonPoorDamageMultiplier', '警棍 POOR 伤害', 0.1],
+      ['batonPoorDamageMultiplier', '警棍 POOR 伤害', 0.1]
+    ];
+    playerDamageRows.forEach(([key, label, step], index) => {
+      addCombatRow(playerDamagePageObjects, key, 158 + index * 44, label, step);
+    });
+
+    const enemyRows: Array<[CombatSettingKey, string, number]> = [
       ['smallGuardDamage', '保安弹幕伤害', 1],
       ['fanDamage', '粉丝弹幕伤害', 1],
       ['glowstickDropChance', '荧光棒掉落概率', 0.05],
       ['batonDropChance', '警棍掉落概率', 0.05]
     ];
-    damageRows.forEach(([key, label, step], index) => {
-      addCombatRow(damagePageObjects, key, 158 + index * 44, label, step);
+    enemyRows.forEach(([key, label, step], index) => {
+      addCombatRow(enemyPageObjects, key, 180 + index * 65, label, step);
     });
 
-    this.combatPageContainers.speed = this.add.container(0, 0, speedPageObjects);
-    this.combatPageContainers.damage = this.add.container(0, 0, damagePageObjects);
-    debugObjects.push(this.combatPageContainers.speed, this.combatPageContainers.damage);
+    const addHeavyModeToggle = (weaponId: WeaponId, y: number, label: string): void => {
+      modePageObjects.push(this.add.text(690, y, label, {
+        fontFamily: 'Arial', fontSize: '16px', color: '#cbd5e1'
+      }).setOrigin(0, 0.5));
+      const button = this.add.rectangle(1040, y, 150, 36, 0x334155)
+        .setStrokeStyle(1, 0x94a3b8)
+        .setInteractive({ useHandCursor: true });
+      const text = this.add.text(1040, y, '', {
+        fontFamily: 'Arial', fontSize: '15px', fontStyle: 'bold', color: '#ffffff'
+      }).setOrigin(0.5);
+      button.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+        pointer.event.stopPropagation();
+        if (weaponId === 'glowsticks') {
+          this.tuningEditor.glowstickHeavyLaserEnabled = !this.tuningEditor.glowstickHeavyLaserEnabled;
+        } else {
+          this.tuningEditor.batonHeavyCrescentEnabled = !this.tuningEditor.batonHeavyCrescentEnabled;
+        }
+        this.refreshCombatControls();
+      });
+      this.heavyModeToggleButtons[weaponId] = button;
+      this.heavyModeToggleTexts[weaponId] = text;
+      modePageObjects.push(button, text);
+    };
+    addHeavyModeToggle('glowsticks', 155, '荧光棒重击：贯屏激光');
+    addHeavyModeToggle('baton', 200, '警棍重击：击退月牙波');
+    addCombatRow(modePageObjects, 'glowstickHeavyChargeDelayMs', 250, '荧光棒重击充能延迟', 50);
+    addCombatRow(modePageObjects, 'glowstickHeavyLaserThickness', 295, '荧光棒激光粗细', 4);
+    addCombatRow(modePageObjects, 'batonHeavyCrescentRange', 340, '警棍重击最远距离', 40);
+    addCombatRow(modePageObjects, 'batonLightSweepAngle', 385, '警棍轻击范围角度', 10);
+    addCombatRow(modePageObjects, 'batonLightSweepRange', 430, '警棍轻击距离范围', 10);
 
-    const fpvLabel = this.add.text(80, 555, '右下 FPV 观察窗', {
-      fontFamily: 'Arial', fontSize: '16px', color: '#cbd5e1'
-    }).setOrigin(0, 0.5);
-    this.fpvToggleButton = this.add.rectangle(430, 555, 130, 34, 0x0f766e)
+    const exportButton = this.add.rectangle(900, 500, 310, 40, 0x0f766e)
       .setStrokeStyle(2, 0x67e8f9, 0.95)
       .setInteractive({ useHandCursor: true });
-    this.fpvToggleText = this.add.text(430, 555, '', {
+    const exportText = this.add.text(900, 500, '导出当前战斗参数 TXT', {
+      fontFamily: 'Arial', fontSize: '17px', fontStyle: 'bold', color: '#ecfeff'
+    }).setOrigin(0.5);
+    const exportHint = this.add.text(690, 538, '包含玩家、武器、敌人、掉落及本页模式参数', {
+      fontFamily: 'Arial', fontSize: '14px', color: '#94a3b8'
+    }).setOrigin(0, 0.5);
+    exportButton.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      pointer.event.stopPropagation();
+      this.tuningEditor.downloadCombatConfigTxt();
+    });
+    modePageObjects.push(exportButton, exportText, exportHint);
+
+    this.combatPageContainers.speed = this.add.container(0, 0, speedPageObjects);
+    this.combatPageContainers.playerDamage = this.add.container(0, 0, playerDamagePageObjects);
+    this.combatPageContainers.enemy = this.add.container(0, 0, enemyPageObjects);
+    this.combatPageContainers.mode = this.add.container(0, 0, modePageObjects);
+    debugObjects.push(
+      this.combatPageContainers.speed,
+      this.combatPageContainers.playerDamage,
+      this.combatPageContainers.enemy,
+      this.combatPageContainers.mode
+    );
+
+    const fpvLabel = this.add.text(80, 590, '右下 FPV 观察窗', {
+      fontFamily: 'Arial', fontSize: '16px', color: '#cbd5e1'
+    }).setOrigin(0, 0.5);
+    this.fpvToggleButton = this.add.rectangle(430, 590, 130, 34, 0x0f766e)
+      .setStrokeStyle(2, 0x67e8f9, 0.95)
+      .setInteractive({ useHandCursor: true });
+    this.fpvToggleText = this.add.text(430, 590, '', {
       fontFamily: 'Arial', fontSize: '15px', fontStyle: 'bold', color: '#ecfeff'
     }).setOrigin(0.5);
     const hint = this.add.text(320, 660, '按 Esc 关闭音量设置', {
       fontFamily: 'Arial', fontSize: '14px', color: '#94a3b8'
     }).setOrigin(0.5);
     objects.push(hint);
-    debugObjects.push(fpvLabel, this.fpvToggleButton, this.fpvToggleText);
+    objects.push(fpvLabel, this.fpvToggleButton, this.fpvToggleText);
     this.tuningEditor.container.add(debugObjects);
 
     this.volumePanel = this.add.container(0, 0, objects)
-      .setDepth(30)
+      .setDepth(2000)
       .setPosition(CAMERA_BASE_SCROLL_X, CAMERA_BASE_SCROLL_Y)
       .setScale(UI_SCALE / MAIN_CAMERA_BASE_ZOOM)
       .setScrollFactor(0)
@@ -1066,7 +1150,7 @@ export class MainScene extends Phaser.Scene {
 
   private setCombatSettingsPage(page: CombatSettingsPage): void {
     this.combatSettingsPage = page;
-    for (const candidate of ['speed', 'damage'] as const) {
+    for (const candidate of ['speed', 'playerDamage', 'enemy', 'mode'] as const) {
       const active = candidate === page;
       const pageContainer = this.combatPageContainers[candidate];
       pageContainer?.setVisible(active).setActive(active);
@@ -1081,7 +1165,7 @@ export class MainScene extends Phaser.Scene {
   private setVolumePanelVisible(visible: boolean): void {
     this.volumePanelVisible = visible;
     this.volumeDragging = null;
-    this.volumePanel.setVisible(visible);
+    this.volumePanel.setVisible(visible).setActive(visible);
     if (visible) {
       this.refreshVolumeControl();
       this.gamePaused = true;
@@ -1155,7 +1239,7 @@ export class MainScene extends Phaser.Scene {
     return this.scene.isActive('FpvMiniScene') ? (this.scene.get('FpvMiniScene') as FpvMiniScene) : undefined;
   }
 
-  private updateVolumeFromPointer(channel: AudioChannel, pointerX: number): void {
+  private updateVolumeFromPointer(channel: VolumeControlChannel, pointerX: number): void {
     const slider = this.volumeSliders[channel];
     if (!slider) return;
     const ratio = Phaser.Math.Clamp(
@@ -1164,7 +1248,9 @@ export class MainScene extends Phaser.Scene {
       1
     );
     const soundManager = this.sound as Phaser.Sound.WebAudioSoundManager;
-    if (channel === 'master') {
+    if (channel === 'enemyDeath') {
+      this.tuningEditor.enemyDeathVolume = ratio * slider.max;
+    } else if (channel === 'master') {
       this.masterVolume = ratio * slider.max;
       soundManager.masterVolumeNode.gain.setTargetAtTime(this.masterVolume, soundManager.context.currentTime, 0.01);
     } else if (channel === 'bgm') {
@@ -1178,13 +1264,14 @@ export class MainScene extends Phaser.Scene {
   }
 
   private refreshVolumeControl(): void {
-    const values: Record<AudioChannel, number> = {
+    const values: Record<VolumeControlChannel, number> = {
       master: this.masterVolume,
       bgm: this.bgmChannelVolume,
-      ...this.audioChannelVolumes
+      ...this.audioChannelVolumes,
+      enemyDeath: this.tuningEditor.enemyDeathVolume
     };
     for (const [channel, slider] of Object.entries(this.volumeSliders) as Array<
-      [AudioChannel, VolumeSliderVisual]
+      [VolumeControlChannel, VolumeSliderVisual]
     >) {
       const value = values[channel];
       const ratio = Phaser.Math.Clamp(value / slider.max, 0, 1);
@@ -1211,9 +1298,11 @@ export class MainScene extends Phaser.Scene {
           800
         );
         break;
-      case 'glowstickAttackSpeed':
+      case 'glowstickLightAttackSpeed':
+      case 'glowstickHeavyAttackSpeed':
       case 'batonSweepSpeed':
-      case 'batonAttackSpeed':
+      case 'batonLightAttackSpeed':
+      case 'batonHeavyAttackSpeed':
         this.tuningEditor[key] = Phaser.Math.Clamp(this.tuningEditor[key] + delta, 0.5, 2);
         break;
       case 'smallGuardBulletSpeed':
@@ -1223,6 +1312,69 @@ export class MainScene extends Phaser.Scene {
       case 'smallGuardAttackFrequency':
       case 'fanAttackFrequency':
         this.tuningEditor[key] = Phaser.Math.Clamp(this.tuningEditor[key] + delta, 0.25, 8);
+        break;
+      case 'glowstickHeavyChargeDelayMs':
+        this.tuningEditor.glowstickHeavyChargeDelayMs = Phaser.Math.Clamp(
+          this.tuningEditor.glowstickHeavyChargeDelayMs + delta,
+          0,
+          1500
+        );
+        break;
+      case 'glowstickHeavyLaserThickness':
+        this.tuningEditor.glowstickHeavyLaserThickness = Phaser.Math.Clamp(
+          this.tuningEditor.glowstickHeavyLaserThickness + delta,
+          12,
+          160
+        );
+        break;
+      case 'batonHeavyCrescentRange':
+        this.tuningEditor.batonHeavyCrescentRange = Phaser.Math.Clamp(
+          this.tuningEditor.batonHeavyCrescentRange + delta,
+          120,
+          1600
+        );
+        break;
+      case 'batonLightSweepAngle':
+        this.tuningEditor.batonLightSweepAngle = Phaser.Math.Clamp(
+          this.tuningEditor.batonLightSweepAngle + delta,
+          30,
+          180
+        );
+        break;
+      case 'batonLightSweepRange':
+        this.tuningEditor.batonLightSweepRange = Phaser.Math.Clamp(
+          this.tuningEditor.batonLightSweepRange + delta,
+          40,
+          400
+        );
+        break;
+      case 'glowstickLightDamage':
+        this.tuningEditor.weaponAttackDamage.glowsticks.light = Phaser.Math.Clamp(
+          this.tuningEditor.weaponAttackDamage.glowsticks.light + delta,
+          0,
+          100
+        );
+        break;
+      case 'glowstickHeavyDamage':
+        this.tuningEditor.weaponAttackDamage.glowsticks.heavy = Phaser.Math.Clamp(
+          this.tuningEditor.weaponAttackDamage.glowsticks.heavy + delta,
+          0,
+          100
+        );
+        break;
+      case 'batonLightDamage':
+        this.tuningEditor.weaponAttackDamage.baton.light = Phaser.Math.Clamp(
+          this.tuningEditor.weaponAttackDamage.baton.light + delta,
+          0,
+          100
+        );
+        break;
+      case 'batonHeavyDamage':
+        this.tuningEditor.weaponAttackDamage.baton.heavy = Phaser.Math.Clamp(
+          this.tuningEditor.weaponAttackDamage.baton.heavy + delta,
+          0,
+          100
+        );
         break;
       case 'glowstickPerfectDamageMultiplier':
         this.tuningEditor.weaponJudgementDamageMultipliers.glowsticks.perfect = Phaser.Math.Clamp(
@@ -1304,13 +1456,24 @@ export class MainScene extends Phaser.Scene {
     const percent = (value: number): string => `${Math.round(value * 100)}%`;
     const values: Record<CombatSettingKey, string> = {
       glowstickBulletSpeed: `${Math.round(this.tuningEditor.glowstickBulletSpeed)} px/s`,
-      glowstickAttackSpeed: percent(this.tuningEditor.glowstickAttackSpeed),
+      glowstickLightAttackSpeed: percent(this.tuningEditor.glowstickLightAttackSpeed),
+      glowstickHeavyAttackSpeed: percent(this.tuningEditor.glowstickHeavyAttackSpeed),
       batonSweepSpeed: percent(this.tuningEditor.batonSweepSpeed),
-      batonAttackSpeed: percent(this.tuningEditor.batonAttackSpeed),
+      batonLightAttackSpeed: percent(this.tuningEditor.batonLightAttackSpeed),
+      batonHeavyAttackSpeed: percent(this.tuningEditor.batonHeavyAttackSpeed),
       smallGuardBulletSpeed: `${Math.round(this.tuningEditor.smallGuardBulletSpeed)} px/s`,
       smallGuardAttackFrequency: `${this.tuningEditor.smallGuardAttackFrequency.toFixed(2)} 次/拍`,
       fanBulletSpeed: `${Math.round(this.tuningEditor.fanBulletSpeed)} px/s`,
       fanAttackFrequency: `${this.tuningEditor.fanAttackFrequency.toFixed(2)} 次/拍`,
+      glowstickHeavyChargeDelayMs: `${Math.round(this.tuningEditor.glowstickHeavyChargeDelayMs)} ms`,
+      glowstickHeavyLaserThickness: `${Math.round(this.tuningEditor.glowstickHeavyLaserThickness)} px`,
+      batonHeavyCrescentRange: `${Math.round(this.tuningEditor.batonHeavyCrescentRange)} px`,
+      batonLightSweepAngle: `${Math.round(this.tuningEditor.batonLightSweepAngle)}°`,
+      batonLightSweepRange: `${Math.round(this.tuningEditor.batonLightSweepRange)} px`,
+      glowstickLightDamage: `${Math.round(this.tuningEditor.weaponAttackDamage.glowsticks.light)} 点`,
+      glowstickHeavyDamage: `${Math.round(this.tuningEditor.weaponAttackDamage.glowsticks.heavy)} 点`,
+      batonLightDamage: `${Math.round(this.tuningEditor.weaponAttackDamage.baton.light)} 点`,
+      batonHeavyDamage: `${Math.round(this.tuningEditor.weaponAttackDamage.baton.heavy)} 点`,
       glowstickPerfectDamageMultiplier: percent(
         this.tuningEditor.weaponJudgementDamageMultipliers.glowsticks.perfect
       ),
@@ -1327,6 +1490,15 @@ export class MainScene extends Phaser.Scene {
     for (const [key, text] of Object.entries(this.combatValueTexts) as Array<
       [CombatSettingKey, Phaser.GameObjects.Text]
     >) text.setText(values[key]);
+    const modeEnabled: Record<WeaponId, boolean> = {
+      glowsticks: this.tuningEditor.glowstickHeavyLaserEnabled,
+      baton: this.tuningEditor.batonHeavyCrescentEnabled
+    };
+    for (const weaponId of ['glowsticks', 'baton'] as const) {
+      const enabled = modeEnabled[weaponId];
+      this.heavyModeToggleButtons[weaponId]?.setFillStyle(enabled ? 0x0f766e : 0x334155);
+      this.heavyModeToggleTexts[weaponId]?.setText(enabled ? '新模式开启' : '沿用旧模式');
+    }
   }
 
   private syncEnemyProjectileDamage(kind: 'smallGuard' | 'fan'): void {
@@ -1394,8 +1566,8 @@ export class MainScene extends Phaser.Scene {
       keycap(-120, -4, 'S'),
       keycap(-78, -4, 'D')
     ];
-    const quoteKey = keycap(58, -40, '" / 左键', 94);
-    const enterKey = keycap(58, 2, 'Enter / 右键', 116);
+    const quoteKey = keycap(58, -40, '"', 54);
+    const enterKey = keycap(58, 2, 'Enter', 78);
     const shiftKey = keycap(-120, 70, 'L / R Shift', 116);
     const escKey = keycap(58, 70, 'Esc', 54);
 
@@ -1637,8 +1809,8 @@ export class MainScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
     ui.add([overlay, title, sub]);
-    ui.add(this.createConfirmButton(-150, 60, '轻攻击：进入游戏', 0x16a34a, () => this.finishTutorial()));
-    ui.add(this.createConfirmButton(150, 60, '重攻击：重新教学', 0x475569, () => this.retryTutorial()));
+    ui.add(this.createConfirmButton(-150, 60, '轻攻击：进入游戏', 0x16a34a));
+    ui.add(this.createConfirmButton(150, 60, '重攻击：重新教学', 0x475569));
     this.confirmUi = ui;
   }
 
@@ -1646,29 +1818,12 @@ export class MainScene extends Phaser.Scene {
     x: number,
     y: number,
     label: string,
-    color: number,
-    onClick: () => void
+    color: number
   ): Phaser.GameObjects.GameObject[] {
     const rect = this.add.rectangle(x, y, 260, 58, color, 0.95).setStrokeStyle(2, 0xffffff, 0.85);
     const text = this.add
       .text(x, y, label, { fontFamily: 'Arial', fontSize: '24px', color: '#ffffff' })
       .setOrigin(0.5);
-    rect.setInteractive({ useHandCursor: true });
-    rect.on('pointerover', () => rect.setScale(1.05));
-    rect.on('pointerout', () => rect.setScale(1));
-    rect.on(
-      'pointerdown',
-      (
-        _pointer: Phaser.Input.Pointer,
-        _localX: number,
-        _localY: number,
-        event: Phaser.Types.Input.EventData
-      ) => {
-        event.stopPropagation();
-        this.suppressAttackUntil = this.time.now + 200;
-        onClick();
-      }
-    );
     return [rect, text];
   }
 
@@ -1756,6 +1911,7 @@ export class MainScene extends Phaser.Scene {
 
   onEnemyKilled(enemy: Enemy): void {
     this.enemies = this.enemies.filter((e) => e !== enemy);
+    this.sfx.enemyDie(Phaser.Math.Clamp(this.tuningEditor.enemyDeathVolume, 0, 1));
 
     // 保安掉警棍，粉丝掉荧光棒；玩家已持有或场上已有时不重复生成。
     const drop = enemy.kind === 'smallGuard' ? BATON : enemy.kind === 'fan' ? GLOWSTICKS : undefined;
@@ -1865,10 +2021,15 @@ export class MainScene extends Phaser.Scene {
       : moveAngle;
   }
 
-  getPlayerWeaponAttackSpeed(weaponId: WeaponId): number {
-    return weaponId === 'baton'
-      ? this.tuningEditor.batonAttackSpeed
-      : this.tuningEditor.glowstickAttackSpeed;
+  getPlayerWeaponAttackSpeed(weaponId: WeaponId, heavy: boolean): number {
+    if (weaponId === 'baton') {
+      return heavy
+        ? this.tuningEditor.batonHeavyAttackSpeed
+        : this.tuningEditor.batonLightAttackSpeed;
+    }
+    return heavy
+      ? this.tuningEditor.glowstickHeavyAttackSpeed
+      : this.tuningEditor.glowstickLightAttackSpeed;
   }
 
   scheduleEnemyAttacks(kind: EnemyKind, globalBeat: number, attack: () => void): void {
@@ -2201,7 +2362,7 @@ export class MainScene extends Phaser.Scene {
     const angle = this.player.aimAngle;
     const attackOrigin = this.player.getAttackOrigin();
 
-    const damage = spec.kind === 'charge' ? 8 : spec.damage;
+    const damage = this.tuningEditor.getWeaponAttackDamage(weapon.id, heavy);
     const judgementDamageMultiplier = this.tuningEditor.getWeaponJudgementDamageMultiplier(
       weapon.id,
       judgement
@@ -2211,9 +2372,7 @@ export class MainScene extends Phaser.Scene {
     const projectileLengthScale = onBeat ? 1 : 0.5;
     const projectileRangeScale = onBeat ? 1 : 0.5;
     const batonSweepScale = onBeat ? 1 : 0.5;
-    const attackAngles = onBeat && this.combo.feverActive()
-      ? [angle, angle + (Math.PI * 2) / 3, angle - (Math.PI * 2) / 3]
-      : [angle];
+    const attackAngles = [angle];
     this.sfx.attack(heavy);
     this.player.playAttackAnimation(heavy);
     // playAttackAnimation 会先把武器放到本次挥击的起手角；此后读取发光端，
@@ -2231,7 +2390,29 @@ export class MainScene extends Phaser.Scene {
         weapon.id === 'baton'
       );
     }
-    for (const attackAngle of attackAngles) {
+    const useGlowstickLaser = heavy
+      && weapon.id === 'glowsticks'
+      && this.tuningEditor.glowstickHeavyLaserEnabled;
+    const useBatonCrescent = heavy
+      && weapon.id === 'baton'
+      && this.tuningEditor.batonHeavyCrescentEnabled;
+    if (useGlowstickLaser) {
+      this.spawnGlowstickLaser(
+        glowstickEmitter.x,
+        glowstickEmitter.y,
+        angle,
+        tunedDamage,
+        onBeat
+      );
+    } else if (useBatonCrescent) {
+      this.spawnBatonCrescent(
+        attackOrigin.x,
+        attackOrigin.y,
+        angle,
+        tunedDamage,
+        onBeat
+      );
+    } else for (const attackAngle of attackAngles) {
       if (weapon.id === 'baton') {
         this.spawnBatonSweep(
           attackOrigin.x,
@@ -2542,7 +2723,7 @@ export class MainScene extends Phaser.Scene {
   ): void {
     const shotAngle = this.quantizeEnemyAttackAngle(angle);
     const attackAngles: number[] = [];
-    if (sourceKind === 'fan') {
+    if (sourceKind === 'fan' && Math.random() < this.tuningEditor.fanSpiralAttackChance) {
       const ballsPerArc = 10;
       const arcSpan = Phaser.Math.DegToRad(54);
       for (let arcIndex = 0; arcIndex < 3; arcIndex += 1) {
@@ -2580,12 +2761,6 @@ export class MainScene extends Phaser.Scene {
     lengthScale = 1,
     rangeScale = 1
   ): void {
-    const now = this.conductor.now();
-    const currentBeat = this.conductor.beatFloatAt(now);
-    const judgedBeat = this.conductor.nearestBeat(now).n;
-    const fullRangeDespawnBeat = Math.max(0, judgedBeat + 1);
-    // 错拍保持原速，但只飞行正常剩余路程的一半。
-    const despawnBeat = currentBeat + (fullRangeDespawnBeat - currentBeat) * rangeScale;
     const bulletLength = PLAYER_BULLET_LENGTH * lengthScale;
     const offsets = Array.from({ length: pelletCount }, (_, index) => {
       if (index === 0) return 0;
@@ -2625,7 +2800,15 @@ export class MainScene extends Phaser.Scene {
       const velocity = this.physics.velocityFromRotation(shotAngle, this.tuningEditor.glowstickBulletSpeed);
       body.setVelocity(velocity.x, velocity.y);
       bullet.setData('damage', damage);
-      bullet.setData('despawnBeat', despawnBeat);
+      bullet.setData('despawnBeat', Infinity);
+      bullet.setData('launchX', spawnX);
+      bullet.setData('launchY', spawnY);
+      bullet.setData(
+        'maxTravelDistance',
+        this.tuningEditor.glowstickInfiniteRange
+          ? Infinity
+          : this.tuningEditor.glowstickMaxRange * rangeScale
+      );
       bullet.setData('trailColor', color);
       bullet.setData('trailThickness', BULLET_THICKNESS);
       this.attachProjectileGlowLayer(
@@ -2661,10 +2844,11 @@ export class MainScene extends Phaser.Scene {
     sweepScale = 1
   ): void {
     const clockwise = !heavy;
-    const halfSweep = (heavy ? Math.PI / 3 : Math.PI / 4) * sweepScale;
+    const lightHalfSweep = Phaser.Math.DegToRad(this.tuningEditor.batonLightSweepAngle / 2);
+    const halfSweep = (heavy ? Math.PI / 3 : lightHalfSweep) * sweepScale;
     const startAngle = aimAngle + (clockwise ? -halfSweep : halfSweep);
     const endAngle = aimAngle + (clockwise ? halfSweep : -halfSweep);
-    const middleRadius = worldSize(74 * 1.25);
+    const middleRadius = heavy ? worldSize(74 * 1.25) : this.tuningEditor.batonLightSweepRange;
     const layerSpacing = worldSize(20 * 1.15);
     const layerTemplates = [
       { radius: middleRadius, lengthScale: 1 },
@@ -2832,6 +3016,9 @@ export class MainScene extends Phaser.Scene {
   }
 
   private clearAllProjectiles(): void {
+    for (const effect of [...this.activeSpecialAttackFx]) {
+      this.destroySpecialAttackFx(effect);
+    }
     for (const obj of this.playerBullets.getChildren().slice()) {
       this.destroyPlayerBullet(obj as Phaser.GameObjects.Rectangle);
     }
@@ -3108,9 +3295,17 @@ export class MainScene extends Phaser.Scene {
           bullet.x > ARENA.x + ARENA.width + pad ||
           bullet.y < ARENA.y - pad ||
           bullet.y > ARENA.y + ARENA.height + pad;
+        const launchX = bullet.getData('launchX') as number | undefined;
+        const launchY = bullet.getData('launchY') as number | undefined;
+        const maxTravelDistance = bullet.getData('maxTravelDistance') as number | undefined;
+        const exceededPlayerRange = group === this.playerBullets
+          && launchX !== undefined
+          && launchY !== undefined
+          && maxTravelDistance !== undefined
+          && Phaser.Math.Distance.Between(launchX, launchY, bullet.x, bullet.y) >= maxTravelDistance;
         if (
           beatFloat >= (bullet.getData('despawnBeat') as number) ||
-          (group === this.playerBullets && outsideArena)
+          (group === this.playerBullets && (outsideArena || exceededPlayerRange))
         ) {
           if (group === this.playerBullets) this.destroyPlayerBullet(bullet);
           else this.destroyEnemyBullet(bullet);
@@ -3227,11 +3422,228 @@ export class MainScene extends Phaser.Scene {
 
   private enterFever(): void {
     this.combo.startFever();
+    this.triggerFeverScreenClear();
     this.queueBeatSfx('feverStart');
     this.hud.setFever(true);
     this.hud.feverBurst();
     this.cameras.main.shake(200, 0.005);
     this.feverBorder.setAlpha(0.9);
+  }
+
+  /** 荧光棒新重击：从发光端射到当前画面边缘，沿线上的每个敌人各受击一次。 */
+  private spawnGlowstickLaser(
+    originX: number,
+    originY: number,
+    angle: number,
+    damage: number,
+    onBeat: boolean
+  ): void {
+    const chargeDelay = this.tuningEditor.glowstickHeavyChargeDelayMs;
+    if (chargeDelay <= 0) {
+      this.fireGlowstickLaser(originX, originY, angle, damage, onBeat);
+      return;
+    }
+    const charge = this.add.graphics({ x: originX, y: originY })
+      .setName('glowstick-heavy-laser-charge')
+      .setDepth(7)
+      .setScale(0.45)
+      .setAlpha(0.45)
+      .setBlendMode(Phaser.BlendModes.ADD);
+    charge.lineStyle(worldSize(onBeat ? 8 : 5), PLAYER_BULLET_COLOR, 0.8);
+    charge.strokeCircle(0, 0, worldSize(onBeat ? 24 : 16));
+    charge.lineStyle(worldSize(3), 0xffffff, 0.95);
+    charge.strokeCircle(0, 0, worldSize(onBeat ? 10 : 7));
+    this.activeSpecialAttackFx.add(charge);
+    this.tweens.add({
+      targets: charge,
+      scale: 1.55,
+      alpha: 1,
+      duration: chargeDelay,
+      ease: 'Cubic.easeIn'
+    });
+    const timer = this.time.delayedCall(chargeDelay, () => {
+      this.activeSpecialAttackTimers.delete(charge);
+      this.destroySpecialAttackFx(charge);
+      if (this.state === 'over') return;
+      this.fireGlowstickLaser(originX, originY, angle, damage, onBeat);
+    });
+    this.activeSpecialAttackTimers.set(charge, timer);
+  }
+
+  private fireGlowstickLaser(
+    originX: number,
+    originY: number,
+    angle: number,
+    damage: number,
+    onBeat: boolean
+  ): void {
+    const directionX = Math.cos(angle);
+    const directionY = Math.sin(angle);
+    const length = this.distanceToViewportEdge(originX, originY, directionX, directionY);
+    const endX = originX + directionX * length;
+    const endY = originY + directionY * length;
+    const beamHalfWidth = this.tuningEditor.glowstickHeavyLaserThickness * (onBeat ? 0.5 : 0.275);
+    const laser = this.add.graphics()
+      .setName('glowstick-heavy-laser')
+      .setDepth(7)
+      .setBlendMode(Phaser.BlendModes.ADD);
+    laser.lineStyle(beamHalfWidth * 2.8, PLAYER_BULLET_COLOR, 0.16);
+    laser.lineBetween(originX, originY, endX, endY);
+    laser.lineStyle(beamHalfWidth * 1.45, PLAYER_BULLET_COLOR, 0.72);
+    laser.lineBetween(originX, originY, endX, endY);
+    laser.lineStyle(Math.max(worldSize(4), beamHalfWidth * 0.38), 0xffffff, 1);
+    laser.lineBetween(originX, originY, endX, endY);
+    this.activeSpecialAttackFx.add(laser);
+
+    for (const enemy of [...this.enemies]) {
+      if (enemy.dead) continue;
+      const offsetX = enemy.x - originX;
+      const offsetY = enemy.y - originY;
+      const projection = offsetX * directionX + offsetY * directionY;
+      if (projection < 0 || projection > length) continue;
+      const perpendicularDistance = Math.abs(offsetX * directionY - offsetY * directionX);
+      if (perpendicularDistance > beamHalfWidth + enemy.radius) continue;
+      enemy.takeDamage(Math.round(damage), angle, GLOWSTICK_KNOCKBACK_SPEED);
+    }
+
+    this.tweens.add({
+      targets: laser,
+      alpha: 0,
+      duration: onBeat ? 240 : 170,
+      ease: 'Cubic.easeOut',
+      onComplete: () => this.destroySpecialAttackFx(laser)
+    });
+  }
+
+  /** 警棍新重击：向准星方向飞行的月牙波，每名敌人最多命中一次并施加强击退。 */
+  private spawnBatonCrescent(
+    originX: number,
+    originY: number,
+    angle: number,
+    damage: number,
+    onBeat: boolean
+  ): void {
+    const radius = worldSize(onBeat ? 48 : 34);
+    const range = this.tuningEditor.batonHeavyCrescentRange * (onBeat ? 1 : 0.5);
+    const crescent = this.add.graphics({ x: originX, y: originY })
+      .setName('baton-heavy-crescent')
+      .setDepth(7)
+      .setRotation(angle)
+      .setBlendMode(Phaser.BlendModes.ADD);
+    crescent.setData('maxRange', range);
+    crescent.setData('slowdownStartDistance', range * 0.85);
+    crescent.lineStyle(worldSize(onBeat ? 24 : 16), BATON_BULLET_COLOR, 0.2);
+    crescent.beginPath();
+    crescent.arc(0, 0, radius, -0.95, 0.95, false);
+    crescent.strokePath();
+    crescent.lineStyle(worldSize(onBeat ? 9 : 6), BATON_BULLET_COLOR, 0.92);
+    crescent.beginPath();
+    crescent.arc(0, 0, radius, -0.95, 0.95, false);
+    crescent.strokePath();
+    crescent.lineStyle(worldSize(onBeat ? 3 : 2), 0xffffff, 0.95);
+    crescent.beginPath();
+    crescent.arc(0, 0, radius, -0.95, 0.95, false);
+    crescent.strokePath();
+    this.activeSpecialAttackFx.add(crescent);
+
+    const hitEnemies = new Set<Enemy>();
+    const hitRadius = radius + worldSize(onBeat ? 18 : 12);
+    const checkHits = (): void => {
+      for (const enemy of [...this.enemies]) {
+        if (enemy.dead || hitEnemies.has(enemy)) continue;
+        if (Phaser.Math.Distance.Between(crescent.x, crescent.y, enemy.x, enemy.y) > hitRadius + enemy.radius) {
+          continue;
+        }
+        hitEnemies.add(enemy);
+        enemy.takeDamage(Math.round(damage), angle, BATON_CRESCENT_KNOCKBACK_SPEED);
+      }
+    };
+    checkHits();
+    const speed = worldSize(720) * this.tuningEditor.batonSweepSpeed;
+    this.tweens.add({
+      targets: crescent,
+      x: originX + Math.cos(angle) * range,
+      y: originY + Math.sin(angle) * range,
+      duration: range / speed * 1000,
+      // 前 70% 时间到达 85% 距离；最后 15% 行程以二次 ease-out 明显减速至零。
+      ease: (progress: number): number => {
+        if (progress <= 0.7) return progress / 0.7 * 0.85;
+        const tail = (progress - 0.7) / 0.3;
+        return 0.85 + 0.15 * (1 - (1 - tail) * (1 - tail));
+      },
+      onUpdate: checkHits,
+      onComplete: () => {
+        this.tweens.add({
+          targets: crescent,
+          alpha: 0,
+          scaleX: 1.16,
+          scaleY: 1.16,
+          delay: 90,
+          duration: 110,
+          ease: 'Cubic.easeOut',
+          onComplete: () => this.destroySpecialAttackFx(crescent)
+        });
+      }
+    });
+  }
+
+  private distanceToViewportEdge(x: number, y: number, directionX: number, directionY: number): number {
+    const distances: number[] = [];
+    if (directionX > 0.0001) distances.push((VIEW_WIDTH - x) / directionX);
+    else if (directionX < -0.0001) distances.push((0 - x) / directionX);
+    if (directionY > 0.0001) distances.push((VIEW_HEIGHT - y) / directionY);
+    else if (directionY < -0.0001) distances.push((0 - y) / directionY);
+    return Math.max(0, Math.min(...distances.filter((distance) => distance >= 0)));
+  }
+
+  private destroySpecialAttackFx(effect: Phaser.GameObjects.Graphics): void {
+    const timer = this.activeSpecialAttackTimers.get(effect);
+    if (timer) {
+      timer.remove();
+      this.activeSpecialAttackTimers.delete(effect);
+    }
+    this.activeSpecialAttackFx.delete(effect);
+    this.tweens.killTweensOf(effect);
+    if (effect.active) effect.destroy();
+  }
+
+  /** Fever 满格或按 C 调试时，以贯穿全屏的竖向发光条从左向右逐列清除敌弹。 */
+  private triggerFeverScreenClear(): void {
+    const enemyBullets = this.bullets.getChildren().slice() as Phaser.GameObjects.Rectangle[];
+    const makeStrip = (x: number, width: number, color: number, alpha: number) => this.add
+      .rectangle(x, 0, width, VIEW_HEIGHT * 1.08, color, alpha)
+      .setBlendMode(Phaser.BlendModes.ADD);
+    const sweep = this.add.container(-180, VIEW_HEIGHT / 2, [
+      makeStrip(-70, 260, 0xff7a00, 0.08),
+      makeStrip(-24, 132, 0xffa31a, 0.2),
+      makeStrip(10, 62, 0xffd166, 0.55),
+      makeStrip(34, 16, 0xffffff, 0.98),
+      makeStrip(52, 28, 0xfff1a8, 0.72)
+    ])
+      .setName('fever-screen-clear-sweep')
+      .setScrollFactor(0)
+      .setDepth(19);
+    this.tweens.add({
+      targets: sweep,
+      x: VIEW_WIDTH + 180,
+      duration: 620,
+      ease: 'Sine.easeInOut',
+      onUpdate: () => {
+        const camera = this.cameras.main;
+        for (const bullet of enemyBullets) {
+          if (!bullet.active) continue;
+          const bulletScreenX = (bullet.x - camera.worldView.x) * camera.zoom;
+          if (bulletScreenX <= sweep.x + 52) this.destroyEnemyBullet(bullet);
+        }
+      },
+      onComplete: () => {
+        for (const bullet of enemyBullets) {
+          if (bullet.active) this.destroyEnemyBullet(bullet);
+        }
+        sweep.destroy(true);
+      }
+    });
+    this.sfx.feverWave();
   }
 
   private endFever(): void {

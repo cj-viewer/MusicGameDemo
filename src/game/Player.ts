@@ -202,7 +202,7 @@ export class Player {
     if (!this.isDodging) {
       const attackAction = heavy ? 'attack-hard' : 'attack-light';
       const playerDepth = worldDepth(this.y + this.body.halfHeight);
-      const attackSpeed = this.scene.getPlayerWeaponAttackSpeed(this.weapon.id);
+      const attackSpeed = this.scene.getPlayerWeaponAttackSpeed(this.weapon.id, heavy);
       const attackDuration = ATTACK_EFFECT_DURATION_MS / attackSpeed;
       this.actionLockedUntil = this.scene.time.now + attackDuration;
       this.setAction(attackAction, true);
