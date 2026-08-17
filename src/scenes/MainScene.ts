@@ -8,32 +8,14 @@ import {
 } from '../game/ComboSystem';
 import { HUD } from '../game/HUD';
 import { Player, PLAYER_RADIUS } from '../game/Player';
-import {
-  PLAYER_ANIMATION_ASSETS,
-  playerAssetPath,
-  playerTextureKey,
-  registerPlayerAnimations
-} from '../game/playerAnimation';
+import { registerPlayerAnimations } from '../game/playerAnimation';
 import { BATON, GLOWSTICKS, getAttackSpec, type WeaponDef, type WeaponId } from '../game/weapons';
 import { Enemy, FanEnemy, SmallGuard, type EnemyKind } from '../game/enemies';
-import {
-  FAN_ATTACK_EFFECT_FRAMES,
-  FAN_CHARACTER_FRAME_COUNT,
-  fanAttackEffectAssetPath,
-  fanAttackEffectTextureKey,
-  fanCharacterAssetPath,
-  fanCharacterTextureKey,
-  registerFanAnimations
-} from '../game/fanAnimation';
+import { registerFanAnimations } from '../game/fanAnimation';
 import { GAMEPAD_BUTTON, rumbleParameters, type RumbleKind } from '../game/GamepadControls';
 import { WORLD_OBJECT_SCALE, worldDepth, worldSize } from '../game/visualScale';
 import type { FpvMiniScene } from './FpvMiniScene';
 import { passesDropChance, TuningEditor } from '../game/TuningEditor';
-import {
-  GUARD_ATTACK_EFFECT_FRAMES,
-  guardAttackEffectAssetPath,
-  guardAttackEffectTextureKey
-} from '../game/guardAnimation';
 import {
   MAIN_CAMERA_BASE_ZOOM,
   MAIN_CAMERA_LOOK_DAMPING_MS,
@@ -43,24 +25,19 @@ import {
   screenLayerOffset
 } from '../game/cameraConfig';
 import { UI_SCALE, VIEW_HEIGHT, VIEW_WIDTH, ui as hd } from '../game/displayConfig';
+import {
+  BGM_TRACKS,
+  DEFAULT_LEVEL_BGM_SLOT,
+  DEFAULT_TUTORIAL_BGM_SLOT,
+  type BgmTrack
+} from '../game/bgmTracks';
+import {
+  queueBgmTrack,
+  queueCoreAssets,
+  queueDeferredBgm,
+  startBackgroundLoad
+} from '../game/assetManifest';
 
-// bgm3.mp3 的实测节拍：对全曲 onset 包络做自相关 + 网格相位搜索得出 BPM，首拍在文件内 0.026s 处。
-interface BgmTrack {
-  key: string;
-  label: string;
-  /** 音频文件原始速度下实测的 BPM，用于换算播放倍率。 */
-  sourceBpm: number;
-  firstBeatOffset: number;
-  loopBeats: number;
-}
-const BGM_TRACKS: readonly BgmTrack[] = [
-  { key: 'bgm-1', label: 'bgm1.mp3', sourceBpm: 145, firstBeatOffset: 0.012, loopBeats: 498 },
-  { key: 'bgm-2', label: 'bgm2.mp3', sourceBpm: 176.47, firstBeatOffset: 0.02, loopBeats: 624 },
-  { key: 'bgm-3', label: 'bgm3.mp3', sourceBpm: 146.32, firstBeatOffset: 0.026, loopBeats: 616 },
-  { key: 'bgm-0', label: 'bgm0.mp3', sourceBpm: 153.846, firstBeatOffset: 0.09, loopBeats: 438 }
-];
-const DEFAULT_TUTORIAL_BGM_SLOT = 3;
-const DEFAULT_LEVEL_BGM_SLOT = 0;
 /** 试玩中的统一节拍速度；BGM 按各自原始 BPM 等比变速到该值。 */
 const BPM = 132;
 
@@ -173,6 +150,8 @@ export class MainScene extends Phaser.Scene {
   private bgm!: Phaser.Sound.WebAudioSound | Phaser.Sound.HTML5AudioSound;
   private bgmFirstBeat = 0;
   private currentBgmTrack: BgmTrack = BGM_TRACKS[DEFAULT_TUTORIAL_BGM_SLOT];
+  /** 目标曲目仍在后台下载时，先记下这次切歌请求，文件到位后再执行。 */
+  private pendingBgmSwitch?: { track: BgmTrack; playNow: boolean };
   private tuningEditor!: TuningEditor;
   private masterVolume = DEFAULT_MASTER_VOLUME;
   private bgmChannelVolume = DEFAULT_BGM_CHANNEL_VOLUME;
@@ -253,54 +232,58 @@ export class MainScene extends Phaser.Scene {
   }
 
   preload(): void {
-    const asset = (file: string): string => `${import.meta.env.BASE_URL}assets/${file}`;
-    this.load.image('guard', asset('images/characters/guard.png'));
-    for (const action of ['idle', 'run'] as const) {
-      for (let frame = 1; frame <= FAN_CHARACTER_FRAME_COUNT; frame++) {
-        this.load.image(
-          fanCharacterTextureKey(action, frame),
-          asset(fanCharacterAssetPath(action, frame))
-        );
-      }
-    }
-    for (const effect of ['attack-light', 'attack-hard'] as const) {
-      for (const frame of FAN_ATTACK_EFFECT_FRAMES[effect]) {
-        this.load.image(
-          fanAttackEffectTextureKey(effect, frame),
-          asset(fanAttackEffectAssetPath(effect, frame))
-        );
-      }
-    }
-    for (const effect of ['attack-light', 'attack-hard'] as const) {
-      for (const frame of GUARD_ATTACK_EFFECT_FRAMES[effect]) {
-        this.load.image(
-          guardAttackEffectTextureKey(effect, frame),
-          asset(guardAttackEffectAssetPath(effect, frame))
-        );
-      }
-    }
-    for (const spec of PLAYER_ANIMATION_ASSETS) {
-      for (let frame = 1; frame <= spec.frameCount; frame++) {
-        this.load.image(playerTextureKey(spec.action, frame), asset(playerAssetPath(spec, frame)));
-      }
-    }
-    this.load.image('player-weapon-glowsticks', asset('images/weapons/light_stick/player/light_stick_player.png'));
-    this.load.image('player-weapon-baton', asset('images/weapons/baton/player/baton_player01.png'));
-    this.load.image(
-      'npc-fan-weapon-glowstick',
-      asset('images/weapons/light_stick/npc_fan01/light_stick_fan01.png')
-    );
-    this.load.audio('beat-light', asset('audio/sfx/sfx-beat-light.mp3'));
-    this.load.audio('beat-heavy', asset('audio/sfx/sfx-beat-heavy.mp3'));
-    this.load.audio('bgm-1', asset('audio/music/bgm1.mp3'));
-    this.load.audio('bgm-2', asset('audio/music/bgm2.mp3'));
-    this.load.audio('bgm-3', asset('audio/music/bgm3.mp3'));
-    this.load.audio('bgm-0', asset('audio/music/bgm0.mp3'));
+    // 正式关卡的 BGM 不在这里排队：它们由 create() 后台补下，教学关不必等。
+    // IntroScene 已在片头播放期间预热过同一批 key，这里通常只剩少量缓存未命中的文件。
+    queueCoreAssets(this);
+    this.createLoadingIndicator();
+  }
+
+  /** preload 期间的进度条，避免远端首次加载时只看到一片黑屏。 */
+  private createLoadingIndicator(): void {
+    if (this.load.list.size === 0 && !this.load.isLoading()) return;
+    const cam = this.cameras.main;
+    const cx = cam.width / 2;
+    const cy = cam.height / 2;
+    const barWidth = hd(420);
+    const barHeight = hd(14);
+    const label = this.add
+      .text(cx, cy - hd(34), '加载中…', {
+        fontFamily: 'Arial, Microsoft YaHei, sans-serif',
+        fontSize: `${hd(22)}px`,
+        color: '#e9d5ff'
+      })
+      .setOrigin(0.5)
+      .setDepth(1000);
+    const frame = this.add
+      .rectangle(cx, cy, barWidth, barHeight)
+      .setStrokeStyle(2, 0x67e8f9, 0.9)
+      .setDepth(1000);
+    const fill = this.add
+      .rectangle(cx - barWidth / 2 + 2, cy, 0, barHeight - 4, 0xec4899)
+      .setOrigin(0, 0.5)
+      .setDepth(1000);
+    const onProgress = (value: number): void => {
+      fill.width = Math.max(0, (barWidth - 4) * value);
+      label.setText(`加载中… ${Math.round(value * 100)}%`);
+    };
+    this.load.on(Phaser.Loader.Events.PROGRESS, onProgress);
+    this.load.once(Phaser.Loader.Events.COMPLETE, () => {
+      this.load.off(Phaser.Loader.Events.PROGRESS, onProgress);
+      label.destroy();
+      frame.destroy();
+      fill.destroy();
+    });
   }
 
   create(): void {
     // 重开局（R 键）会在同一个 Scene 实例上重新执行 create()，先停掉旧的 bgm 避免叠放
     for (const track of BGM_TRACKS) this.sound.stopByKey(track.key);
+    // 教学关只需要教学 BGM；其余曲目在这里挂后台下载，等玩家打完教学早就就绪了。
+    this.pendingBgmSwitch = undefined;
+    this.load.off(Phaser.Loader.Events.FILE_COMPLETE, this.onDeferredFileComplete, this);
+    this.load.on(Phaser.Loader.Events.FILE_COMPLETE, this.onDeferredFileComplete, this);
+    queueDeferredBgm(this);
+    startBackgroundLoad(this);
     this.enemies = [];
     this.pickups = [];
     this.state = 'title';
@@ -853,6 +836,14 @@ export class MainScene extends Phaser.Scene {
       this.conductor.retune(BPM);
       return;
     }
+    if (!this.cache.audio.exists(track.key)) {
+      // 后台还没下完这首：先让当前曲目继续放，文件到位后再无缝切过去，不卡流程。
+      this.pendingBgmSwitch = { track, playNow };
+      queueBgmTrack(this, track);
+      startBackgroundLoad(this);
+      return;
+    }
+    this.pendingBgmSwitch = undefined;
     this.bgm?.stop();
     this.bgm?.destroy();
     this.currentBgmTrack = track;
@@ -867,6 +858,14 @@ export class MainScene extends Phaser.Scene {
       this.bgmFirstBeat = Math.max(0, Math.ceil(this.conductor.beatFloatAt(this.conductor.now())));
       this.playBgmAlignedToBeat(this.bgmFirstBeat);
     }
+  }
+
+  /** 后台补下的 BGM 到位后，补上之前被推迟的切歌。 */
+  private onDeferredFileComplete(key: string, type: string): void {
+    const pending = this.pendingBgmSwitch;
+    if (!pending || type !== 'audio' || key !== pending.track.key) return;
+    this.pendingBgmSwitch = undefined;
+    this.switchBgmTrack(pending.track, pending.playNow);
   }
   private createSettingsPanel(): void {
     const objects: Phaser.GameObjects.GameObject[] = [
