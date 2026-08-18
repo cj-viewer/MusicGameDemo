@@ -16,7 +16,7 @@ export const BGM_TRACKS: readonly BgmTrack[] = [
 ];
 
 export const DEFAULT_TUTORIAL_BGM_SLOT = 3;
-export const DEFAULT_LEVEL_BGM_SLOT = 0;
+export const DEFAULT_LEVEL_BGM_SLOT = 1;
 
 /** BGM 文件在 assets 下的相对路径。 */
 export const bgmAssetPath = (track: BgmTrack): string => `audio/music/${track.label}`;

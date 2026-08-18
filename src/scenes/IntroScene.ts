@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { UI_SCALE } from '../game/displayConfig';
+import { VIEW_HEIGHT, VIEW_WIDTH, ui } from '../game/displayConfig';
 import { queueCoreAssets, startBackgroundLoad } from '../game/assetManifest';
 
 const INTRO_VIDEO_KEY = 'intro-video';
@@ -16,6 +16,8 @@ export class IntroScene extends Phaser.Scene {
   private warmed = false;
   private started = false;
   private finished = false;
+  private menuBackground?: Phaser.GameObjects.Image;
+  private menuContent?: Phaser.GameObjects.Container;
 
   constructor() {
     super('IntroScene');
@@ -31,38 +33,48 @@ export class IntroScene extends Phaser.Scene {
   create(): void {
     this.started = false;
     this.finished = false;
-    // 片头沿用旧 1280×720 排版，但在 1920×1080 内部画布上等比铺满。
-    this.cameras.main.setZoom(UI_SCALE).centerOn(640, 360);
+    // 主界面与视频均覆盖完整 2K 内部画布；开始按钮沿用视觉稿右上留白位置。
+    this.cameras.main.setZoom(1).setScroll(0, 0);
     this.cameras.main.setBackgroundColor('#000000');
 
     this.textures.get(INTRO_TITLE_BACKGROUND_KEY).setFilter(Phaser.Textures.FilterMode.LINEAR);
-    const backdrop = this.add.image(640, 360, INTRO_TITLE_BACKGROUND_KEY);
-    const coverScale = Math.max(1280 / backdrop.width, 720 / backdrop.height);
+    const backdrop = this.add.image(VIEW_WIDTH / 2, VIEW_HEIGHT / 2, INTRO_TITLE_BACKGROUND_KEY);
+    // 保持项目方原图比例，以 Cover 铺满 2K 画布；额外出血用于四向轻视差，避免露边。
+    const coverScale = Math.max(
+      (VIEW_WIDTH + ui(48)) / backdrop.width,
+      (VIEW_HEIGHT + ui(32)) / backdrop.height
+    );
     backdrop.setDisplaySize(backdrop.width * coverScale, backdrop.height * coverScale);
+    this.menuBackground = backdrop;
 
+    const buttonX = ui(1060);
+    const buttonY = ui(230);
     this.startButton = this.add
-      .rectangle(1060, 230, 220, 60, 0x7a244e, 0.44)
-      .setStrokeStyle(2, 0xffffff, 0.92)
+      .rectangle(buttonX, buttonY, ui(220), ui(60), 0x7a244e, 0.44)
+      .setStrokeStyle(ui(2), 0xffffff, 0.92)
       .setInteractive({ useHandCursor: true });
     const startButtonInner = this.add
-      .rectangle(1060, 230, 206, 46, 0xfff8ec, 0.04)
-      .setStrokeStyle(1, 0xfff5dc, 0.72);
+      .rectangle(buttonX, buttonY, ui(206), ui(46), 0xfff8ec, 0.04)
+      .setStrokeStyle(ui(1), 0xfff5dc, 0.72);
     this.startButtonText = this.add
-      .text(1060, 230, '开 始', {
+      .text(buttonX, buttonY, '开 始', {
         fontFamily: '"Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif',
-        fontSize: '26px',
+        fontSize: `${ui(26)}px`,
         fontStyle: 'bold',
         color: '#fffdf1',
-        letterSpacing: 6,
+        letterSpacing: ui(6),
         resolution: 2,
-        shadow: { color: '#7b284d', blur: 4, fill: true, offsetY: 1 }
+        shadow: { color: '#7b284d', blur: ui(4), fill: true, offsetY: ui(1) }
       })
       .setOrigin(0.5);
-    this.startUi = this.add.container(0, 0, [backdrop, this.startButton, startButtonInner, this.startButtonText]).setDepth(2);
+    this.menuContent = this.add
+      .container(0, 0, [this.startButton, startButtonInner, this.startButtonText])
+      .setDepth(2);
+    this.startUi = this.menuContent;
 
-    this.video = this.add.video(640, 360, INTRO_VIDEO_KEY).setDepth(1).setVisible(false);
+    this.video = this.add.video(VIEW_WIDTH / 2, VIEW_HEIGHT / 2, INTRO_VIDEO_KEY).setDepth(1).setVisible(false);
     this.video.once(Phaser.GameObjects.Events.VIDEO_CREATED, (_video: Phaser.GameObjects.Video, width: number, height: number) => {
-      const scale = Math.min(1280 / width, 720 / height);
+      const scale = Math.min(VIEW_WIDTH / width, VIEW_HEIGHT / height);
       this.video?.setDisplaySize(width * scale, height * scale);
     });
     this.video.on(Phaser.GameObjects.Events.VIDEO_COMPLETE, this.playRocketIntro, this);
@@ -72,15 +84,19 @@ export class IntroScene extends Phaser.Scene {
     // 玩家看完片头就能直接进教学关，而不是再等一轮几 MB 的下载。
     this.video.on(Phaser.GameObjects.Events.VIDEO_PLAYING, this.onVideoPlaying, this);
 
-    this.startButton.on('pointerover', () => this.startButton?.setFillStyle(0xa33b68, 0.62).setStrokeStyle(2, 0xfff5dc, 1));
-    this.startButton.on('pointerout', () => this.startButton?.setFillStyle(0x7a244e, 0.44).setStrokeStyle(2, 0xffffff, 0.92));
+    this.startButton.on('pointerover', () =>
+      this.startButton?.setFillStyle(0xa33b68, 0.62).setStrokeStyle(ui(2), 0xfff5dc, 1)
+    );
+    this.startButton.on('pointerout', () =>
+      this.startButton?.setFillStyle(0x7a244e, 0.44).setStrokeStyle(ui(2), 0xffffff, 0.92)
+    );
     this.startButton.on('pointerdown', this.playIntro, this);
     this.input.keyboard?.once('keydown-SPACE', this.finishIntro, this);
 
     this.skipText = this.add
-      .text(1248, 688, '空格跳过', {
+      .text(VIEW_WIDTH - ui(20), VIEW_HEIGHT - ui(20), '空格跳过', {
         fontFamily: 'Arial, Microsoft YaHei, sans-serif',
-        fontSize: '18px',
+        fontSize: `${ui(12)}px`,
         color: '#ffffff'
       })
       .setOrigin(1)
@@ -91,6 +107,16 @@ export class IntroScene extends Phaser.Scene {
     // 玩家一直停在标题页时也别浪费带宽：稍等一会儿仍然开始预热。
     this.warmupTimer = this.time.delayedCall(5000, this.warmGameAssets, undefined, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.cleanup, this);
+  }
+
+  update(): void {
+    if (!this.startUi?.visible || !this.menuBackground || !this.menuContent) return;
+    const pointer = this.input.activePointer;
+    const nx = Phaser.Math.Clamp(pointer.x / Math.max(1, this.scale.width) - 0.5, -0.5, 0.5);
+    const ny = Phaser.Math.Clamp(pointer.y / Math.max(1, this.scale.height) - 0.5, -0.5, 0.5);
+    // 背景位移更小、操作区略大，模拟菜单相机的浅层透视。
+    this.menuBackground.setPosition(VIEW_WIDTH / 2 - nx * ui(18), VIEW_HEIGHT / 2 - ny * ui(12));
+    this.menuContent.setPosition(-nx * ui(32), -ny * ui(22));
   }
 
   /** 把 MainScene 需要的资源排进本 Scene 的 Loader，在后台下载（只做一次）。 */

@@ -37,15 +37,11 @@ const physicalScreenWidth = window.screen.width * window.devicePixelRatio;
 const physicalScreenHeight = window.screen.height * window.devicePixelRatio;
 
 if (physicalScreenWidth < VIEW_WIDTH || physicalScreenHeight < VIEW_HEIGHT) {
-  const warning = document.createElement('div');
-  warning.className = 'resolution-warning';
-  warning.innerHTML = [
-    '<strong>需要 1920 × 1080 或更高分辨率</strong>',
-    `<span>当前物理分辨率约为 ${Math.round(physicalScreenWidth)} × ${Math.round(physicalScreenHeight)}</span>`
-  ].join('');
-  document.querySelector('#game-container')?.appendChild(warning);
-} else {
-  const game = new Phaser.Game(config);
-  // 原型调试句柄（便于控制台/自动化测试访问）
-  (window as unknown as Record<string, unknown>).__game = game;
+  console.warn(
+    `当前物理分辨率约为 ${Math.round(physicalScreenWidth)} × ${Math.round(physicalScreenHeight)}；` +
+    '游戏仍以 2560 × 1440 内部画布通过 FIT 缩放运行。'
+  );
 }
+const game = new Phaser.Game(config);
+// 原型调试句柄（便于控制台/自动化测试访问）
+(window as unknown as Record<string, unknown>).__game = game;

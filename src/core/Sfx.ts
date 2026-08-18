@@ -86,9 +86,12 @@ export class Sfx {
     this.tone(520, 260, 0.1, 'triangle', 0.1, 'damage');
   }
 
-  /** 敌人死亡 */
-  enemyDie(): void {
-    this.tone(330, 55, 0.25, 'triangle', 0.16, 'damage');
+  /** 敌人死亡：高频破裂提示、中频下坠与低频落地叠加，确保能从密集战斗混音中辨认。 */
+  enemyDie(volumeScale = 1): void {
+    const scale = Math.min(1, Math.max(0, volumeScale));
+    this.tone(1040, 620, 0.1, 'square', 0.1 * scale, 'damage');
+    this.tone(620, 95, 0.3, 'sawtooth', 0.2 * scale, 'damage', 0.025);
+    this.tone(190, 48, 0.38, 'triangle', 0.18 * scale, 'damage', 0.04);
   }
 
   /** 进入 Fever Time：上行琶音 */
