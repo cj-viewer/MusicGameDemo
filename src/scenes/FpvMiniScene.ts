@@ -237,7 +237,7 @@ export class FpvMiniScene extends Phaser.Scene {
           .setVisible(true)
           .setPosition(projected.screenX, HORIZON_Y + (projected.bottomY - HORIZON_Y) * 0.55)
           .setDisplaySize(Math.max(2, projected.width), Math.max(2, projected.height))
-          .setFillStyle(bullet.fillColor)
+          .setFillStyle(bullet.fillColor, 0.38)
           .setStrokeStyle()
           .setDepth(-projected.dist);
       }

@@ -39,8 +39,8 @@ const DODGE_BEAT_WINDOW = 0.12;
 const ATTACK_EFFECT_DURATION_MS = 200;
 const PLAYER_ATTACK_SIDE_OFFSET = 5.12 * 1.5;
 const PLAYER_WEAPON_WAIST_OFFSET_Y = 15 * UI_SCALE;
-const LIGHT_ATTACK_EFFECT_ALPHA = 0.72;
-const HARD_ATTACK_EFFECT_ALPHA = 0.92;
+const LIGHT_ATTACK_EFFECT_ALPHA = 0.46;
+const HARD_ATTACK_EFFECT_ALPHA = 0.59;
 const HARD_ATTACK_EFFECT_SCALE = 1.18;
 const LIGHT_ATTACK_EMISSIVE_COLOR = 0xfff36b;
 const HARD_ATTACK_EMISSIVE_COLOR = 0xf28cff;
@@ -104,12 +104,12 @@ export class Player {
       this.attackFx,
       LIGHT_ATTACK_EMISSIVE_COLOR,
       {
-        glowStrength: 1.05,
-        innerStrength: 0.08,
+        glowStrength: 0.55,
+        innerStrength: 0.04,
         glowDistance: 22,
         glowQuality: 2,
         blurRadius: 9,
-        bloomAmount: 0.44,
+        bloomAmount: 0.22,
         threshold: 0.06
       }
     );

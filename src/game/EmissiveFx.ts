@@ -48,7 +48,7 @@ export function enableEmissiveBloom(
   const bloom = filters.internal.addParallelFilters();
   bloom.top.addThreshold(options.threshold ?? 0.08, 1);
   const blurRadius = options.blurRadius ?? 8;
-  const blur = bloom.top.addBlur(2, blurRadius, blurRadius, 0.82, color, 3);
+  const blur = bloom.top.addBlur(2, blurRadius, blurRadius, 0.52, color, 3);
   blur.setPaddingOverride(null);
   bloom.blend.blendMode = Phaser.BlendModes.ADD;
   bloom.blend.amount = options.bloomAmount ?? 0.42;

@@ -162,6 +162,14 @@ const TUTORIAL_CONTROL_ENTRANCE_DELAY = 160;
 const TUTORIAL_CONTROL_ENTRANCE_DURATION = 280;
 const TUTORIAL_CONTROL_NEXT_DELAY = 100;
 const TUTORIAL_CONTROL_EXIT_DURATION = 220;
+/** 正式关四拍图案按最新目视反馈缩到旧紧凑版的 58%。 */
+const FORMAL_PATTERN_SCALE = 0.58;
+/** 放在 ARENA 顶部反馈框线（2K y=96）下方，避免框线穿过图案。 */
+const FORMAL_PATTERN_ICON_Y = 112;
+const FORMAL_PATTERN_BASE_COLOR = 0xffffff;
+const FORMAL_PATTERN_LIGHT_COLOR = 0x67e8f9;
+const FORMAL_PATTERN_HEAVY_COLOR = 0xfbbf24;
+const FORMAL_PATTERN_HIT_FLASH_MS = 220;
 const GLOWSTICK_KNOCKBACK_SPEED = 150;
 const BATON_KNOCKBACK_SPEED = GLOWSTICK_KNOCKBACK_SPEED * 1.25;
 const BATON_CRESCENT_KNOCKBACK_SPEED = 320;
@@ -478,6 +486,7 @@ export class MainScene extends Phaser.Scene {
     this.combo = new ComboSystem(this.conductor, GLOWSTICKS.pattern);
     this.hud = new HUD(this, this.conductor);
     this.player = new Player(this, hd(640), hd(400));
+    this.hud.updatePlayerHpPosition(this.player.x, this.player.y);
 
     this.hud.setPattern(GLOWSTICKS.pattern, GLOWSTICKS.name);
     this.conductor.setCuePattern(GLOWSTICKS.pattern);
@@ -547,6 +556,7 @@ export class MainScene extends Phaser.Scene {
     }
 
     this.player.update(this.time.now, delta);
+    this.hud.updatePlayerHpPosition(this.player.x, this.player.y);
     for (const enemy of this.enemies) enemy.update(delta);
     for (const fan of this.tutorialFans) fan.update(delta);
     this.updateEnemyBulletBeatSurge(delta);
@@ -2028,14 +2038,14 @@ export class MainScene extends Phaser.Scene {
 
     const ui = this.add
       .container(
-        CAMERA_BASE_SCROLL_X + (tutorial ? 0 : hd(640) / MAIN_CAMERA_BASE_ZOOM),
+        CAMERA_BASE_SCROLL_X + (tutorial ? 0 : hd(600) / MAIN_CAMERA_BASE_ZOOM),
         CAMERA_BASE_SCROLL_Y
       )
       .setDepth(15)
       .setScale(
         tutorial
           ? PSD_LAYOUT_SCALE / MAIN_CAMERA_BASE_ZOOM
-          : UI_SCALE / MAIN_CAMERA_BASE_ZOOM
+          : (UI_SCALE * FORMAL_PATTERN_SCALE) / MAIN_CAMERA_BASE_ZOOM
       )
       .setScrollFactor(0);
 
@@ -2062,12 +2072,12 @@ export class MainScene extends Phaser.Scene {
       this.tutorialBeatHighlights = createHighlightLayer();
       this.tutorialHitHighlights = createHighlightLayer();
     } else {
-      const iconY = 72;
+      // 默认以白色显示当前连段；只有正确输入才短暂恢复轻 / 重拍色。
       const xs = [-108, -36, 36, 108];
       this.combo.pattern.forEach((key, i) => {
         const icon: Phaser.GameObjects.Shape = key === 'L'
-          ? this.add.circle(xs[i], iconY, 14).setStrokeStyle(3, 0x67e8f9)
-          : this.add.rectangle(xs[i], iconY, 22, 22, 0xfbbf24).setAngle(45);
+          ? this.add.circle(xs[i], FORMAL_PATTERN_ICON_Y, 14).setStrokeStyle(3, FORMAL_PATTERN_BASE_COLOR)
+          : this.add.rectangle(xs[i], FORMAL_PATTERN_ICON_Y, 22, 22, FORMAL_PATTERN_BASE_COLOR).setAngle(45);
         ui.add(icon);
         this.patternIcons.push(icon);
       });
@@ -2210,9 +2220,36 @@ export class MainScene extends Phaser.Scene {
 
     const icon = this.patternIcons[beatIdx];
     if (!icon || !this.patternPanel) return;
-    const ring = this.add.circle(icon.x, icon.y, 16).setStrokeStyle(3, 0x4ade80, 0.95);
-    this.patternPanel.add(ring);
-    this.tweens.add({ targets: ring, scale: 1.9, alpha: 0, duration: 220, onComplete: () => ring.destroy() });
+    const panel = this.patternPanel;
+    const hitColor = this.combo.pattern[beatIdx] === 'H'
+      ? FORMAL_PATTERN_HEAVY_COLOR
+      : FORMAL_PATTERN_LIGHT_COLOR;
+    this.setFormalPatternIconColor(beatIdx, hitColor);
+    const ring = this.add.circle(icon.x, icon.y, 16).setStrokeStyle(3, hitColor, 0.82);
+    panel.add(ring);
+    this.tweens.add({
+      targets: ring,
+      scale: 1.9,
+      alpha: 0,
+      duration: FORMAL_PATTERN_HIT_FLASH_MS,
+      onComplete: () => ring.destroy()
+    });
+    this.time.delayedCall(FORMAL_PATTERN_HIT_FLASH_MS, () => {
+      if (
+        !icon.active
+        || this.patternPanelMode !== 'compact'
+        || this.patternPanel !== panel
+        || this.patternIcons[beatIdx] !== icon
+      ) return;
+      this.setFormalPatternIconColor(beatIdx, FORMAL_PATTERN_BASE_COLOR);
+    });
+  }
+
+  private setFormalPatternIconColor(beatIdx: number, color: number): void {
+    const icon = this.patternIcons[beatIdx];
+    if (!icon) return;
+    if (this.combo.pattern[beatIdx] === 'L') icon.setStrokeStyle(3, color, 1);
+    else icon.setFillStyle(color, 1);
   }
 
   /** 图标行右侧弹出 ✓/✕ 小节结果 */
@@ -2312,7 +2349,7 @@ export class MainScene extends Phaser.Scene {
     this.stageEnvironment.showSecondLevel();
     this.state = 'intermission';
     this.switchBgmTrack(BGM_TRACKS[this.tuningEditor.levelBgmSlot]);
-    this.hud.setWave('准备…');
+    this.hud.setWave('');
     // 节拍同步倒计时：每小节减一，5→1 后下一小节开波
     this.countdownRemaining = 5;
   }
@@ -3021,13 +3058,13 @@ export class MainScene extends Phaser.Scene {
     const gfx = this.add.graphics().setDepth(6).setBlendMode(Phaser.BlendModes.ADD).enableFilters();
     const filters = gfx.filters;
     if (filters) {
-      const glow = filters.internal.addGlow(0xf97316, 1, 0.08, 1, false, 2, worldSize(18));
+      const glow = filters.internal.addGlow(0xf97316, 0.55, 0.04, 1, false, 2, worldSize(18));
       glow.setPaddingOverride(null);
       const bloom = filters.internal.addParallelFilters();
       bloom.top.addThreshold(0.04, 1);
-      bloom.top.addBlur(2, 8, 8, 0.86, 0xf97316, 3);
+      bloom.top.addBlur(2, 8, 8, 0.55, 0xf97316, 3);
       bloom.blend.blendMode = Phaser.BlendModes.ADD;
-      bloom.blend.amount = 0.52;
+      bloom.blend.amount = 0.25;
     }
     const damaged = new Set<Enemy>();
 
@@ -3047,7 +3084,7 @@ export class MainScene extends Phaser.Scene {
       onUpdate: () => {
         const radius = 24 + counter.value * (maxRadius - 24);
         gfx.clear();
-        gfx.lineStyle(worldSize(5), 0xf97316, 1 - counter.value * 0.8);
+        gfx.lineStyle(worldSize(5), 0xf97316, (1 - counter.value * 0.8) * 0.6);
         if (full) {
           gfx.strokeCircle(x, y, radius);
         } else {
@@ -3112,16 +3149,16 @@ export class MainScene extends Phaser.Scene {
   ): void {
     const fanOrbDiameter = worldSize(9);
     const displayColor = sourceKind === 'fan' ? FAN_BULLET_COLOR : GUARD_BULLET_COLOR;
-    const coreColor = this.mixColorWithWhite(displayColor, 0.66);
+    const coreColor = this.mixColorWithWhite(displayColor, 0.18);
     const visualDiameter = sourceKind === 'fan' ? fanOrbDiameter : ENEMY_BULLET_THICKNESS;
     const bullet = this.add
       .rectangle(x, y, ENEMY_BULLET_THICKNESS, ENEMY_BULLET_THICKNESS, coreColor, 0)
       .setRotation(angle)
       .setDepth(4);
     const projectileVisual = this.add
-      .circle(x, y, visualDiameter * 0.48, coreColor, 1)
+      .circle(x, y, visualDiameter * 0.48, coreColor, 0.52)
       .setDepth(4)
-      .setBlendMode(Phaser.BlendModes.ADD);
+      .setBlendMode(Phaser.BlendModes.NORMAL);
     this.bullets.add(bullet);
     const body = bullet.body as Phaser.Physics.Arcade.Body;
     const hitboxSize = sourceKind === 'fan' ? fanOrbDiameter : ENEMY_BULLET_THICKNESS;
@@ -3144,7 +3181,7 @@ export class MainScene extends Phaser.Scene {
       visualDiameter * 0.96 + ENEMY_PROJECTILE_GLOW_DISTANCE * 2,
       0,
       0,
-      1
+      0.08
     );
     bullet.setData('bursting', this.tuningEditor.enemyBulletBeatSurgeEnabled);
     bullet.setData('hitboxMode', 'straight');
@@ -3280,7 +3317,7 @@ export class MainScene extends Phaser.Scene {
         bulletLength,
         BULLET_THICKNESS,
         coreColor,
-        onBeat ? 0.96 : 0.94
+        onBeat ? 0.58 : 0.52
       )
         .setDisplaySize(
           bulletLength * PLAYER_LINE_CORE_LENGTH_SCALE,
@@ -3315,7 +3352,7 @@ export class MainScene extends Phaser.Scene {
         BULLET_THICKNESS * PLAYER_LINE_GLOW_THICKNESS_SCALE,
         0,
         0,
-        0.74
+        0.34
       );
       bullet.setData('knockbackAngle', shotAngle);
       bullet.setData('knockbackSpeed', GLOWSTICK_KNOCKBACK_SPEED);
@@ -3396,14 +3433,14 @@ export class MainScene extends Phaser.Scene {
         visual.clear();
         // 用两层 ADD 线替代每条弧线独立的 Glow/Bloom 过滤器。
         // 仍保留亮边观感，但避免高 Combo 时多条实时滤镜打断主循环。
-        visual.lineStyle(BULLET_THICKNESS * 2.4, BATON_BULLET_COLOR, 0.22);
+        visual.lineStyle(BULLET_THICKNESS * 2.4, BATON_BULLET_COLOR, 0.12);
         visual.beginPath();
         visual.arc(originX, originY, radius, angle - halfArcAngle, angle + halfArcAngle, false);
         visual.strokePath();
         visual.lineStyle(
           BULLET_THICKNESS,
           this.mixColorWithWhite(BATON_BULLET_COLOR, onBeat ? 0.82 : 0.7),
-          1
+          0.62
         );
         visual.beginPath();
         visual.arc(originX, originY, radius, angle - halfArcAngle, angle + halfArcAngle, false);
@@ -3453,7 +3490,7 @@ export class MainScene extends Phaser.Scene {
 
         const angle = bullet.rotation;
         const length = Phaser.Math.Clamp(speed * 0.045 * WORLD_OBJECT_SCALE, worldSize(8), worldSize(42));
-        const alpha = Phaser.Math.Clamp(0.06 + speed / 4000, 0.08, 0.24);
+        const alpha = Phaser.Math.Clamp(0.04 + speed / 6000, 0.05, 0.16);
         const color = (bullet.getData('trailColor') as number | undefined) ?? bullet.fillColor;
         const thickness = (bullet.getData('trailThickness') as number | undefined) ?? BULLET_THICKNESS;
         const trail = this.add
@@ -3951,17 +3988,17 @@ export class MainScene extends Phaser.Scene {
       .setName('glowstick-heavy-laser-charge')
       .setDepth(7)
       .setScale(0.45)
-      .setAlpha(0.45)
+      .setAlpha(0.3)
       .setBlendMode(Phaser.BlendModes.ADD);
-    charge.lineStyle(worldSize(onBeat ? 8 : 5), PLAYER_BULLET_COLOR, 0.8);
+    charge.lineStyle(worldSize(onBeat ? 8 : 5), PLAYER_BULLET_COLOR, 0.55);
     charge.strokeCircle(0, 0, worldSize(onBeat ? 24 : 16));
-    charge.lineStyle(worldSize(3), 0xffffff, 0.95);
+    charge.lineStyle(worldSize(3), 0xffffff, 0.7);
     charge.strokeCircle(0, 0, worldSize(onBeat ? 10 : 7));
     this.activeSpecialAttackFx.add(charge);
     this.tweens.add({
       targets: charge,
       scale: 1.55,
-      alpha: 1,
+      alpha: 0.62,
       duration: chargeDelay,
       ease: 'Cubic.easeIn'
     });
@@ -3991,11 +4028,11 @@ export class MainScene extends Phaser.Scene {
       .setName('glowstick-heavy-laser')
       .setDepth(7)
       .setBlendMode(Phaser.BlendModes.ADD);
-    laser.lineStyle(beamHalfWidth * 2.8, PLAYER_BULLET_COLOR, 0.16);
+    laser.lineStyle(beamHalfWidth * 2.8, PLAYER_BULLET_COLOR, 0.1);
     laser.lineBetween(originX, originY, endX, endY);
-    laser.lineStyle(beamHalfWidth * 1.45, PLAYER_BULLET_COLOR, 0.72);
+    laser.lineStyle(beamHalfWidth * 1.45, PLAYER_BULLET_COLOR, 0.42);
     laser.lineBetween(originX, originY, endX, endY);
-    laser.lineStyle(Math.max(worldSize(4), beamHalfWidth * 0.38), 0xffffff, 1);
+    laser.lineStyle(Math.max(worldSize(4), beamHalfWidth * 0.38), 0xffffff, 0.62);
     laser.lineBetween(originX, originY, endX, endY);
     this.activeSpecialAttackFx.add(laser);
 
@@ -4036,15 +4073,15 @@ export class MainScene extends Phaser.Scene {
       .setBlendMode(Phaser.BlendModes.ADD);
     crescent.setData('maxRange', range);
     crescent.setData('slowdownStartDistance', range * 0.85);
-    crescent.lineStyle(worldSize(onBeat ? 24 : 16), BATON_BULLET_COLOR, 0.2);
+    crescent.lineStyle(worldSize(onBeat ? 24 : 16), BATON_BULLET_COLOR, 0.1);
     crescent.beginPath();
     crescent.arc(0, 0, radius, -0.95, 0.95, false);
     crescent.strokePath();
-    crescent.lineStyle(worldSize(onBeat ? 9 : 6), BATON_BULLET_COLOR, 0.92);
+    crescent.lineStyle(worldSize(onBeat ? 9 : 6), BATON_BULLET_COLOR, 0.52);
     crescent.beginPath();
     crescent.arc(0, 0, radius, -0.95, 0.95, false);
     crescent.strokePath();
-    crescent.lineStyle(worldSize(onBeat ? 3 : 2), 0xffffff, 0.95);
+    crescent.lineStyle(worldSize(onBeat ? 3 : 2), 0xffffff, 0.62);
     crescent.beginPath();
     crescent.arc(0, 0, radius, -0.95, 0.95, false);
     crescent.strokePath();
@@ -4118,11 +4155,11 @@ export class MainScene extends Phaser.Scene {
       .rectangle(x, 0, width, VIEW_HEIGHT * 1.08, color, alpha)
       .setBlendMode(Phaser.BlendModes.ADD);
     const sweep = this.add.container(-180, VIEW_HEIGHT / 2, [
-      makeStrip(-70, 260, 0xff7a00, 0.08),
-      makeStrip(-24, 132, 0xffa31a, 0.2),
-      makeStrip(10, 62, 0xffd166, 0.55),
-      makeStrip(34, 16, 0xffffff, 0.98),
-      makeStrip(52, 28, 0xfff1a8, 0.72)
+      makeStrip(-70, 260, 0xff7a00, 0.04),
+      makeStrip(-24, 132, 0xffa31a, 0.1),
+      makeStrip(10, 62, 0xffd166, 0.28),
+      makeStrip(34, 16, 0xffffff, 0.58),
+      makeStrip(52, 28, 0xfff1a8, 0.36)
     ])
       .setName('fever-screen-clear-sweep')
       .setScrollFactor(0)

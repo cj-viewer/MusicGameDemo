@@ -7,13 +7,29 @@ import { UI_SCALE, VIEW_HEIGHT, VIEW_WIDTH } from './displayConfig';
 const BAR_CENTER_X = 640;
 const BAR_Y = 668;
 const PANEL_WIDTH = 780;
-// Combo 环半径为 22px，向右移动自身宽度的一半，即 22px。
-const METER_X = BAR_CENTER_X - 448;
-const WEAPON_NAME_X = METER_X + 54;
+/** 正式关 Combo / 武器框严格收进两侧前景物件之间的可见空隙。 */
+const COMBO_PANEL_X = 503;
+const COMBO_PANEL_Y = 662;
+const COMBO_PANEL_WIDTH = 184;
+const COMBO_PANEL_HEIGHT = 50;
+const COMBO_PANEL_CENTER_X = COMBO_PANEL_X + COMBO_PANEL_WIDTH / 2;
+const COMBO_PANEL_CENTER_Y = COMBO_PANEL_Y + COMBO_PANEL_HEIGHT / 2;
+/** 正式关 Combo / 武器整组继续等比缩放，最终外框约为 265 × 72px。 */
+const COMBO_PANEL_SCALE = 0.72;
+const METER_X = COMBO_PANEL_X + 46;
+const METER_Y = COMBO_PANEL_CENTER_Y + 5;
+const METER_RADIUS = 18;
+const WEAPON_NAME_X = COMBO_PANEL_X + 104;
 const STATE_X = BAR_CENTER_X + 400;
-const HP_X = 32;
-const HP_Y = 42;
-const HP_WIDTH = 220;
+/** Wave 文本移到四拍原来的上方位置；下移后的四拍不会与其重叠。 */
+const WAVE_X = 600;
+const WAVE_Y = 19;
+const COMBO_LABEL_Y = COMBO_PANEL_CENTER_Y - 14;
+/** 角色头顶血条使用世界单位；最终屏幕足迹约为 153 × 53px。 */
+const PLAYER_HP_FRAME_WIDTH = 144;
+const PLAYER_HP_FRAME_HEIGHT = 50;
+const PLAYER_HP_BAR_WIDTH = 128;
+const PLAYER_HP_OFFSET_Y = 80;
 const HUD_FRAME_COLOR = 0xfffdf1;
 const HUD_GLASS_COLOR = 0xf2f0e8;
 const HUD_TEXT_COLOR = '#fffdf1';
@@ -71,6 +87,8 @@ export class HUD {
   private hpBaseColor = 0xd4f2df;
   private hpPulseUntil = 0;
   private screenLayer: Phaser.GameObjects.Container;
+  private formalStatusLayer: Phaser.GameObjects.Container;
+  private playerHpLayer: Phaser.GameObjects.Container;
 
   constructor(scene: Phaser.Scene, conductor: Conductor) {
     this.scene = scene;
@@ -94,10 +112,32 @@ export class HUD {
       hudChrome.lineBetween(x + width, y + height - corner, x + width, y + height);
       hudChrome.lineBetween(x + width - corner, y + height, x + width, y + height);
     };
-    drawGlassFrame(20, 12, 248, 58);
-    drawGlassFrame(128, 612, 244, 96);
+    drawGlassFrame(COMBO_PANEL_X, COMBO_PANEL_Y, COMBO_PANEL_WIDTH, COMBO_PANEL_HEIGHT);
     hudChrome.lineStyle(1, HUD_FRAME_COLOR, 0.2);
-    hudChrome.lineBetween(230, 638, 230, 694);
+    hudChrome.lineBetween(
+      COMBO_PANEL_X + 92,
+      COMBO_PANEL_Y + 10,
+      COMBO_PANEL_X + 92,
+      COMBO_PANEL_Y + COMBO_PANEL_HEIGHT - 10
+    );
+
+    const playerHpChrome = scene.add.graphics().setDepth(9);
+    const hpLeft = -PLAYER_HP_FRAME_WIDTH / 2;
+    const hpTop = -PLAYER_HP_FRAME_HEIGHT / 2;
+    const hpCorner = 8;
+    playerHpChrome.fillStyle(HUD_GLASS_COLOR, 0.09);
+    playerHpChrome.fillRect(hpLeft, hpTop, PLAYER_HP_FRAME_WIDTH, PLAYER_HP_FRAME_HEIGHT);
+    playerHpChrome.lineStyle(2, HUD_FRAME_COLOR, 0.48);
+    playerHpChrome.strokeRect(hpLeft, hpTop, PLAYER_HP_FRAME_WIDTH, PLAYER_HP_FRAME_HEIGHT);
+    playerHpChrome.lineStyle(3, HUD_FRAME_COLOR, 0.88);
+    playerHpChrome.lineBetween(hpLeft, hpTop, hpLeft + hpCorner, hpTop);
+    playerHpChrome.lineBetween(hpLeft, hpTop, hpLeft, hpTop + hpCorner);
+    playerHpChrome.lineBetween(-hpLeft - hpCorner, hpTop, -hpLeft, hpTop);
+    playerHpChrome.lineBetween(-hpLeft, hpTop, -hpLeft, hpTop + hpCorner);
+    playerHpChrome.lineBetween(hpLeft, -hpTop - hpCorner, hpLeft, -hpTop);
+    playerHpChrome.lineBetween(hpLeft, -hpTop, hpLeft + hpCorner, -hpTop);
+    playerHpChrome.lineBetween(-hpLeft, -hpTop - hpCorner, -hpLeft, -hpTop);
+    playerHpChrome.lineBetween(-hpLeft - hpCorner, -hpTop, -hpLeft, -hpTop);
 
     // 判定条背板
     this.panel = scene.add
@@ -116,7 +156,7 @@ export class HUD {
       .setDepth(10);
 
     this.feverText = scene.add
-      .text(METER_X, BAR_Y - 42, 'ComboMeter', {
+      .text(METER_X, COMBO_LABEL_Y, 'ComboMeter', {
         fontFamily: HUD_FONT,
         fontSize: '15px',
         color: HUD_TEXT_COLOR,
@@ -130,12 +170,12 @@ export class HUD {
 
     this.meterGfx = scene.add.graphics().setDepth(10);
     this.meterBeatRing = scene.add
-      .circle(METER_X, BAR_Y, 22)
+      .circle(METER_X, METER_Y, METER_RADIUS)
       .setStrokeStyle(2, HUD_FRAME_COLOR, 0.72)
       .setFillStyle(0, 0)
       .setDepth(10);
     this.meterText = scene.add
-      .text(METER_X, BAR_Y, '0', {
+      .text(METER_X, METER_Y, '0', {
         fontFamily: HUD_FONT,
         fontSize: '20px',
         color: HUD_TEXT_COLOR,
@@ -146,9 +186,9 @@ export class HUD {
 
     // HP
     this.hpLabel = scene.add
-      .text(HP_X, HP_Y - 22, 'PLAYER HP', {
+      .text(-PLAYER_HP_BAR_WIDTH / 2, -13, 'HP', {
         fontFamily: HUD_FONT,
-        fontSize: '13px',
+        fontSize: '14px',
         color: HUD_TEXT_COLOR,
         letterSpacing: 1,
         resolution: 2,
@@ -157,33 +197,33 @@ export class HUD {
       .setOrigin(0, 0.5)
       .setDepth(11);
     this.hpBarBg = scene.add
-      .rectangle(HP_X, HP_Y, HP_WIDTH + 4, 16, HUD_FRAME_COLOR, 0.08)
+      .rectangle(-PLAYER_HP_BAR_WIDTH / 2 - 2, 10, PLAYER_HP_BAR_WIDTH + 4, 16, HUD_FRAME_COLOR, 0.08)
       .setOrigin(0, 0.5)
       .setStrokeStyle(1, HUD_FRAME_COLOR, 0.52)
       .setDepth(10);
     this.hpBar = scene.add
-      .rectangle(HP_X + 2, HP_Y, HP_WIDTH, 10, 0xd4f2df)
+      .rectangle(-PLAYER_HP_BAR_WIDTH / 2, 10, PLAYER_HP_BAR_WIDTH, 10, 0xd4f2df)
       .setOrigin(0, 0.5)
       .setAlpha(0.9)
       .setDepth(10);
     this.hpText = scene.add
-      .text(HP_X + HP_WIDTH / 2 + 2, HP_Y, '100 / 100', {
+      .text(PLAYER_HP_BAR_WIDTH / 2, -13, '100 / 100', {
         fontFamily: HUD_FONT,
-        fontSize: '12px',
+        fontSize: '13px',
         color: HUD_MUTED_TEXT_COLOR,
         resolution: 2,
         shadow: { offsetX: 0, offsetY: 1, color: 'rgba(43, 63, 58, 0.55)', blur: 1, fill: true }
       })
-      .setOrigin(0.5)
+      .setOrigin(1, 0.5)
       .setDepth(10);
 
     this.waveText = scene.add
-      .text(BAR_CENTER_X, 24, '', { fontFamily: 'Arial', fontSize: '20px', color: '#e2e8f0' })
+      .text(WAVE_X, WAVE_Y, '', { fontFamily: 'Arial', fontSize: '13px', color: '#e2e8f0' })
       .setOrigin(0.5)
       .setDepth(10);
 
     this.weaponText = scene.add
-      .text(WEAPON_NAME_X, BAR_Y, '', {
+      .text(WEAPON_NAME_X, METER_Y, '', {
         fontFamily: HUD_FONT,
         fontSize: '20px',
         color: '#d8f3ed',
@@ -231,29 +271,32 @@ export class HUD {
       .setVisible(false);
 
     // 主场景镜头会做轻微前探和拉远；用独立屏幕层抵消 scroll 与 zoom，保留旧 HUD 像素布局。
+    this.formalStatusLayer = scene.add
+      .container(
+        COMBO_PANEL_CENTER_X * (1 - COMBO_PANEL_SCALE),
+        COMBO_PANEL_CENTER_Y * (1 - COMBO_PANEL_SCALE),
+        [hudChrome, this.feverText, this.meterGfx, this.meterBeatRing, this.meterText, this.weaponText]
+      )
+      .setScale(COMBO_PANEL_SCALE);
+
     this.screenLayer = scene.add
       .container(screenLayerOffset(VIEW_WIDTH), screenLayerOffset(VIEW_HEIGHT))
       .setDepth(10)
       .setScale(UI_SCALE / MAIN_CAMERA_BASE_ZOOM)
       .setScrollFactor(0);
     this.screenLayer.add([
-      hudChrome,
+      this.formalStatusLayer,
       this.panel,
       this.centerMark,
       this.centerLine,
-      this.feverText,
-      this.meterGfx,
-      this.meterBeatRing,
-      this.hpLabel,
-      this.meterText,
-      this.hpBarBg,
-      this.hpBar,
-      this.hpText,
       this.waveText,
-      this.weaponText,
       this.stateText,
       this.messageText
     ]);
+
+    this.playerHpLayer = scene.add
+      .container(0, 0, [playerHpChrome, this.hpLabel, this.hpBarBg, this.hpBar, this.hpText])
+      .setDepth(9);
 
     this.setCombo(0, 0);
     this.setBeatGuideVisible(false);
@@ -442,6 +485,12 @@ export class HUD {
   /** 教学关使用 PSD 自带的底部状态栏；正式关恢复现有动态 HUD。 */
   setGameplayHudVisible(visible: boolean): void {
     this.screenLayer.setVisible(visible);
+    this.playerHpLayer.setVisible(visible);
+  }
+
+  /** 正式关每帧调用：HP 是玩家正式 HUD 中唯一使用世界坐标的组件。 */
+  updatePlayerHpPosition(playerX: number, playerY: number): void {
+    this.playerHpLayer.setPosition(playerX, playerY - PLAYER_HP_OFFSET_Y);
   }
 
   private refreshWeaponText(): void {
@@ -538,10 +587,10 @@ export class HUD {
     const colors = [0x475569, 0x67e8f9, 0x67e8f9, 0xfacc15, 0xfacc15, 0xf97316];
     const color = fever ? 0xf97316 : colors[level];
     const ring = this.scene.add
-      .circle(METER_X, BAR_Y, 22)
+      .circle(METER_X, METER_Y, METER_RADIUS)
       .setStrokeStyle(fever ? 4 : 2 + level * 0.4, color, 0.9)
       .setDepth(10);
-    this.screenLayer.add(ring);
+    this.formalStatusLayer.add(ring);
     this.scene.tweens.add({
       targets: ring,
       scale: fever ? 2.6 : 1.3 + level * 0.2,
@@ -597,10 +646,10 @@ export class HUD {
     // 判定条处的入场冲击环
     for (let i = 0; i < 3; i++) {
       const ring = this.scene.add
-        .circle(METER_X, BAR_Y, 22)
+        .circle(METER_X, METER_Y, METER_RADIUS)
         .setStrokeStyle(5, 0xf97316, 0.9)
         .setDepth(10);
-      this.screenLayer.add(ring);
+      this.formalStatusLayer.add(ring);
       this.scene.tweens.add({
         targets: ring,
         scale: 4 + i * 2,
@@ -629,11 +678,11 @@ export class HUD {
     if (!this.feverMode) return;
     this.meterGfx.clear();
     this.meterGfx.lineStyle(2, HUD_FRAME_COLOR, 0.28);
-    this.meterGfx.strokeCircle(METER_X, BAR_Y, 22);
+    this.meterGfx.strokeCircle(METER_X, METER_Y, METER_RADIUS);
     if (ratio > 0) {
       this.meterGfx.lineStyle(4, 0xffd68a, 0.95);
       this.meterGfx.beginPath();
-      this.meterGfx.arc(METER_X, BAR_Y, 22, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio, false);
+      this.meterGfx.arc(METER_X, METER_Y, METER_RADIUS, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio, false);
       this.meterGfx.strokePath();
     }
     this.meterText.setText('F');
@@ -643,12 +692,12 @@ export class HUD {
     if (this.feverMode) return;
     this.meterGfx.clear();
     this.meterGfx.lineStyle(2, HUD_FRAME_COLOR, 0.28);
-    this.meterGfx.strokeCircle(METER_X, BAR_Y, 22);
+    this.meterGfx.strokeCircle(METER_X, METER_Y, METER_RADIUS);
     const toNext = level >= 5 ? 1 : (progress - level * 20) / 20;
     if (toNext > 0) {
       this.meterGfx.lineStyle(3, level >= 5 ? 0xffd68a : 0xd8f3ed, 0.95);
       this.meterGfx.beginPath();
-      this.meterGfx.arc(METER_X, BAR_Y, 22, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * toNext, false);
+      this.meterGfx.arc(METER_X, METER_Y, METER_RADIUS, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * toNext, false);
       this.meterGfx.strokePath();
     }
     this.meterText.setText(level > 0 ? `${level}` : '');

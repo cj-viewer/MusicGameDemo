@@ -294,14 +294,15 @@ export class SmallGuard extends Enemy {
     this.attackFx = scene.add
       .sprite(x, y, 'npc-guard-attack-light-fx-1')
       .setScale(GUARD_ATTACK_EFFECT_SCALE)
+      .setAlpha(0.62)
       .setVisible(false);
     enableEmissiveBloom(this.attackFx, GUARD_EMISSIVE_COLOR, {
-      glowStrength: 0.9,
-      innerStrength: 0.06,
+      glowStrength: 0.48,
+      innerStrength: 0.03,
       glowDistance: 19,
       glowQuality: 2,
       blurRadius: 8,
-      bloomAmount: 0.36,
+      bloomAmount: 0.18,
       threshold: 0.07
     });
     this.weaponSprite = scene.add
@@ -545,14 +546,15 @@ export class FanEnemy extends Enemy {
     this.attackFx = scene.add
       .sprite(x, y, 'npc-fan-attack-hard-fx-2')
       .setScale(FAN_SPRITE_SCALE)
+      .setAlpha(0.62)
       .setVisible(false);
     enableEmissiveBloom(this.attackFx, FAN_EMISSIVE_COLOR, {
-      glowStrength: 1.05,
-      innerStrength: 0.08,
+      glowStrength: 0.55,
+      innerStrength: 0.04,
       glowDistance: 21,
       glowQuality: 2,
       blurRadius: 9,
-      bloomAmount: 0.4,
+      bloomAmount: 0.2,
       threshold: 0.06
     });
     this.weaponSprite = scene.add
