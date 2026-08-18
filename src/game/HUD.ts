@@ -447,7 +447,6 @@ export class HUD {
   /** 错误输入只提供瞬时反馈，不再锁定本小节。 */
   flashError(): void {
     if (this.beatGuideVisible) this.centerMark.setStrokeStyle(3, 0xef4444, 0.9);
-    this.scene.cameras.main.shake(100, 0.003);
     if (this.beatGuideVisible) {
       this.scene.time.delayedCall(180, () => this.centerMark.setStrokeStyle(3, 0xffffff, 0.9));
     }

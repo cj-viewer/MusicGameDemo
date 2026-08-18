@@ -1388,7 +1388,8 @@ export class MainScene extends Phaser.Scene {
       .setDepth(2000)
       .setPosition(CAMERA_BASE_SCROLL_X, CAMERA_BASE_SCROLL_Y)
       .setScale(UI_SCALE / MAIN_CAMERA_BASE_ZOOM)
-      .setScrollFactor(0)
+      // 固定视觉位置由打开时的镜头锚点实现，保留 scrollFactor=1 让输入命中与渲染一致。
+      .setScrollFactor(1)
       .setVisible(false)
       .setActive(false);
 
@@ -1490,6 +1491,14 @@ export class MainScene extends Phaser.Scene {
     this.volumePanelVisible = visible;
     this.volumeDragging = null;
     const captureToken = ++this.volumePanelCaptureToken;
+    if (visible) {
+      const camera = this.cameras.main;
+      // 镜头在暂停期间保持静止；叠加基准偏移后，画面位置不变且点击区不再错位。
+      this.volumePanel.setPosition(
+        camera.scrollX + CAMERA_BASE_SCROLL_X,
+        camera.scrollY + CAMERA_BASE_SCROLL_Y
+      );
+    }
     this.volumePanel.setVisible(false).setActive(visible);
     if (visible) {
       this.refreshVolumeControl();
@@ -1530,6 +1539,14 @@ export class MainScene extends Phaser.Scene {
   }
 
   private setTuningEditorVisible(visible: boolean): void {
+    if (visible) {
+      const camera = this.cameras.main;
+      // P 面板与 Esc 面板使用同一套可交互屏幕锚定规则。
+      this.tuningEditor.container.setPosition(
+        camera.scrollX + CAMERA_BASE_SCROLL_X,
+        camera.scrollY + CAMERA_BASE_SCROLL_Y
+      );
+    }
     this.tuningEditor.setVisible(visible);
     if (visible) {
       this.refreshCombatControls();
@@ -2976,10 +2993,7 @@ export class MainScene extends Phaser.Scene {
         feedbackOrigin.y,
         heavy,
         spec.color,
-        weapon.id === 'baton',
-        // 警棍本身每帧都在更新弧线扫击；不额外缩放主相机，
-        // 避免移动中的连续挥击让镜头产生“被拉住”的顿挫感。
-        weapon.id !== 'baton'
+        weapon.id === 'baton'
       );
     }
     const useGlowstickLaser = heavy
@@ -3046,15 +3060,14 @@ export class MainScene extends Phaser.Scene {
 
   /**
    * 踩拍攻击的强调反馈：警棍保留局部冲击环，荧光棒只强化实际线性亮芯；
-   * 两者继续保留音符与相机微推拉，避免荧光棒尖端附近出现错位的圆形叠层。
+   * 两者继续保留音符，但不再推动主相机，避免整张底图随攻击缩放。
    */
   private spawnOnBeatAttackFx(
     x: number,
     y: number,
     heavy: boolean,
     color: number,
-    showRadialBurst: boolean,
-    useCameraPunch = true
+    showRadialBurst: boolean
   ): void {
     if (showRadialBurst) {
       const outer = this.add.circle(x, y, 16).setStrokeStyle(heavy ? 5 : 4, color, 0.95).setDepth(6);
@@ -3101,20 +3114,6 @@ export class MainScene extends Phaser.Scene {
       });
     }
 
-    // 相机微推拉只用于非警棍攻击。警棍扫击自身已经持续重绘，
-    // 叠加镜头缩放会让跟随移动看起来发生短促回拉。
-    if (useCameraPunch) {
-      const cam = this.cameras.main;
-      this.tweens.killTweensOf(cam);
-      cam.setZoom(MAIN_CAMERA_BASE_ZOOM);
-      this.tweens.add({
-        targets: cam,
-        zoom: MAIN_CAMERA_BASE_ZOOM * (heavy ? 1.01875 : 1.00375),
-        duration: 60,
-        yoyo: true,
-        ease: 'Quad.easeOut'
-      });
-    }
   }
 
   /**
@@ -3689,7 +3688,6 @@ export class MainScene extends Phaser.Scene {
         onComplete: () => spark.destroy()
       });
     }
-    this.cameras.main.shake(strong ? 130 : 45, strong ? 0.005 : 0.0015);
     if (strong) this.cameras.main.flash(90, 255, 40, 40, false);
   }
 
@@ -3899,7 +3897,6 @@ export class MainScene extends Phaser.Scene {
       });
     });
 
-    this.cameras.main.shake(heavy ? 115 : 90, heavy ? 0.0028 : 0.0021);
   }
 
   /** 正确输入时，不同武器按 ComboMeter 使用各自的弹幕层数上限。 */
@@ -4065,7 +4062,6 @@ export class MainScene extends Phaser.Scene {
     this.queueBeatSfx('feverStart');
     this.hud.setFever(true);
     this.hud.feverBurst();
-    this.cameras.main.shake(200, 0.005);
     this.feverBorder.setAlpha(0.9);
   }
 

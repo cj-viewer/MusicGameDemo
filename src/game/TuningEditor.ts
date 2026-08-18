@@ -206,7 +206,8 @@ export class TuningEditor {
       .container(screenLayerOffset(VIEW_WIDTH), screenLayerOffset(VIEW_HEIGHT), objects)
       .setDepth(31)
       .setScale(UI_SCALE / MAIN_CAMERA_BASE_ZOOM)
-      .setScrollFactor(0)
+      // 交互子项与主镜头共用同一变换；MainScene 在打开时把容器锚到当前镜头。
+      .setScrollFactor(1)
       .setVisible(false);
     this.refresh();
   }
