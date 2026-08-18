@@ -202,6 +202,7 @@ export abstract class Enemy {
     this.dead = true;
     this.hpBarBg.destroy();
     this.hpBar.destroy();
+    this.scene.spawnEnemyDeathExplosion(this.x, this.y, this.kind);
     this.go.body.enable = false;
     this.scene.tweens.add({
       targets: this.go,

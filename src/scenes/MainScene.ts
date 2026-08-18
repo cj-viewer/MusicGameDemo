@@ -3751,6 +3751,96 @@ export class MainScene extends Phaser.Scene {
     if (strong) this.cameras.main.flash(90, 255, 40, 40, false);
   }
 
+  /** 敌人死亡时在尸体位置播放一次性爆炸粒子与冲击环。 */
+  spawnEnemyDeathExplosion(x: number, y: number, kind: EnemyKind): void {
+    const primaryColor = kind === 'fan' ? 0xff7832 : 0x52efff;
+    const hotColor = kind === 'fan' ? 0xffb54a : 0xb7f7ff;
+    const white = 0xffffff;
+
+    // 两层冲击环：一层冷白快波，一层主色慢波。
+    [
+      { radius: 12, width: 5, color: white, scale: 4.4, duration: 240 },
+      { radius: 20, width: 9, color: primaryColor, scale: 5.6, duration: 420 }
+    ].forEach((ringConfig, index) => {
+      const ring = this.add
+        .circle(x, y, worldSize(ringConfig.radius))
+        .setStrokeStyle(worldSize(ringConfig.width), ringConfig.color, 0.95)
+        .setDepth(8)
+        .setBlendMode(Phaser.BlendModes.ADD);
+      this.tweens.add({
+        targets: ring,
+        scale: ringConfig.scale,
+        alpha: 0,
+        duration: ringConfig.duration,
+        delay: index * 35,
+        ease: 'Quad.easeOut',
+        onComplete: () => ring.destroy()
+      });
+    });
+
+    // 放射状长条溅射，方向随机、长短随机，比单纯圆点更接近爆炸碎片。
+    const splashCount = 18;
+    for (let i = 0; i < splashCount; i++) {
+      const angle = Phaser.Math.FloatBetween(0, Math.PI * 2);
+      const distance = worldSize(Phaser.Math.FloatBetween(90, 190));
+      const length = worldSize(Phaser.Math.FloatBetween(28, 58));
+      const width = worldSize(Phaser.Math.FloatBetween(4, 8));
+      const color = i % 3 === 0 ? white : i % 3 === 1 ? hotColor : primaryColor;
+      const shard = this.add
+        .rectangle(x, y, length, width, color, 1)
+        .setRotation(angle)
+        .setDepth(9)
+        .setBlendMode(Phaser.BlendModes.ADD);
+      this.tweens.add({
+        targets: shard,
+        x: x + Math.cos(angle) * distance,
+        y: y + Math.sin(angle) * distance,
+        alpha: 0,
+        scaleX: 0.18,
+        duration: Phaser.Math.Between(260, 430),
+        ease: 'Expo.easeOut',
+        onComplete: () => shard.destroy()
+      });
+    }
+
+    // 主爆炸烟 / 火球粒子：数量更多、扩散更快。
+    const fireEmitter = this.add
+      .particles(x, y, '__WHITE', {
+        speed: { min: 180, max: 560 },
+        lifespan: { min: 400, max: 820 },
+        scale: { start: 1, end: 0 },
+        alpha: { start: 1, end: 0 },
+        angle: { min: 0, max: 360 },
+        quantity: 1,
+        emitting: false,
+        color: [primaryColor, hotColor, 0xffe08a, white],
+        blendMode: Phaser.BlendModes.ADD
+      })
+      .setDepth(8);
+    fireEmitter.explode(54);
+
+    // 第二层高速火花，形成更明显的溅射拖尾。
+    const sparkEmitter = this.add
+      .particles(x, y, '__WHITE', {
+        speed: { min: 320, max: 760 },
+        lifespan: { min: 220, max: 430 },
+        scale: { start: 0.42, end: 0 },
+        alpha: { start: 1, end: 0 },
+        angle: { min: 0, max: 360 },
+        quantity: 1,
+        emitting: false,
+        color: [white, hotColor],
+        blendMode: Phaser.BlendModes.ADD
+      })
+      .setDepth(9);
+    sparkEmitter.explode(30);
+
+    this.time.delayedCall(900, () => {
+      if (fireEmitter.active) fireEmitter.destroy();
+      if (sparkEmitter.active) sparkEmitter.destroy();
+    });
+  }
+
   /** 正确踩拍时叠加一次比普通拍点更粗、更亮并向外淡出的场地框反馈。 */
   private flashArenaCorrectJudgement(heavy: boolean): void {
     if (this.state !== 'tutorial' && this.state !== 'playing' && this.state !== 'intermission') return;
