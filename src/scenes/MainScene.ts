@@ -54,8 +54,8 @@ import {
 /** 试玩中的统一节拍速度；BGM 按各自原始 BPM 等比变速到该值。 */
 const BPM = 132;
 
-/** BGM 通道归一显示为 100%；基础混音在上一版基础上再降一半。 */
-const BGM_VOLUME = 0.25;
+/** BGM 通道归一显示为 100%；基础混音为上一版四分之一后的两倍。 */
+const BGM_VOLUME = 0.125;
 
 const DEFAULT_MASTER_VOLUME = 1;
 const MAX_MASTER_VOLUME = 2;
@@ -93,6 +93,7 @@ const SCREEN_ARENA_X = CAMERA_BASE_SCROLL_X + ARENA.x / MAIN_CAMERA_BASE_ZOOM;
 const SCREEN_ARENA_Y = CAMERA_BASE_SCROLL_Y + ARENA.y / MAIN_CAMERA_BASE_ZOOM;
 const ARENA_BEAT_LIGHT_COLOR = 0xe879f9;
 const ARENA_BEAT_HEAVY_COLOR = 0xf97316;
+/** 连招起手后，仅为剩余第 2 / 3 / 4 拍复用旧版三框小节预告。 */
 const TUTORIAL_CALIBRATION_SAMPLES = 12;
 const TUTORIAL_CALIBRATION_MAX_ABS_OFFSET = 0.12;
 const TUTORIAL_CALIBRATION_CANDIDATE_WINDOW = 0.18;
@@ -166,7 +167,7 @@ const TUTORIAL_CONTROL_ENTRANCE_DELAY = 160;
 const TUTORIAL_CONTROL_ENTRANCE_DURATION = 280;
 const TUTORIAL_CONTROL_NEXT_DELAY = 100;
 const TUTORIAL_CONTROL_EXIT_DURATION = 220;
-/** 正式关四拍图案按最新目视反馈缩到旧紧凑版的 58%。 */
+/** 正式关四拍图案保持已确认的紧凑尺寸。 */
 const FORMAL_PATTERN_SCALE = 0.58;
 /** 放在 ARENA 顶部反馈框线（2K y=96）下方，避免框线穿过图案。 */
 const FORMAL_PATTERN_ICON_Y = 112;
@@ -180,9 +181,8 @@ const BATON_CRESCENT_KNOCKBACK_SPEED = 320;
 
 type GameState = 'title' | 'tutorial' | 'tutorialConfirm' | 'playing' | 'intermission' | 'over';
 
-/** 教学要求连续全对的小节数 */
+/** 教学要求连续完成的连招数 */
 const TUTORIAL_TARGET_STREAK = 3;
-type BeatSfxCue = 'playerHurt' | 'feverStart' | 'enemyHurt' | 'pickup';
 type AudioChannel = 'master' | 'bgm' | 'rhythm' | SfxCategory;
 type VolumeControlChannel = AudioChannel | 'enemyDeath';
 type CombatSettingsPage = 'speed' | 'playerDamage' | 'enemy' | 'mode';
@@ -314,7 +314,6 @@ export class MainScene extends Phaser.Scene {
   private arenaRhythmIntensity = 0;
   private rhythmComboStreak = 0;
   private lastRhythmHitBeat = -Infinity;
-  private pendingBeatSfx = new Set<BeatSfxCue>();
   private gamepadButtonState = { dodge: false, attack: false };
   /** 调试：B 键切换判定框显示（红=受击判定，绿=武器/子弹判定），重开局保留开关状态 */
   private debugHitboxes = false;
@@ -324,14 +323,15 @@ export class MainScene extends Phaser.Scene {
   private patternPanel?: Phaser.GameObjects.Container;
   private patternIcons: Phaser.GameObjects.Shape[] = [];
   private patternPanelMode: 'tutorial' | 'compact' = 'compact';
+  private formalPatternBaseX = 0;
+  /** 用于忽略已过期的延迟隐藏回调。 */
+  private formalPatternVisibilityRun = 0;
   private tutorialBeatHighlights: Phaser.GameObjects.Image[] = [];
   private tutorialHitHighlights: Phaser.GameObjects.Image[] = [];
 
   // 教学状态
   private tutorialStreakText?: Phaser.GameObjects.Text;
   private tutorialStreak = 0;
-  private tutorialHitBeats = new Set<number>();
-  private tutorialFailedMeasures = new Set<number>();
   private tutorialTimingOffsets: number[] = [];
   private tutorialCalibrationBeats = new Set<number>();
   private tutorialCalibratedOffset = 0;
@@ -424,11 +424,12 @@ export class MainScene extends Phaser.Scene {
     this.arenaRhythmIntensity = 0;
     this.rhythmComboStreak = 0;
     this.lastRhythmHitBeat = -Infinity;
-    this.pendingBeatSfx.clear();
     this.gamepadButtonState = { dodge: false, attack: false };
     this.patternPanel = undefined;
     this.patternIcons = [];
     this.patternPanelMode = 'compact';
+    this.formalPatternBaseX = 0;
+    this.formalPatternVisibilityRun = 0;
     this.tutorialBeatHighlights = [];
     this.tutorialHitHighlights = [];
     this.confirmUi = undefined;
@@ -440,8 +441,6 @@ export class MainScene extends Phaser.Scene {
     this.tutorialControlRunId = 0;
     this.tutorialStreakText = undefined;
     this.tutorialStreak = 0;
-    this.tutorialHitBeats.clear();
-    this.tutorialFailedMeasures.clear();
     this.suppressAttackUntil = 0;
     this.countdownRemaining = -1;
     this.cameraLookX = 0;
@@ -493,7 +492,6 @@ export class MainScene extends Phaser.Scene {
     this.hud.updatePlayerHpPosition(this.player.x, this.player.y);
 
     this.hud.setPattern(GLOWSTICKS.pattern, GLOWSTICKS.name);
-    this.conductor.setCuePattern(GLOWSTICKS.pattern);
     this.hud.setHp(this.player.hp, this.player.maxHp);
     this.hud.setVictoryVisible(false);
     this.tuningEditor = new TuningEditor(this, BGM_TRACKS.map((track) => track.label));
@@ -548,6 +546,7 @@ export class MainScene extends Phaser.Scene {
   update(_time: number, delta: number): void {
     if (this.gamePaused) return;
     this.conductor.update();
+    this.resolveMissedComboBeat();
     this.hud.update();
     this.updateArenaRhythmIntensity(delta);
     if (this.combo.updateFever()) this.endFever();
@@ -758,39 +757,52 @@ export class MainScene extends Phaser.Scene {
     const result = this.combo.handleInput(btn, this.conductor.now());
     const attackPerformed = result.type === 'correct' || result.type === 'wrong';
     if (result.type === 'correct') {
+      if (result.comboStarted && this.state !== 'tutorial') this.showFormalComboPattern();
       this.showAttackJudgement(result.judgement, result.timingOffset);
       this.performWeaponAttack(result.beatIdx, true, btn, result.judgement);
+      this.conductor.playPlayerCall(btn);
       this.registerRhythmHit(result.globalBeat, btn === 'H');
       if (this.combo.feverActive()) this.player.heal(10);
       this.flashArenaCorrectJudgement(this.combo.pattern[result.beatIdx] === 'H');
       this.hud.flashSuccess(result.globalBeat);
-      this.flashPatternIcon(result.globalBeat % 4);
+      this.flashPatternIcon(result.beatIdx);
+      if (result.comboCompleted && this.state !== 'tutorial') this.hideFormalComboPattern(FORMAL_PATTERN_HIT_FLASH_MS);
       this.refreshComboHUD();
       if (pad) this.rumbleGamepad(pad, btn === 'H' ? 'heavy' : 'light');
     } else if (result.type === 'wrong') {
       this.showAttackJudgement(result.judgement, result.timingOffset, result.reason);
       this.breakRhythmCombo();
       this.performWeaponAttack(result.beatIdx, false, btn, result.judgement);
-      this.sfx.error();
       this.player.errorFlash();
       this.hud.flashError();
+      if (result.comboFailed && this.state !== 'tutorial') this.flashAndHideFormalComboPattern();
     }
 
     if (this.state === 'tutorial') {
-      if (result.type === 'correct') {
-        this.tutorialHitBeats.add(result.globalBeat);
-      } else if (result.type === 'wrong') {
-        this.failTutorialMeasure();
-      }
+      if (result.type === 'correct' && result.comboCompleted) this.completeTutorialCombo();
+      else if (result.type === 'wrong' && result.comboFailed) this.failTutorialCombo();
     }
     return attackPerformed;
+  }
+
+  /** 漏拍没有输入也必须终止连招，并沿用错拍的 UI/教学失败反馈。 */
+  private resolveMissedComboBeat(): void {
+    const result = this.combo.updateComboTimeout(this.conductor.now());
+    if (!result) return;
+
+    this.showAttackJudgement(result.judgement, result.timingOffset, result.reason);
+    this.breakRhythmCombo();
+    this.player.errorFlash();
+    this.hud.flashError();
+    if (this.state !== 'tutorial') this.flashAndHideFormalComboPattern();
+    if (this.state === 'tutorial') this.failTutorialCombo();
   }
 
   /** JRPG 式小型浮字：从实际攻击锚点弹出，短暂停留后上浮消隐。 */
   private showAttackJudgement(
     judgement: AttackJudgement,
     _timingOffset: number,
-    _reason?: 'offBeat' | 'wrongInput'
+    _reason?: 'offBeat' | 'wrongInput' | 'missedBeat'
   ): void {
     const styles = {
       perfect: {
@@ -924,9 +936,7 @@ export class MainScene extends Phaser.Scene {
   }
 
   private gamepadBeatKey(): 'L' | 'H' {
-    const nearestBeat = this.conductor.nearestBeat(this.conductor.now()).n;
-    const beatInMeasure = ((nearestBeat % 4) + 4) % 4;
-    return this.combo.pattern[beatInMeasure];
+    return this.combo.expectedInput;
   }
 
   private isGamepadButtonDown(pad: Phaser.Input.Gamepad.Gamepad, index: number): boolean {
@@ -1864,15 +1874,13 @@ export class MainScene extends Phaser.Scene {
 
   // ---------- 教学 ----------
 
-  /** 开场教学：不生成敌人，玩家跟随上方节拍点连打，连续 3 个小节全对后确认进入游戏 */
+  /** 开场教学：不生成敌人，完成连续 3 套连招后确认进入游戏。 */
   private startTutorial(): void {
     this.state = 'tutorial';
     this.stageEnvironment.showTutorial();
     this.clearTutorialFans();
     this.spawnTutorialFan();
     this.tutorialStreak = 0;
-    this.tutorialHitBeats.clear();
-    this.tutorialFailedMeasures.clear();
     this.tutorialTimingOffsets = [];
     this.tutorialCalibrationBeats.clear();
     this.tutorialCalibratedOffset = 0;
@@ -2047,7 +2055,7 @@ export class MainScene extends Phaser.Scene {
     this.tutorialControlGuide = undefined;
   }
 
-  /** 教学使用项目方提供的透明连段面板；正式关只绘制四拍图案，不再创建黑色背板。 */
+  /** 教学使用项目方提供的透明连段面板；正式关只在连招中显示紧凑节奏条。 */
   private buildPatternPanel(tutorial: boolean): void {
     this.patternPanel?.destroy(true);
     this.patternPanel = undefined;
@@ -2093,7 +2101,7 @@ export class MainScene extends Phaser.Scene {
       this.tutorialBeatHighlights = createHighlightLayer();
       this.tutorialHitHighlights = createHighlightLayer();
     } else {
-      // 默认以白色显示当前连段；只有正确输入才短暂恢复轻 / 重拍色。
+      // 默认以白色显示当前连招；只有正确输入才短暂恢复轻 / 重拍色。
       const xs = [-108, -36, 36, 108];
       this.combo.pattern.forEach((key, i) => {
         const icon: Phaser.GameObjects.Shape = key === 'L'
@@ -2104,6 +2112,8 @@ export class MainScene extends Phaser.Scene {
       });
     }
     this.patternPanel = ui;
+    this.formalPatternBaseX = ui.x;
+    if (!tutorial) ui.setVisible(false);
   }
 
   /** 每拍高亮当前拍的节拍块（教学与游戏通用） */
@@ -2117,6 +2127,7 @@ export class MainScene extends Phaser.Scene {
       return;
     }
 
+    if (!this.patternPanel?.visible) return;
     const icon = this.patternIcons[beatIdx];
     if (!icon) return;
     icon.setScale(1.35);
@@ -2127,7 +2138,7 @@ export class MainScene extends Phaser.Scene {
     const calibration = this.tutorialTimingOffsets.length > 0
       ? `　延迟校准 ${Math.round(this.tutorialCalibratedOffset * 1000)}ms`
       : '　延迟校准中';
-    this.tutorialStreakText?.setText(`连续完整小节 ${this.tutorialStreak} / ${TUTORIAL_TARGET_STREAK}${calibration}`);
+    this.tutorialStreakText?.setText(`连续完成连招 ${this.tutorialStreak} / ${TUTORIAL_TARGET_STREAK}${calibration}`);
   }
 
   /**
@@ -2162,14 +2173,13 @@ export class MainScene extends Phaser.Scene {
   }
 
   /**
-   * 教学校准允许“按键种类正确但尚未落入旧窗口”的首批输入成为候选，
+   * 教学校准允许“当前连招步骤按键正确但尚未落入旧窗口”的输入成为候选，
    * 这样输入链路本身慢于旧 100ms 窗口时，仍能把判定拉回正确位置。
    */
   private recordTutorialCalibrationCandidate(btn: 'L' | 'H'): void {
     const { n, offset } = this.conductor.nearestBeat(this.conductor.now());
     if (n < 0 || this.tutorialCalibrationBeats.has(n)) return;
-    const beatIdx = ((n % 4) + 4) % 4;
-    if (btn !== this.combo.pattern[beatIdx] || Math.abs(offset) > TUTORIAL_CALIBRATION_CANDIDATE_WINDOW) return;
+    if (btn !== this.combo.expectedInput || Math.abs(offset) > TUTORIAL_CALIBRATION_CANDIDATE_WINDOW) return;
     this.tutorialCalibrationBeats.add(n);
     this.recordTutorialTiming(offset);
   }
@@ -2180,12 +2190,9 @@ export class MainScene extends Phaser.Scene {
     return ordered.length % 2 === 0 ? (ordered[middle - 1] + ordered[middle]) / 2 : ordered[middle];
   }
 
-  /** 教学中每拍：小节交界时结算上一小节（第 0 小节为热身，不计） */
+  /** 教学中每两小节替换一次观众粉丝；连招成败由输入状态机即时结算。 */
   private onTutorialBeat(info: BeatInfo): void {
     if (info.beatInMeasure === 0 && info.measure > 0 && info.measure % 2 === 0) this.spawnTutorialFan();
-    if (info.beatInMeasure === 0 && info.measure >= 2) {
-      this.evaluateTutorialMeasure(info.measure - 1);
-    }
   }
 
   private spawnTutorialFan(): void {
@@ -2200,27 +2207,19 @@ export class MainScene extends Phaser.Scene {
     this.tutorialFans = [];
   }
 
-  private evaluateTutorialMeasure(measure: number): void {
-    const allHit = [0, 1, 2, 3].every((i) => this.tutorialHitBeats.has(measure * 4 + i));
-    const success = allHit && !this.tutorialFailedMeasures.has(measure);
-    if (success) {
-      this.tutorialStreak++;
-      this.spawnTutorialVerdict('✓', '#4ade80');
-      if (this.tutorialStreak >= TUTORIAL_TARGET_STREAK) {
-        this.updateTutorialStreakText();
-        this.showTutorialConfirm();
-        return;
-      }
-    } else {
-      this.tutorialStreak = 0;
+  private completeTutorialCombo(): void {
+    this.tutorialStreak++;
+    this.spawnTutorialVerdict('✓', '#4ade80');
+    if (this.tutorialStreak >= TUTORIAL_TARGET_STREAK) {
+      this.updateTutorialStreakText();
+      this.showTutorialConfirm();
+      return;
     }
     this.updateTutorialStreakText();
   }
 
-  /** 错拍立即判当前小节失败并清零连击 */
-  private failTutorialMeasure(): void {
-    const measure = Math.floor(Math.max(0, this.conductor.beatFloatAt(this.conductor.now())) / 4);
-    this.tutorialFailedMeasures.add(measure);
+  /** 连招中的错拍或错键立即清零教学连招计数。 */
+  private failTutorialCombo(): void {
     if (this.tutorialStreak > 0) {
       this.tutorialStreak = 0;
       this.updateTutorialStreakText();
@@ -2271,6 +2270,46 @@ export class MainScene extends Phaser.Scene {
     if (!icon) return;
     if (this.combo.pattern[beatIdx] === 'L') icon.setStrokeStyle(3, color, 1);
     else icon.setFillStyle(color, 1);
+  }
+
+  private showFormalComboPattern(): void {
+    if (this.patternPanelMode !== 'compact' || !this.patternPanel) return;
+    this.formalPatternVisibilityRun++;
+    this.tweens.killTweensOf(this.patternPanel);
+    this.patternPanel.setPosition(this.formalPatternBaseX, this.patternPanel.y).setVisible(true).setAlpha(1);
+    this.patternIcons.forEach((_, i) => this.setFormalPatternIconColor(i, FORMAL_PATTERN_BASE_COLOR));
+  }
+
+  private hideFormalComboPattern(delay = 0): void {
+    if (this.patternPanelMode !== 'compact' || !this.patternPanel) return;
+    const run = ++this.formalPatternVisibilityRun;
+    const hide = () => {
+      if (run !== this.formalPatternVisibilityRun || this.combo.isComboActive || !this.patternPanel) return;
+      this.patternPanel.setPosition(this.formalPatternBaseX, this.patternPanel.y).setVisible(false);
+    };
+    if (delay > 0) this.time.delayedCall(delay, hide);
+    else hide();
+  }
+
+  private flashAndHideFormalComboPattern(): void {
+    if (this.patternPanelMode !== 'compact' || !this.patternPanel) return;
+    const panel = this.patternPanel;
+    const run = ++this.formalPatternVisibilityRun;
+    this.tweens.killTweensOf(panel);
+    panel.setPosition(this.formalPatternBaseX, panel.y).setVisible(true).setAlpha(1);
+    this.patternIcons.forEach((_, i) => this.setFormalPatternIconColor(i, 0xfca5a5));
+    this.tweens.add({
+      targets: panel,
+      x: this.formalPatternBaseX + 10,
+      duration: 34,
+      yoyo: true,
+      repeat: 3,
+      onComplete: () => panel.setX(this.formalPatternBaseX)
+    });
+    this.time.delayedCall(250, () => {
+      if (run !== this.formalPatternVisibilityRun || this.combo.isComboActive || this.patternPanel !== panel) return;
+      panel.setPosition(this.formalPatternBaseX, panel.y).setVisible(false);
+    });
   }
 
   /** 图标行右侧弹出 ✓/✕ 小节结果 */
@@ -2448,7 +2487,6 @@ export class MainScene extends Phaser.Scene {
 
   onEnemyKilled(enemy: Enemy): void {
     this.enemies = this.enemies.filter((e) => e !== enemy);
-    this.sfx.enemyDie(Phaser.Math.Clamp(this.tuningEditor.enemyDeathVolume, 0, 1));
 
     // 保安掉警棍，粉丝掉荧光棒；玩家已持有或场上已有时不重复生成。
     const drop = enemy.kind === 'smallGuard' ? BATON : enemy.kind === 'fan' ? GLOWSTICKS : undefined;
@@ -2911,16 +2949,17 @@ export class MainScene extends Phaser.Scene {
 
   private onBeat(info: BeatInfo): void {
     if (this.state === 'title') return;
-    this.playQueuedBeatSfx();
     if (this.state === 'over') return;
 
-    const heavyBeat = this.combo.pattern[info.beatInMeasure] === 'H';
-    this.player.onBeat(heavyBeat);
-    this.stageEnvironment.pulse(heavyBeat);
-    this.hud.onBeat(info.beatInMeasure);
-    this.getFpvMiniScene()?.onBeat(heavyBeat);
+    // 背景律动与输入连招解耦：每一拍都是同一种鼓点与轻脉冲。
+    this.player.onBeat(false);
+    this.stageEnvironment.pulse(false);
+    this.hud.onBeat(0);
+    this.getFpvMiniScene()?.onBeat(false);
     this.pulsePickups();
-    this.pulsePatternIcon(info.beatInMeasure);
+    if (this.patternPanelMode === 'tutorial' || this.combo.isComboActive) {
+      this.pulsePatternIcon(this.combo.expectedStep);
+    }
     if (this.state === 'tutorial') this.onTutorialBeat(info);
     if (this.lastRhythmHitBeat < info.globalBeat - 1) this.breakRhythmCombo();
 
@@ -2945,7 +2984,7 @@ export class MainScene extends Phaser.Scene {
 
     if (this.state === 'playing') {
       for (const enemy of [...this.enemies]) {
-        enemy.pulseBeat(heavyBeat);
+        enemy.pulseBeat(false);
         enemy.onBeat(info);
       }
     }
@@ -2979,7 +3018,6 @@ export class MainScene extends Phaser.Scene {
     const projectileRangeScale = onBeat ? 1 : 0.5;
     const batonSweepScale = onBeat ? 1 : 0.5;
     const attackAngles = [angle];
-    this.sfx.attack(heavy);
     this.player.playAttackAnimation(heavy);
     // playAttackAnimation 会先把武器放到本次挥击的起手角；此后读取发光端，
     // 才能让直射亮芯在左右朝向和轻 / 重挥击下都从武器尖端出发。
@@ -3049,7 +3087,6 @@ export class MainScene extends Phaser.Scene {
 
     // Fever Time：每次成功攻击额外释放清屏音波（轻=扇形，重=全圆）
     if (onBeat && this.combo.feverActive()) {
-      this.sfx.feverWave();
       if (heavy) {
         this.spawnSoundWave(attackOrigin.x, attackOrigin.y, angle, 180, 190, 14 * mult);
       } else {
@@ -3691,6 +3728,96 @@ export class MainScene extends Phaser.Scene {
     if (strong) this.cameras.main.flash(90, 255, 40, 40, false);
   }
 
+  /** 敌人死亡时在尸体位置播放一次性爆炸粒子与冲击环。 */
+  spawnEnemyDeathExplosion(x: number, y: number, kind: EnemyKind): void {
+    const primaryColor = kind === 'fan' ? 0xff7832 : 0x52efff;
+    const hotColor = kind === 'fan' ? 0xffb54a : 0xb7f7ff;
+    const white = 0xffffff;
+
+    // 两层冲击环：一层冷白快波，一层主色慢波。
+    [
+      { radius: 12, width: 5, color: white, scale: 4.4, duration: 240 },
+      { radius: 20, width: 9, color: primaryColor, scale: 5.6, duration: 420 }
+    ].forEach((ringConfig, index) => {
+      const ring = this.add
+        .circle(x, y, worldSize(ringConfig.radius))
+        .setStrokeStyle(worldSize(ringConfig.width), ringConfig.color, 0.95)
+        .setDepth(8)
+        .setBlendMode(Phaser.BlendModes.ADD);
+      this.tweens.add({
+        targets: ring,
+        scale: ringConfig.scale,
+        alpha: 0,
+        duration: ringConfig.duration,
+        delay: index * 35,
+        ease: 'Quad.easeOut',
+        onComplete: () => ring.destroy()
+      });
+    });
+
+    // 放射状长条溅射，方向随机、长短随机，比单纯圆点更接近爆炸碎片。
+    const splashCount = 18;
+    for (let i = 0; i < splashCount; i++) {
+      const angle = Phaser.Math.FloatBetween(0, Math.PI * 2);
+      const distance = worldSize(Phaser.Math.FloatBetween(90, 190));
+      const length = worldSize(Phaser.Math.FloatBetween(28, 58));
+      const width = worldSize(Phaser.Math.FloatBetween(4, 8));
+      const color = i % 3 === 0 ? white : i % 3 === 1 ? hotColor : primaryColor;
+      const shard = this.add
+        .rectangle(x, y, length, width, color, 1)
+        .setRotation(angle)
+        .setDepth(9)
+        .setBlendMode(Phaser.BlendModes.ADD);
+      this.tweens.add({
+        targets: shard,
+        x: x + Math.cos(angle) * distance,
+        y: y + Math.sin(angle) * distance,
+        alpha: 0,
+        scaleX: 0.18,
+        duration: Phaser.Math.Between(260, 430),
+        ease: 'Expo.easeOut',
+        onComplete: () => shard.destroy()
+      });
+    }
+
+    // 主爆炸烟 / 火球粒子：数量更多、扩散更快。
+    const fireEmitter = this.add
+      .particles(x, y, '__WHITE', {
+        speed: { min: 180, max: 560 },
+        lifespan: { min: 400, max: 820 },
+        scale: { start: 1, end: 0 },
+        alpha: { start: 1, end: 0 },
+        angle: { min: 0, max: 360 },
+        quantity: 1,
+        emitting: false,
+        color: [primaryColor, hotColor, 0xffe08a, white],
+        blendMode: Phaser.BlendModes.ADD
+      })
+      .setDepth(8);
+    fireEmitter.explode(54);
+
+    // 第二层高速火花，形成更明显的溅射拖尾。
+    const sparkEmitter = this.add
+      .particles(x, y, '__WHITE', {
+        speed: { min: 320, max: 760 },
+        lifespan: { min: 220, max: 430 },
+        scale: { start: 0.42, end: 0 },
+        alpha: { start: 1, end: 0 },
+        angle: { min: 0, max: 360 },
+        quantity: 1,
+        emitting: false,
+        color: [white, hotColor],
+        blendMode: Phaser.BlendModes.ADD
+      })
+      .setDepth(9);
+    sparkEmitter.explode(30);
+
+    this.time.delayedCall(900, () => {
+      if (fireEmitter.active) fireEmitter.destroy();
+      if (sparkEmitter.active) sparkEmitter.destroy();
+    });
+  }
+
   /** 正确踩拍时叠加一次比普通拍点更粗、更亮并向外淡出的场地框反馈。 */
   private flashArenaCorrectJudgement(heavy: boolean): void {
     if (this.state !== 'tutorial' && this.state !== 'playing' && this.state !== 'intermission') return;
@@ -3952,7 +4079,6 @@ export class MainScene extends Phaser.Scene {
 
   /** 闪避进行到三分之二时，释放 Fever 重拍同款全圆清屏音波。 */
   triggerDodgeFeverWave(x: number, y: number): void {
-    this.sfx.feverWave();
     this.spawnSoundWave(x, y, this.player.aimAngle, 180, 190, 14 * this.combo.damageMultiplier);
   }
 
@@ -4025,11 +4151,9 @@ export class MainScene extends Phaser.Scene {
   }
 
   private equipWeapon(weapon: WeaponDef): void {
-    this.queueBeatSfx('pickup');
     this.player.weapon = weapon;
     this.combo.startSwitch(weapon.pattern);
     this.hud.setPattern(weapon.pattern, weapon.name);
-    this.conductor.setCuePattern(weapon.pattern);
     this.buildPatternPanel(this.state === 'tutorial');
     this.hud.setState('武器已切换 · 等待玩家输入');
     this.time.delayedCall(900, () => {
@@ -4042,10 +4166,7 @@ export class MainScene extends Phaser.Scene {
   private refreshComboHUD(): void {
     const level = this.combo.level;
     if (level > this.lastComboLevel) {
-      this.sfx.levelUp();
       this.hud.pulseCombo();
-    } else if (level < this.lastComboLevel) {
-      this.sfx.comboBreak();
     }
     this.lastComboLevel = level;
     this.hud.setCombo(this.combo.progress, level);
@@ -4059,7 +4180,6 @@ export class MainScene extends Phaser.Scene {
   private enterFever(): void {
     this.combo.startFever();
     this.triggerFeverScreenClear();
-    this.queueBeatSfx('feverStart');
     this.hud.setFever(true);
     this.hud.feverBurst();
     this.feverBorder.setAlpha(0.9);
@@ -4317,29 +4437,13 @@ export class MainScene extends Phaser.Scene {
         sweep.destroy(true);
       }
     });
-    this.sfx.feverWave();
   }
 
   private endFever(): void {
-    this.sfx.feverEnd();
     this.hud.setFever(false);
     this.tweens.add({ targets: this.feverBorder, alpha: 0, duration: 300 });
     this.lastComboLevel = 0;
     this.refreshComboHUD();
   }
 
-  queueBeatSfx(cue: BeatSfxCue): void {
-    this.pendingBeatSfx.add(cue);
-  }
-
-  private playQueuedBeatSfx(): void {
-    const priority: BeatSfxCue[] = ['playerHurt', 'feverStart', 'enemyHurt', 'pickup'];
-    const cue = priority.find((candidate) => this.pendingBeatSfx.has(candidate));
-    this.pendingBeatSfx.clear();
-
-    if (cue === 'playerHurt') this.sfx.hurt();
-    else if (cue === 'feverStart') this.sfx.feverStart();
-    else if (cue === 'enemyHurt') this.sfx.enemyHurt();
-    else if (cue === 'pickup') this.sfx.pickup();
-  }
 }

@@ -14,7 +14,7 @@ const COMBO_PANEL_WIDTH = 184;
 const COMBO_PANEL_HEIGHT = 50;
 const COMBO_PANEL_CENTER_X = COMBO_PANEL_X + COMBO_PANEL_WIDTH / 2;
 const COMBO_PANEL_CENTER_Y = COMBO_PANEL_Y + COMBO_PANEL_HEIGHT / 2;
-/** 正式关 Combo / 武器整组继续等比缩放，最终外框约为 265 × 72px。 */
+/** 正式关底部 Combo / 武器组保持已确认的紧凑尺寸。 */
 const COMBO_PANEL_SCALE = 0.72;
 const METER_X = COMBO_PANEL_X + 46;
 const METER_Y = COMBO_PANEL_CENTER_Y + 5;

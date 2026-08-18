@@ -316,7 +316,6 @@ export class Player {
     if (this.isDodging || this.dead || now < this.invulnUntil) return;
     this.hp = Math.max(0, this.hp - amount);
     this.invulnUntil = now + 600;
-    this.scene.queueBeatSfx('playerHurt');
     this.scene.hud.setHp(this.hp, this.maxHp);
     this.flashHitWarm();
     this.scene.spawnImpactFx(this.x, this.y, 0xef4444, true);

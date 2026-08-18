@@ -1,12 +1,14 @@
 import Phaser from 'phaser';
 
-const HEAVY_CUE_GAIN = 0.28;
-const LIGHT_CUE_GAIN = HEAVY_CUE_GAIN * 1.5;
 const CUE_SCHEDULE_AHEAD = 0.22;
-const LIGHT_CUE_LEAD = 0.07;
-const HEAVY_CUE_LEAD = 0.074;
+/** 去除前段低能量/静音后，仍保留在响度峰值前的短起声。 */
+const LIGHT_CALL_START = 0.105;
+const HEAVY_CALL_START = 0.11;
 const HEAVY_CUE_FADE_START = 0.33;
 const HEAVY_CUE_FADE_END = 0.36;
+/** 复用旧荧光棒轻攻击的方波下行音色。 */
+const DRUM_GAIN = 0.36;
+const DRUM_DURATION = 0.09;
 
 export interface BeatInfo {
   /** 从开始起的整数拍序号 */
@@ -18,12 +20,12 @@ export interface BeatInfo {
   time: number;
 }
 
-/** 当前武器在一个四拍小节内要求的输入类型。 */
+/** 玩家连招输入类型。 */
 export type BeatCue = 'L' | 'H';
 
 /**
  * 全局节拍时钟。以 WebAudio currentTime 为基准（无 WebAudio 时退化为 performance.now），
- * 驱动节拍事件并提前调度节拍器音效，保证节拍判定与声音精确对齐。
+ * 驱动节拍事件并提前调度统一鼓点，保证节拍判定与声音精确对齐。
  */
 export class Conductor extends Phaser.Events.EventEmitter {
   private _bpm: number;
@@ -37,9 +39,8 @@ export class Conductor extends Phaser.Events.EventEmitter {
   private pausedAt: number | null = null;
   private lastEmittedBeat = -1;
   private nextClickBeat = 0;
-  private cuePattern: [BeatCue, BeatCue, BeatCue, BeatCue] = ['L', 'L', 'L', 'H'];
   private scene: Phaser.Scene;
-  private customBeatAudioReady: boolean;
+  private playerCallAudioReady: boolean;
   private sfxVolume = 1;
 
   constructor(scene: Phaser.Scene, bpm: number) {
@@ -49,9 +50,9 @@ export class Conductor extends Phaser.Events.EventEmitter {
     this._beatDur = 60 / bpm;
     const sm = scene.sound as Phaser.Sound.WebAudioSoundManager;
     this.ctx = sm.context ?? null;
-    this.customBeatAudioReady = scene.cache.audio.exists('beat-light') && scene.cache.audio.exists('beat-heavy');
-    if (!this.customBeatAudioReady) {
-      console.error('Custom beat audio failed to load; synthesized beat fallback is disabled.');
+    this.playerCallAudioReady = scene.cache.audio.exists('beat-light') && scene.cache.audio.exists('beat-heavy');
+    if (!this.playerCallAudioReady) {
+      console.error('Player call audio failed to load; combo voice feedback is disabled.');
     }
   }
 
@@ -108,15 +109,7 @@ export class Conductor extends Phaser.Events.EventEmitter {
     this.pausedAt = null;
   }
 
-  /**
-   * 节拍器提示音与当前武器的小节连段保持一致：轻拍为低音，重拍为高音。
-   * 只会影响尚未调度的提示音，因此切换武器后下一个未播放拍点立即使用新模式。
-   */
-  setCuePattern(pattern: [BeatCue, BeatCue, BeatCue, BeatCue]): void {
-    this.cuePattern = [...pattern];
-  }
-
-  /** 独立音效音量：同时作用于之后调度的轻重拍提示采样。 */
+  /** 独立节拍喊声音量：作用于背景鼓点及之后触发的玩家轻重“嘿”。 */
   setSfxVolume(volume: number): void {
     this.sfxVolume = Math.max(0, volume);
   }
@@ -129,8 +122,7 @@ export class Conductor extends Phaser.Events.EventEmitter {
     if (this.ctx) {
       const horizon = t + CUE_SCHEDULE_AHEAD;
       while (this.timeOfBeat(this.nextClickBeat) < horizon) {
-        const heavy = this.cuePattern[this.nextClickBeat % this.beatsPerMeasure] === 'H';
-        this.scheduleClick(this.timeOfBeat(this.nextClickBeat), heavy);
+        this.scheduleDrum(this.timeOfBeat(this.nextClickBeat));
         this.nextClickBeat++;
       }
     }
@@ -177,29 +169,44 @@ export class Conductor extends Phaser.Events.EventEmitter {
     return this.timeOfBeat(next) - t;
   }
 
-  private scheduleClick(time: number, heavy: boolean): void {
-    if (!this.ctx || !this.customBeatAudioReady) return;
-    this.playCue(time, heavy);
+  /** 背景节拍一律使用同一枚短促鼓点，不再映射武器 Pattern 的轻 / 重。 */
+  private scheduleDrum(time: number): void {
+    if (!this.ctx) return;
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    const startTime = Math.max(time, this.now());
+    const outputGain = DRUM_GAIN * this.sfxVolume;
+    if (outputGain <= 0) return;
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(330, startTime);
+    osc.frequency.exponentialRampToValueAtTime(220, startTime + DRUM_DURATION);
+    gain.gain.setValueAtTime(outputGain, startTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, startTime + DRUM_DURATION);
+    osc.connect(gain);
+    gain.connect(this.ctx.destination);
+    osc.start(startTime);
+    osc.stop(startTime + DRUM_DURATION + 0.02);
   }
 
-  private playCue(time: number, heavy: boolean): void {
-    if (!this.customBeatAudioReady) return;
+  /**
+   * 连招内命中鼓点时才播放原有轻 / 重“嘿”。
+   * 采样存在前置静音，直接 seek 到有效发声起点，避免听感晚于输入。
+   */
+  playPlayerCall(cue: BeatCue): void {
+    if (!this.playerCallAudioReady) return;
+    const heavy = cue === 'H';
     const key = heavy ? 'beat-heavy' : 'beat-light';
-    const cueGain = (heavy ? HEAVY_CUE_GAIN : LIGHT_CUE_GAIN) * this.sfxVolume;
+    const cueGain = this.sfxVolume;
     const sound = this.scene.sound.add(key, { volume: cueGain }) as Phaser.Sound.WebAudioSound;
     sound.once(Phaser.Sound.Events.COMPLETE, () => {
       sound.destroy();
     });
+    const callStart = heavy ? HEAVY_CALL_START : LIGHT_CALL_START;
+    sound.play({ seek: callStart, volume: cueGain });
 
-    // 素材本身约有 70ms 前置起声时间，因此提前播放，让有效声音落在理论拍点。
-    const cueLead = heavy ? HEAVY_CUE_LEAD : LIGHT_CUE_LEAD;
-    const cueStartTime = time - cueLead;
-    const delay = Math.max(0, cueStartTime - this.now());
-    sound.play({ delay, volume: cueGain });
-
-    // 重拍素材尾音原本会跨过下一拍；在素材时间 330~360ms 做短淡出。
+    // 重声“嘿”避免尾音盖住下一枚统一鼓点。
     if (heavy && this.ctx) {
-      const actualStartTime = this.now() + delay;
+      const actualStartTime = this.now();
       const gain = sound.volumeNode.gain;
       gain.cancelScheduledValues(actualStartTime + HEAVY_CUE_FADE_START);
       gain.setValueAtTime(cueGain, actualStartTime + HEAVY_CUE_FADE_START);
