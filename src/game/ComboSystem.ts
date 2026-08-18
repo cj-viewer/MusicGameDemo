@@ -31,13 +31,16 @@ export type InputResult =
       rawTimingOffset: number;
       timingOffset: number;
       judgement: Exclude<AttackJudgement, 'poor'>;
+      comboStarted: boolean;
+      comboCompleted: boolean;
     }
   | {
       type: 'wrong';
       beatIdx: number;
       timingOffset: number;
       judgement: 'poor';
-      reason: 'offBeat' | 'wrongInput';
+      reason: 'offBeat' | 'wrongInput' | 'missedBeat';
+      comboFailed: boolean;
     }
   | { type: 'ignored'; reason: 'consumed' | 'notStarted' };
 
@@ -49,10 +52,12 @@ export const FEVER_ACTIVE_GAIN_SCALE = 0.5;
 const LEVEL_DAMAGE_BONUS = [0, 0.1, 0.15, 0.2, 0.25, 0.3];
 
 /**
- * 轻重连段判定 + ComboMeter。
+ * 轻重连招判定 + ComboMeter。
  * 规则见《简化玩法策划案（原型版）》：
- * - 窗口内按对会积攒 Fever 能量；错误输入不积攒，但不会清空或锁定小节；
- * - 空拍无惩罚；换武器只切换 pattern，不再自动演示或代替玩家攻击。
+ * - 任意鼓点上的轻攻击均可起手；随后按当前武器的四段 Pattern 判定；
+ * - 任意失拍或类型错误都按连招失败结算并回到待起手状态，错误攻击照常以 Poor 表现结算；
+ * - 连招开始后，每一段都必须在紧接着的下一拍判定窗内完成；漏拍、错拍或类型错误都会失败；
+ * - 换武器会中止旧连招并切换下一次起手规则。
  */
 export class ComboSystem {
   progress = 0;
@@ -60,6 +65,12 @@ export class ComboSystem {
 
   /** 已消耗的拍（防止一拍多次攻击） */
   private consumedBeat = -1;
+  /** 是否正在等待当前武器连招的下一段输入。 */
+  private comboActive = false;
+  /** 正在等待的 Pattern 下标；只有 comboActive 为 true 时有效。 */
+  private comboStep = 0;
+  /** 正在等待的绝对拍号；用于在该拍判定窗结束后结算漏拍。 */
+  private expectedBeat = -1;
   /** Fever Time 持续到该整数拍，-1 表示未激活 */
   private feverUntilBeat = -1;
   /** 教学以玩家真实输入时间估算的设备延迟；正值表示输入到达程序时偏晚。 */
@@ -78,6 +89,24 @@ export class ComboSystem {
 
   get damageMultiplier(): number {
     return 1 + LEVEL_DAMAGE_BONUS[this.level];
+  }
+
+  get isComboActive(): boolean {
+    return this.comboActive;
+  }
+
+  /** 当前连招等待的按键；非连招状态永远以轻攻击起手。 */
+  get expectedInput(): BeatKey {
+    return this.comboActive ? this.pattern[this.comboStep] : 'L';
+  }
+
+  get expectedStep(): number {
+    return this.comboActive ? this.comboStep : 0;
+  }
+
+  /** 当前连招下一段对应的绝对拍号；非连招状态返回 -1。 */
+  get expectedComboBeat(): number {
+    return this.comboActive ? this.expectedBeat : -1;
   }
 
   feverActive(): boolean {
@@ -126,22 +155,39 @@ export class ComboSystem {
       return { type: 'ignored', reason: 'consumed' };
     }
 
+    const expectedStep = this.expectedStep;
     const timingJudgement = getAttackJudgement(offset);
     if (timingJudgement === 'poor' || n < 0) {
       if (n >= 0) this.consumedBeat = n;
+      this.resetActiveCombo();
       return {
         type: 'wrong',
-        beatIdx: ((n % 4) + 4) % 4,
+        beatIdx: expectedStep,
         timingOffset: offset,
         judgement: 'poor',
-        reason: 'offBeat'
+        reason: 'offBeat',
+        comboFailed: true
       };
     }
 
-    const beatIdx = n % 4;
-    if (btn === this.pattern[beatIdx]) {
+    const startsCombo = !this.comboActive && btn === 'L';
+    const matchesExpectedInput = this.comboActive && btn === this.pattern[this.comboStep];
+    if (startsCombo || matchesExpectedInput) {
+      const beatIdx = this.comboActive ? this.comboStep : 0;
+      const completesCombo = this.comboActive && this.comboStep === this.pattern.length - 1;
       this.consumedBeat = n;
       this.addCorrectInputProgress(2);
+
+      if (!this.comboActive) {
+        this.comboActive = true;
+        this.comboStep = 1;
+      } else if (completesCombo) {
+        this.resetActiveCombo();
+      } else {
+        this.comboStep++;
+      }
+      if (this.comboActive) this.expectedBeat = n + 1;
+
       return {
         type: 'correct',
         beatIdx,
@@ -149,16 +195,41 @@ export class ComboSystem {
         rawTimingOffset: rawNearest.offset,
         timingOffset: offset,
         judgement: timingJudgement,
+        comboStarted: startsCombo,
+        comboCompleted: completesCombo
       };
     }
 
     this.consumedBeat = n;
+    this.resetActiveCombo();
+    return {
+      type: 'wrong',
+      beatIdx: expectedStep,
+      timingOffset: offset,
+      judgement: 'poor',
+      reason: 'wrongInput',
+      comboFailed: true
+    };
+  }
+
+  /**
+   * 连招下一段在其 Good 判定窗结束后仍未输入时结算为漏拍。
+   * 在场景 update 中轮询，使漏拍不依赖任何新的玩家输入。
+   */
+  updateComboTimeout(t: number): Extract<InputResult, { type: 'wrong' }> | undefined {
+    if (!this.comboActive || this.expectedBeat < 0) return undefined;
+    if (t <= this.conductor.timeOfBeat(this.expectedBeat) + INPUT_LATE_WINDOW) return undefined;
+
+    const beatIdx = this.comboStep;
+    this.consumedBeat = this.expectedBeat;
+    this.resetActiveCombo();
     return {
       type: 'wrong',
       beatIdx,
-      timingOffset: offset,
+      timingOffset: INPUT_LATE_WINDOW,
       judgement: 'poor',
-      reason: 'wrongInput'
+      reason: 'missedBeat',
+      comboFailed: true
     };
   }
 
@@ -202,8 +273,15 @@ export class ComboSystem {
     );
   }
 
-  /** 切换武器只更新连段规则；攻击始终由玩家输入触发。 */
+  /** 切换武器中止旧连招；攻击始终由玩家输入触发。 */
   startSwitch(pattern: [BeatKey, BeatKey, BeatKey, BeatKey]): void {
+    this.resetActiveCombo();
     this.pattern = pattern;
+  }
+
+  private resetActiveCombo(): void {
+    this.comboActive = false;
+    this.comboStep = 0;
+    this.expectedBeat = -1;
   }
 }

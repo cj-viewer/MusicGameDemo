@@ -193,7 +193,6 @@ export abstract class Enemy {
       return;
     }
     this.showHitFlash();
-    this.scene.queueBeatSfx('enemyHurt');
     this.scene.time.delayedCall(120, () => {
       if (!this.dead) this.restoreVisualColor();
     });

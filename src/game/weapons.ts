@@ -5,7 +5,7 @@ export type WeaponId = 'glowsticks' | 'baton';
 export interface WeaponDef {
   id: WeaponId;
   name: string;
-  /** 每小节 4 拍的输入循环 */
+  /** 任意鼓点以轻攻击起手后依次判定的四段连招。 */
   pattern: [BeatKey, BeatKey, BeatKey, BeatKey];
   color: number;
 }
