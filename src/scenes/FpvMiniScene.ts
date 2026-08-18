@@ -88,13 +88,28 @@ export class FpvMiniScene extends Phaser.Scene {
 
   setPanelEnabled(enabled: boolean): void {
     this.enabled = enabled;
-    this.cameras.main.setVisible(enabled);
-    if (!enabled) this.hideDynamicObjects();
+    const visible = this.canDisplayPanel();
+    this.cameras.main.setVisible(visible);
+    if (!visible) this.hideDynamicObjects();
   }
 
   /** 设置菜单覆盖主画面时暂时收起观察窗；关闭后回到暂停前的同一帧。 */
   setPanelPaused(paused: boolean): void {
-    this.cameras.main.setVisible(this.enabled && !paused);
+    const visible = !paused && this.canDisplayPanel();
+    this.cameras.main.setVisible(visible);
+    if (!visible) this.hideDynamicObjects();
+  }
+
+  private canDisplayPanel(): boolean {
+    const main = this.scene.get('MainScene') as MainScene | null;
+    return Boolean(
+      this.enabled &&
+      main &&
+      !main.isGamePaused &&
+      main.conductor?.started &&
+      !main.isTitleScreen &&
+      !main.isTutorialStage
+    );
   }
 
   onBeat(heavy: boolean): void {
@@ -119,7 +134,14 @@ export class FpvMiniScene extends Phaser.Scene {
 
   update(): void {
     const main = this.scene.get('MainScene') as MainScene | null;
-    if (!this.enabled || !main || main.isGamePaused || !main.conductor?.started || main.isTitleScreen) {
+    if (
+      !this.enabled ||
+      !main ||
+      main.isGamePaused ||
+      !main.conductor?.started ||
+      main.isTitleScreen ||
+      main.isTutorialStage
+    ) {
       this.cameras.main.setVisible(false);
       this.hideDynamicObjects();
       return;

@@ -18,6 +18,13 @@ import { preloadStageEnvironments } from './PinkStageEnvironment';
 
 const asset = (file: string): string => `${import.meta.env.BASE_URL}assets/${file}`;
 export const TUTORIAL_PATTERN_PANEL_KEY = 'tutorial-pattern-panel';
+export const TUTORIAL_PROGRESS_PANEL_KEY = 'tutorial-progress-panel';
+export const TUTORIAL_BOTTOM_STATUS_KEY = 'tutorial-bottom-status';
+export const TUTORIAL_BOTTOM_ROCKS_KEY = 'tutorial-bottom-rocks';
+export const TUTORIAL_CONTROL_LIGHT_KEY = 'tutorial-control-light-attack';
+export const TUTORIAL_CONTROL_HEAVY_KEY = 'tutorial-control-heavy-attack';
+export const TUTORIAL_CONTROL_SETTINGS_KEY = 'tutorial-control-settings';
+export const TUTORIAL_CONTROL_DASH_KEY = 'tutorial-control-dash';
 
 /**
  * 进入教学关之前必须就绪的资源：全部贴图、打击音效、以及教学关默认使用的那一首 BGM。
@@ -29,6 +36,34 @@ export function queueCoreAssets(scene: Phaser.Scene): void {
   scene.load.image(
     TUTORIAL_PATTERN_PANEL_KEY,
     asset('images/ui/tutorial/tutorial-pattern-panel.png')
+  );
+  scene.load.image(
+    TUTORIAL_PROGRESS_PANEL_KEY,
+    asset('images/ui/tutorial/tutorial-progress-panel.png')
+  );
+  scene.load.image(
+    TUTORIAL_BOTTOM_STATUS_KEY,
+    asset('images/ui/tutorial/tutorial-bottom-status.png')
+  );
+  scene.load.image(
+    TUTORIAL_BOTTOM_ROCKS_KEY,
+    asset('images/ui/tutorial/tutorial-bottom-rocks.png')
+  );
+  scene.load.image(
+    TUTORIAL_CONTROL_LIGHT_KEY,
+    asset('images/ui/tutorial/tutorial-control-light-attack.png')
+  );
+  scene.load.image(
+    TUTORIAL_CONTROL_HEAVY_KEY,
+    asset('images/ui/tutorial/tutorial-control-heavy-attack.png')
+  );
+  scene.load.image(
+    TUTORIAL_CONTROL_SETTINGS_KEY,
+    asset('images/ui/tutorial/tutorial-control-settings.png')
+  );
+  scene.load.image(
+    TUTORIAL_CONTROL_DASH_KEY,
+    asset('images/ui/tutorial/tutorial-control-dash.png')
   );
   scene.load.image('guard', asset('images/characters/guard.png'));
   for (const action of ['idle', 'run'] as const) {

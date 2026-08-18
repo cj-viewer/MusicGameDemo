@@ -4,6 +4,7 @@ import { queueCoreAssets, startBackgroundLoad } from '../game/assetManifest';
 
 const INTRO_VIDEO_KEY = 'intro-video';
 const ROCKET_VIDEO_KEY = 'intro-rocket-video';
+const INTRO_TITLE_BACKGROUND_KEY = 'intro-title-background';
 
 export class IntroScene extends Phaser.Scene {
   private video?: Phaser.GameObjects.Video;
@@ -22,6 +23,7 @@ export class IntroScene extends Phaser.Scene {
 
   preload(): void {
     const asset = (file: string): string => `${import.meta.env.BASE_URL}assets/${file}`;
+    this.load.image(INTRO_TITLE_BACKGROUND_KEY, asset('images/backgrounds/intro/intro-title-background.png'));
     this.load.video(INTRO_VIDEO_KEY, asset('video/intro.mp4'));
     this.load.video(ROCKET_VIDEO_KEY, asset('video/intro-rocket.mp4'));
   }
@@ -33,42 +35,30 @@ export class IntroScene extends Phaser.Scene {
     this.cameras.main.setZoom(UI_SCALE).centerOn(640, 360);
     this.cameras.main.setBackgroundColor('#000000');
 
-    const backdrop = this.add.rectangle(640, 360, 1280, 720, 0x090516);
-    const glow = this.add.circle(640, 315, 265, 0x7c3aed, 0.22);
-    const title = this.add
-      .text(640, 245, '节奏星球', {
-        fontFamily: 'Arial, Microsoft YaHei, sans-serif',
-        fontSize: '86px',
-        fontStyle: 'bold',
-        color: '#ffffff',
-        stroke: '#7c3aed',
-        strokeThickness: 8,
-        shadow: { color: '#d946ef', blur: 24, fill: true }
-      })
-      .setOrigin(0.5);
-    const subtitle = this.add
-      .text(640, 350, 'DJ Drop the Beat', {
-        fontFamily: 'Arial, sans-serif',
-        fontSize: '34px',
-        fontStyle: 'bold',
-        color: '#67e8f9',
-        letterSpacing: 5
-      })
-      .setOrigin(0.5);
+    this.textures.get(INTRO_TITLE_BACKGROUND_KEY).setFilter(Phaser.Textures.FilterMode.LINEAR);
+    const backdrop = this.add.image(640, 360, INTRO_TITLE_BACKGROUND_KEY);
+    const coverScale = Math.max(1280 / backdrop.width, 720 / backdrop.height);
+    backdrop.setDisplaySize(backdrop.width * coverScale, backdrop.height * coverScale);
 
     this.startButton = this.add
-      .rectangle(640, 500, 260, 76, 0xec4899, 1)
-      .setStrokeStyle(3, 0xffffff, 0.9)
+      .rectangle(1060, 230, 220, 60, 0x7a244e, 0.44)
+      .setStrokeStyle(2, 0xffffff, 0.92)
       .setInteractive({ useHandCursor: true });
+    const startButtonInner = this.add
+      .rectangle(1060, 230, 206, 46, 0xfff8ec, 0.04)
+      .setStrokeStyle(1, 0xfff5dc, 0.72);
     this.startButtonText = this.add
-      .text(640, 500, '开 始', {
-        fontFamily: 'Arial',
-        fontSize: '30px',
+      .text(1060, 230, '开 始', {
+        fontFamily: '"Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif',
+        fontSize: '26px',
         fontStyle: 'bold',
-        color: '#ffffff'
+        color: '#fffdf1',
+        letterSpacing: 6,
+        resolution: 2,
+        shadow: { color: '#7b284d', blur: 4, fill: true, offsetY: 1 }
       })
       .setOrigin(0.5);
-    this.startUi = this.add.container(0, 0, [backdrop, glow, title, subtitle, this.startButton, this.startButtonText]).setDepth(2);
+    this.startUi = this.add.container(0, 0, [backdrop, this.startButton, startButtonInner, this.startButtonText]).setDepth(2);
 
     this.video = this.add.video(640, 360, INTRO_VIDEO_KEY).setDepth(1).setVisible(false);
     this.video.once(Phaser.GameObjects.Events.VIDEO_CREATED, (_video: Phaser.GameObjects.Video, width: number, height: number) => {
@@ -82,8 +72,8 @@ export class IntroScene extends Phaser.Scene {
     // 玩家看完片头就能直接进教学关，而不是再等一轮几 MB 的下载。
     this.video.on(Phaser.GameObjects.Events.VIDEO_PLAYING, this.onVideoPlaying, this);
 
-    this.startButton.on('pointerover', () => this.startButton?.setFillStyle(0xf472b6));
-    this.startButton.on('pointerout', () => this.startButton?.setFillStyle(0xec4899));
+    this.startButton.on('pointerover', () => this.startButton?.setFillStyle(0xa33b68, 0.62).setStrokeStyle(2, 0xfff5dc, 1));
+    this.startButton.on('pointerout', () => this.startButton?.setFillStyle(0x7a244e, 0.44).setStrokeStyle(2, 0xffffff, 0.92));
     this.startButton.on('pointerdown', this.playIntro, this);
     this.input.keyboard?.once('keydown-SPACE', this.finishIntro, this);
 

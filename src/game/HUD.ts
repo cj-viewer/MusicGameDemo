@@ -12,9 +12,13 @@ const METER_X = BAR_CENTER_X - 448;
 const WEAPON_NAME_X = METER_X + 54;
 const STATE_X = BAR_CENTER_X + 400;
 const HP_X = 32;
-// 与 ComboMeter 同一基线放在左下：缩短至不压住圆环。
 const HP_Y = 42;
 const HP_WIDTH = 220;
+const HUD_FRAME_COLOR = 0xfffdf1;
+const HUD_GLASS_COLOR = 0xf2f0e8;
+const HUD_TEXT_COLOR = '#fffdf1';
+const HUD_MUTED_TEXT_COLOR = '#e3eee8';
+const HUD_FONT = '"Arial Narrow", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif';
 /** 预览未来 3 拍（旧版 2 拍的 1.5 倍），相邻拍间距 120px；到达中心即拍点。 */
 const LOOKAHEAD_BEATS = 3;
 const NOTE_SPACING = 120;
@@ -64,13 +68,36 @@ export class HUD {
   private panel: Phaser.GameObjects.Rectangle;
   private feverText: Phaser.GameObjects.Text;
   private feverMode = false;
-  private hpBaseColor = 0x4ade80;
+  private hpBaseColor = 0xd4f2df;
   private hpPulseUntil = 0;
   private screenLayer: Phaser.GameObjects.Container;
 
   constructor(scene: Phaser.Scene, conductor: Conductor) {
     this.scene = scene;
     this.conductor = conductor;
+
+    // 正式关沿用第一关的轻透白线语言：极淡雾面、细边与断角，不使用黑色实底。
+    const hudChrome = scene.add.graphics().setDepth(9);
+    const drawGlassFrame = (x: number, y: number, width: number, height: number): void => {
+      const corner = 11;
+      hudChrome.fillStyle(HUD_GLASS_COLOR, 0.055);
+      hudChrome.fillRect(x, y, width, height);
+      hudChrome.lineStyle(1, HUD_FRAME_COLOR, 0.34);
+      hudChrome.strokeRect(x, y, width, height);
+      hudChrome.lineStyle(2, HUD_FRAME_COLOR, 0.82);
+      hudChrome.lineBetween(x, y, x + corner, y);
+      hudChrome.lineBetween(x, y, x, y + corner);
+      hudChrome.lineBetween(x + width - corner, y, x + width, y);
+      hudChrome.lineBetween(x + width, y, x + width, y + corner);
+      hudChrome.lineBetween(x, y + height - corner, x, y + height);
+      hudChrome.lineBetween(x, y + height, x + corner, y + height);
+      hudChrome.lineBetween(x + width, y + height - corner, x + width, y + height);
+      hudChrome.lineBetween(x + width - corner, y + height, x + width, y + height);
+    };
+    drawGlassFrame(20, 12, 248, 58);
+    drawGlassFrame(128, 612, 244, 96);
+    hudChrome.lineStyle(1, HUD_FRAME_COLOR, 0.2);
+    hudChrome.lineBetween(230, 638, 230, 694);
 
     // 判定条背板
     this.panel = scene.add
@@ -90,10 +117,12 @@ export class HUD {
 
     this.feverText = scene.add
       .text(METER_X, BAR_Y - 42, 'ComboMeter', {
-        fontFamily: 'Arial',
-        fontSize: '16px',
-        fontStyle: 'bold',
-        color: '#f97316'
+        fontFamily: HUD_FONT,
+        fontSize: '15px',
+        color: HUD_TEXT_COLOR,
+        letterSpacing: 1,
+        resolution: 2,
+        shadow: { offsetX: 0, offsetY: 1, color: 'rgba(43, 63, 58, 0.55)', blur: 2, fill: true }
       })
       .setOrigin(0.5)
       .setDepth(11)
@@ -102,34 +131,49 @@ export class HUD {
     this.meterGfx = scene.add.graphics().setDepth(10);
     this.meterBeatRing = scene.add
       .circle(METER_X, BAR_Y, 22)
-      .setStrokeStyle(3, 0xfacc15, 0.85)
+      .setStrokeStyle(2, HUD_FRAME_COLOR, 0.72)
       .setFillStyle(0, 0)
       .setDepth(10);
     this.meterText = scene.add
-      .text(METER_X, BAR_Y, '0', { fontFamily: 'Arial', fontSize: '22px', color: '#facc15' })
+      .text(METER_X, BAR_Y, '0', {
+        fontFamily: HUD_FONT,
+        fontSize: '20px',
+        color: HUD_TEXT_COLOR,
+        resolution: 2
+      })
       .setOrigin(0.5)
       .setDepth(11);
 
     // HP
     this.hpLabel = scene.add
       .text(HP_X, HP_Y - 22, 'PLAYER HP', {
-        fontFamily: 'Arial',
-        fontSize: '14px',
-        fontStyle: 'bold',
-        color: '#ffffff',
-        stroke: '#000000',
-        strokeThickness: 3
+        fontFamily: HUD_FONT,
+        fontSize: '13px',
+        color: HUD_TEXT_COLOR,
+        letterSpacing: 1,
+        resolution: 2,
+        shadow: { offsetX: 0, offsetY: 1, color: 'rgba(43, 63, 58, 0.55)', blur: 2, fill: true }
       })
       .setOrigin(0, 0.5)
       .setDepth(11);
     this.hpBarBg = scene.add
-      .rectangle(HP_X, HP_Y, HP_WIDTH + 4, 24, 0x0f172a, 0.92)
+      .rectangle(HP_X, HP_Y, HP_WIDTH + 4, 16, HUD_FRAME_COLOR, 0.08)
       .setOrigin(0, 0.5)
-      .setStrokeStyle(1, 0x334155)
+      .setStrokeStyle(1, HUD_FRAME_COLOR, 0.52)
       .setDepth(10);
-    this.hpBar = scene.add.rectangle(HP_X + 2, HP_Y, HP_WIDTH, 18, 0x4ade80).setOrigin(0, 0.5).setDepth(10);
+    this.hpBar = scene.add
+      .rectangle(HP_X + 2, HP_Y, HP_WIDTH, 10, 0xd4f2df)
+      .setOrigin(0, 0.5)
+      .setAlpha(0.9)
+      .setDepth(10);
     this.hpText = scene.add
-      .text(HP_X + HP_WIDTH / 2 + 2, HP_Y, '100 / 100', { fontFamily: 'Arial', fontSize: '13px', color: '#e2e8f0' })
+      .text(HP_X + HP_WIDTH / 2 + 2, HP_Y, '100 / 100', {
+        fontFamily: HUD_FONT,
+        fontSize: '12px',
+        color: HUD_MUTED_TEXT_COLOR,
+        resolution: 2,
+        shadow: { offsetX: 0, offsetY: 1, color: 'rgba(43, 63, 58, 0.55)', blur: 1, fill: true }
+      })
       .setOrigin(0.5)
       .setDepth(10);
 
@@ -140,12 +184,12 @@ export class HUD {
 
     this.weaponText = scene.add
       .text(WEAPON_NAME_X, BAR_Y, '', {
-        fontFamily: 'Arial',
-        fontSize: '22px',
-        fontStyle: 'bold',
-        color: '#67e8f9',
-        stroke: '#0f172a',
-        strokeThickness: 3
+        fontFamily: HUD_FONT,
+        fontSize: '20px',
+        color: '#d8f3ed',
+        letterSpacing: 1,
+        resolution: 2,
+        shadow: { offsetX: 0, offsetY: 1, color: 'rgba(43, 63, 58, 0.62)', blur: 2, fill: true }
       })
       .setOrigin(0, 0.5)
       .setDepth(10);
@@ -193,6 +237,7 @@ export class HUD {
       .setScale(UI_SCALE / MAIN_CAMERA_BASE_ZOOM)
       .setScrollFactor(0);
     this.screenLayer.add([
+      hudChrome,
       this.panel,
       this.centerMark,
       this.centerLine,
@@ -394,6 +439,11 @@ export class HUD {
     this.measureDividers.clear();
   }
 
+  /** 教学关使用 PSD 自带的底部状态栏；正式关恢复现有动态 HUD。 */
+  setGameplayHudVisible(visible: boolean): void {
+    this.screenLayer.setVisible(visible);
+  }
+
   private refreshWeaponText(): void {
     if (!this.weaponName) {
       this.weaponText.setText('');
@@ -401,7 +451,7 @@ export class HUD {
     }
     const patternText = this.pattern.map((key) => (key === 'L' ? '轻' : '重')).join(' → ');
     this.weaponText.setText(this.beatGuideVisible ? `${this.weaponName}　${patternText}` : this.weaponName);
-    this.weaponText.setColor(this.weaponName === '警棍' ? '#c084fc' : '#67e8f9');
+    this.weaponText.setColor(this.weaponName === '警棍' ? '#ead8f6' : '#d8f3ed');
   }
 
   onBeat(beatInMeasure: number): void {
@@ -415,7 +465,7 @@ export class HUD {
     this.pulseVictory(heavy);
     const pulseScale = heavy ? 1.16 : 1.1;
     this.scene.tweens.killTweensOf([this.meterBeatRing, this.meterText, this.feverText, this.weaponText, this.waveText]);
-    this.meterBeatRing.setStrokeStyle(heavy ? 4 : 3, heavy ? 0xf97316 : 0xe879f9, 0.9);
+    this.meterBeatRing.setStrokeStyle(heavy ? 3 : 2, heavy ? 0xffe39a : 0xd8f3ed, 0.92);
     for (const target of [this.meterBeatRing, this.meterText, this.feverText, this.weaponText, this.waveText]) {
       target.setScale(pulseScale);
     }
@@ -566,11 +616,11 @@ export class HUD {
     this.feverMode = active;
     if (!active) {
       if (this.beatGuideVisible) this.panel.setStrokeStyle(1, 0x334155);
-      this.feverText.setColor('#facc15');
-      this.meterText.setColor('#facc15');
+      this.feverText.setColor(HUD_TEXT_COLOR);
+      this.meterText.setColor(HUD_TEXT_COLOR);
     } else {
-      this.feverText.setColor('#f97316');
-      this.meterText.setColor('#f97316');
+      this.feverText.setColor('#ffe39a');
+      this.meterText.setColor('#ffe39a');
     }
   }
 
@@ -578,10 +628,10 @@ export class HUD {
   setFeverCountdown(ratio: number): void {
     if (!this.feverMode) return;
     this.meterGfx.clear();
-    this.meterGfx.lineStyle(3, 0x334155, 1);
+    this.meterGfx.lineStyle(2, HUD_FRAME_COLOR, 0.28);
     this.meterGfx.strokeCircle(METER_X, BAR_Y, 22);
     if (ratio > 0) {
-      this.meterGfx.lineStyle(5, 0xf97316, 1);
+      this.meterGfx.lineStyle(4, 0xffd68a, 0.95);
       this.meterGfx.beginPath();
       this.meterGfx.arc(METER_X, BAR_Y, 22, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio, false);
       this.meterGfx.strokePath();
@@ -592,11 +642,11 @@ export class HUD {
   setCombo(progress: number, level: number): void {
     if (this.feverMode) return;
     this.meterGfx.clear();
-    this.meterGfx.lineStyle(3, 0x334155, 1);
+    this.meterGfx.lineStyle(2, HUD_FRAME_COLOR, 0.28);
     this.meterGfx.strokeCircle(METER_X, BAR_Y, 22);
     const toNext = level >= 5 ? 1 : (progress - level * 20) / 20;
     if (toNext > 0) {
-      this.meterGfx.lineStyle(4, level >= 5 ? 0xf97316 : 0xfacc15, 1);
+      this.meterGfx.lineStyle(3, level >= 5 ? 0xffd68a : 0xd8f3ed, 0.95);
       this.meterGfx.beginPath();
       this.meterGfx.arc(METER_X, BAR_Y, 22, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * toNext, false);
       this.meterGfx.strokePath();
@@ -622,7 +672,7 @@ export class HUD {
 
   setHp(hp: number, maxHp: number): void {
     this.hpBar.scaleX = Math.max(0, hp / maxHp);
-    this.hpBaseColor = hp <= 30 ? 0xef4444 : 0x4ade80;
+    this.hpBaseColor = hp <= 30 ? 0xf59f9f : 0xd4f2df;
     if (this.scene.time.now >= this.hpPulseUntil) this.hpBar.setFillStyle(this.hpBaseColor);
     this.hpText.setText(`${hp} / ${maxHp}`);
   }
