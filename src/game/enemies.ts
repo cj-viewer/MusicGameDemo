@@ -186,11 +186,13 @@ export abstract class Enemy {
       this.go.body.setVelocity(this.knockbackVelocity.x, this.knockbackVelocity.y);
     }
     this.scene.spawnImpactFx(this.x, this.y, 0xef4444, false);
-    this.showHitFlash();
     if (this.hp <= 0) {
+      // 致死帧直接保持原贴图淡出；若先套纯白 FILL 再放大，会变成遮住弹体材质的大白剪影。
+      this.restoreVisualColor();
       this.die();
       return;
     }
+    this.showHitFlash();
     this.scene.queueBeatSfx('enemyHurt');
     this.scene.time.delayedCall(120, () => {
       if (!this.dead) this.restoreVisualColor();
@@ -259,8 +261,8 @@ export abstract class Enemy {
   }
 
   private showHitFlash(): void {
-    if (this.go instanceof Phaser.GameObjects.Shape) this.go.setFillStyle(0xffffff);
-    else this.go.setTint(0xffffff).setTintMode(Phaser.TintModes.FILL);
+    if (this.go instanceof Phaser.GameObjects.Shape) this.go.setFillStyle(0xffc4bc);
+    else this.go.setTint(0xffd0ca).setTintMode(Phaser.TintModes.MULTIPLY);
   }
 
   private restoreVisualColor(): void {
@@ -294,15 +296,15 @@ export class SmallGuard extends Enemy {
     this.attackFx = scene.add
       .sprite(x, y, 'npc-guard-attack-light-fx-1')
       .setScale(GUARD_ATTACK_EFFECT_SCALE)
-      .setAlpha(0.62)
+      .setAlpha(0.82)
       .setVisible(false);
     enableEmissiveBloom(this.attackFx, GUARD_EMISSIVE_COLOR, {
-      glowStrength: 0.48,
+      glowStrength: 0.2,
       innerStrength: 0.03,
       glowDistance: 19,
       glowQuality: 2,
       blurRadius: 8,
-      bloomAmount: 0.18,
+      bloomAmount: 0.05,
       threshold: 0.07
     });
     this.weaponSprite = scene.add
@@ -546,15 +548,15 @@ export class FanEnemy extends Enemy {
     this.attackFx = scene.add
       .sprite(x, y, 'npc-fan-attack-hard-fx-2')
       .setScale(FAN_SPRITE_SCALE)
-      .setAlpha(0.62)
+      .setAlpha(0.84)
       .setVisible(false);
     enableEmissiveBloom(this.attackFx, FAN_EMISSIVE_COLOR, {
-      glowStrength: 0.55,
+      glowStrength: 0.22,
       innerStrength: 0.04,
       glowDistance: 21,
       glowQuality: 2,
       blurRadius: 9,
-      bloomAmount: 0.2,
+      bloomAmount: 0.055,
       threshold: 0.06
     });
     this.weaponSprite = scene.add

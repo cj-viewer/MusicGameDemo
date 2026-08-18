@@ -78,7 +78,7 @@ export class FpvMiniScene extends Phaser.Scene {
       this.freeBulletSprites.push(
         this.add
           .rectangle(0, 0, 4, 4, 0xffffff)
-          .setBlendMode(Phaser.BlendModes.ADD)
+          .setBlendMode(Phaser.BlendModes.NORMAL)
           .setVisible(false)
       );
     }
@@ -222,7 +222,11 @@ export class FpvMiniScene extends Phaser.Scene {
         const bullet = object as Phaser.GameObjects.Rectangle;
         if (!bullet.active) continue;
         seen.add(bullet);
-        const projected = this.project(px, py, angle, bullet.x, bullet.y, bullet.displayWidth, bullet.displayHeight);
+        const displayWidth =
+          (bullet.getData('fpvDisplayWidth') as number | undefined) ?? bullet.displayWidth;
+        const displayHeight =
+          (bullet.getData('fpvDisplayHeight') as number | undefined) ?? bullet.displayHeight;
+        const projected = this.project(px, py, angle, bullet.x, bullet.y, displayWidth, displayHeight);
         let billboard = this.bulletBillboards.get(bullet);
         if (!projected) {
           billboard?.setVisible(false);
@@ -233,12 +237,14 @@ export class FpvMiniScene extends Phaser.Scene {
           if (!billboard) continue;
           this.bulletBillboards.set(bullet, billboard);
         }
+        const visualColor = (bullet.getData('visualColor') as number | undefined) ?? bullet.fillColor;
+        const visualAlpha = bullet.getData('sourceKind') ? 0.78 : 0.84;
         billboard
           .setVisible(true)
           .setPosition(projected.screenX, HORIZON_Y + (projected.bottomY - HORIZON_Y) * 0.55)
           .setDisplaySize(Math.max(2, projected.width), Math.max(2, projected.height))
-          .setFillStyle(bullet.fillColor, 0.38)
-          .setStrokeStyle()
+          .setFillStyle(visualColor, visualAlpha)
+          .setStrokeStyle(1, visualColor, 1)
           .setDepth(-projected.dist);
       }
     }

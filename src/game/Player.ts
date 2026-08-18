@@ -39,8 +39,8 @@ const DODGE_BEAT_WINDOW = 0.12;
 const ATTACK_EFFECT_DURATION_MS = 200;
 const PLAYER_ATTACK_SIDE_OFFSET = 5.12 * 1.5;
 const PLAYER_WEAPON_WAIST_OFFSET_Y = 15 * UI_SCALE;
-const LIGHT_ATTACK_EFFECT_ALPHA = 0.46;
-const HARD_ATTACK_EFFECT_ALPHA = 0.59;
+const LIGHT_ATTACK_EFFECT_ALPHA = 0.82;
+const HARD_ATTACK_EFFECT_ALPHA = 0.86;
 const HARD_ATTACK_EFFECT_SCALE = 1.18;
 const LIGHT_ATTACK_EMISSIVE_COLOR = 0xfff36b;
 const HARD_ATTACK_EMISSIVE_COLOR = 0xf28cff;
@@ -96,7 +96,7 @@ export class Player {
     this.attackFx = scene.add
       .sprite(x, y, 'player-attack-light-1')
       .setScale(PLAYER_SPRITE_SCALE)
-      .setBlendMode(Phaser.BlendModes.ADD)
+      .setBlendMode(Phaser.BlendModes.NORMAL)
       .setTintMode(Phaser.TintModes.FILL)
       .setTint(LIGHT_ATTACK_EMISSIVE_COLOR)
       .setVisible(false);
@@ -104,12 +104,12 @@ export class Player {
       this.attackFx,
       LIGHT_ATTACK_EMISSIVE_COLOR,
       {
-        glowStrength: 0.55,
+        glowStrength: 0.22,
         innerStrength: 0.04,
         glowDistance: 22,
         glowQuality: 2,
         blurRadius: 9,
-        bloomAmount: 0.22,
+        bloomAmount: 0.06,
         threshold: 0.06
       }
     );
@@ -318,7 +318,7 @@ export class Player {
     this.invulnUntil = now + 600;
     this.scene.queueBeatSfx('playerHurt');
     this.scene.hud.setHp(this.hp, this.maxHp);
-    this.flashHitWhite();
+    this.flashHitWarm();
     this.scene.spawnImpactFx(this.x, this.y, 0xef4444, true);
     if (this.hp <= 0) {
       this.scene.onPlayerDied();
@@ -379,9 +379,9 @@ export class Player {
     this.scene.time.delayedCall(120, () => this.go.clearTint());
   }
 
-  private flashHitWhite(): void {
-    this.go.setTint(0xffffff).setTintMode(Phaser.TintModes.FILL);
-    this.weaponSprite.setTint(0xffffff).setTintMode(Phaser.TintModes.FILL);
+  private flashHitWarm(): void {
+    this.go.setTint(0xffd0ca).setTintMode(Phaser.TintModes.MULTIPLY);
+    this.weaponSprite.setTint(0xffd0ca).setTintMode(Phaser.TintModes.MULTIPLY);
     this.scene.time.delayedCall(140, () => {
       if (this.go.active) this.go.clearTint().setTintMode(Phaser.TintModes.MULTIPLY);
       if (this.weaponSprite.active) {

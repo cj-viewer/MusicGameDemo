@@ -17,7 +17,7 @@ export interface EmissiveBloomHandle {
 }
 
 /**
- * 将独立攻击特效变为有色自发光层，并用阈值、模糊和 ADD 合成生成自然 Bloom。
+ * 让独立攻击特效保留正常混合的实色轮廓，只在边缘外侧附加小范围 Glow / Bloom。
  * 仅用于短时可见的角色攻击特效；大量弹幕使用 MainScene 的轻量连续衰减纹理。
  */
 export function enableEmissiveBloom(
@@ -26,7 +26,7 @@ export function enableEmissiveBloom(
   options: EmissiveBloomOptions = {}
 ): EmissiveBloomHandle {
   sprite
-    .setBlendMode(Phaser.BlendModes.ADD)
+    .setBlendMode(Phaser.BlendModes.NORMAL)
     .setTintMode(Phaser.TintModes.FILL)
     .setTint(color)
     .enableFilters();
@@ -36,8 +36,8 @@ export function enableEmissiveBloom(
 
   const glow = filters.internal.addGlow(
     color,
-    options.glowStrength ?? 1.1,
-    options.innerStrength ?? 0.12,
+    options.glowStrength ?? 0.24,
+    options.innerStrength ?? 0.04,
     1,
     false,
     options.glowQuality ?? 2,
@@ -48,10 +48,10 @@ export function enableEmissiveBloom(
   const bloom = filters.internal.addParallelFilters();
   bloom.top.addThreshold(options.threshold ?? 0.08, 1);
   const blurRadius = options.blurRadius ?? 8;
-  const blur = bloom.top.addBlur(2, blurRadius, blurRadius, 0.52, color, 3);
+  const blur = bloom.top.addBlur(2, blurRadius, blurRadius, 0.2, color, 3);
   blur.setPaddingOverride(null);
   bloom.blend.blendMode = Phaser.BlendModes.ADD;
-  bloom.blend.amount = options.bloomAmount ?? 0.42;
+  bloom.blend.amount = options.bloomAmount ?? 0.06;
   bloom.setPaddingOverride(null);
 
   return { glow, bloom, blur };

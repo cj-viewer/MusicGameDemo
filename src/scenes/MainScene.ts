@@ -110,15 +110,19 @@ const PLAYER_BULLET_COLOR = 0xef4444;
 const BATON_BULLET_COLOR = 0xa855f7;
 const GUARD_BULLET_COLOR = 0x52efff;
 const FAN_BULLET_COLOR = 0xff543d;
-const PROJECTILE_SOFT_GLOW_TEXTURE = 'fx-projectile-soft-glow';
-const PROJECTILE_POINT_GLOW_TEXTURE = 'fx-projectile-point-glow';
-/** 与“点/线特效自发光”任务一致的玩家直射亮芯与连续 Bloom 比例。 */
+const PLAYER_PROJECTILE_TEXTURE = 'fx-projectile-player-composite';
+const PLAYER_PROJECTILE_ON_BEAT_TEXTURE = 'fx-projectile-player-composite-on-beat';
+const GUARD_PROJECTILE_TEXTURE = 'fx-projectile-guard-composite';
+const FAN_PROJECTILE_TEXTURE = 'fx-projectile-fan-composite';
+/** 透明宿主沿用既有尺寸；主画面可见胶囊缩短 20%，判定段与外部纹理包围不变。 */
 const PLAYER_LINE_CORE_LENGTH_SCALE = 1.35;
+const PLAYER_LINE_VISIBLE_LENGTH_SCALE = PLAYER_LINE_CORE_LENGTH_SCALE * 0.8;
 const PLAYER_LINE_CORE_THICKNESS_SCALE = 0.52;
 const PLAYER_LINE_GLOW_LENGTH_SCALE = 1.95;
 const PLAYER_LINE_GLOW_THICKNESS_SCALE = 3.2;
 /** 参考旧版画面，在武器发光端与直射亮芯之间保留约 19px 的 720p 屏幕间距。 */
 const PLAYER_STRAIGHT_MUZZLE_GAP = worldSize(24);
+/** 点弹只在实体轮廓外保留一圈紧贴泛光，避免浅色地面上的大面积夹白。 */
 const ENEMY_PROJECTILE_GLOW_DISTANCE = worldSize(13);
 /** bg1.psd 内嵌 UI 使用 1920×1080 绝对坐标，进入 2K 画布时统一等比放大。 */
 const PSD_LAYOUT_SCALE = VIEW_WIDTH / 1920;
@@ -2622,118 +2626,187 @@ export class MainScene extends Phaser.Scene {
     return hitboxes;
   }
 
-  /** 来自“点/线特效自发光”版本：连续 Alpha 衰减的胶囊光晕。 */
-  private ensureProjectileSoftGlowTexture(): string {
-    if (this.textures.exists(PROJECTILE_SOFT_GLOW_TEXTURE)) return PROJECTILE_SOFT_GLOW_TEXTURE;
+  /**
+   * 将实体亮芯、饱和外壳与贴边柔光烘进同一张纹理。
+   * 运行时只显示一个 NORMAL Image，避免多个半透明对象叠成空心轮廓或夹白光团。
+   */
+  private ensurePlayerProjectileTexture(onBeat: boolean): string {
+    const textureKey = onBeat ? PLAYER_PROJECTILE_ON_BEAT_TEXTURE : PLAYER_PROJECTILE_TEXTURE;
+    if (this.textures.exists(textureKey)) return textureKey;
 
     const width = 128;
     const height = 64;
-    const texture = this.textures.createCanvas(PROJECTILE_SOFT_GLOW_TEXTURE, width, height);
+    const texture = this.textures.createCanvas(textureKey, width, height);
     if (!texture) return '__WHITE';
 
-    const context = texture.context;
-    const image = context.createImageData(width, height);
-    const startX = 28;
-    const endX = width - startX;
-    const centerY = height / 2;
-    const coreRadius = 3.5;
-    const sigma = 10.5;
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const nearestX = Phaser.Math.Clamp(x, startX, endX);
-        const distanceToAxis = Math.hypot(x - nearestX, y - centerY);
-        const distanceFromCore = Math.max(0, distanceToAxis - coreRadius);
-        const falloff = Math.exp(-(distanceFromCore * distanceFromCore) / (2 * sigma * sigma));
-        const index = (y * width + x) * 4;
-        image.data[index] = 255;
-        image.data[index + 1] = 255;
-        image.data[index + 2] = 255;
-        image.data[index + 3] = Math.round(255 * falloff * 0.52);
-      }
-    }
-    context.putImageData(image, 0, 0);
+    const shellColor = 0xd92f3d;
+    const midColor = onBeat ? 0xff7a82 : 0xff6470;
+    const coreColor = onBeat ? 0xfffff7 : 0xfff6f3;
+    const shellWidth = width * (PLAYER_LINE_VISIBLE_LENGTH_SCALE / PLAYER_LINE_GLOW_LENGTH_SCALE);
+    const shellHeight = height * (PLAYER_LINE_CORE_THICKNESS_SCALE / PLAYER_LINE_GLOW_THICKNESS_SCALE);
+    const coreWidth = shellWidth * 0.76;
+    const coreHeight = shellHeight * 0.54;
+    this.paintCompositeCapsule(
+      texture.context,
+      width,
+      height,
+      shellWidth,
+      shellHeight,
+      coreWidth,
+      coreHeight,
+      shellColor,
+      midColor,
+      coreColor
+    );
     texture.refresh();
     texture.setFilter(Phaser.Textures.FilterMode.LINEAR);
-    return PROJECTILE_SOFT_GLOW_TEXTURE;
+    return textureKey;
   }
 
-  /** 来自“点/线特效自发光”版本：敌弹使用连续径向衰减的点光源。 */
-  private ensureProjectilePointGlowTexture(): string {
-    if (this.textures.exists(PROJECTILE_POINT_GLOW_TEXTURE)) return PROJECTILE_POINT_GLOW_TEXTURE;
+  private ensureEnemyProjectileTexture(sourceKind: EnemyKind, visualDiameter: number): string {
+    const textureKey = sourceKind === 'fan' ? FAN_PROJECTILE_TEXTURE : GUARD_PROJECTILE_TEXTURE;
+    if (this.textures.exists(textureKey)) return textureKey;
 
     const size = 64;
-    const texture = this.textures.createCanvas(PROJECTILE_POINT_GLOW_TEXTURE, size, size);
+    const texture = this.textures.createCanvas(textureKey, size, size);
     if (!texture) return '__WHITE';
 
-    const context = texture.context;
-    const image = context.createImageData(size, size);
-    const center = size / 2;
-    const coreRadius = 3;
-    const sigma = 8.5;
-    for (let y = 0; y < size; y++) {
-      for (let x = 0; x < size; x++) {
-        const distance = Math.max(0, Math.hypot(x - center, y - center) - coreRadius);
-        const falloff = Math.exp(-(distance * distance) / (2 * sigma * sigma));
-        const index = (y * size + x) * 4;
-        image.data[index] = 255;
-        image.data[index + 1] = 255;
-        image.data[index + 2] = 255;
-        image.data[index + 3] = Math.round(255 * falloff);
+    const shellColor = sourceKind === 'fan' ? 0xd92c16 : 0x18b6cf;
+    const midColor = sourceKind === 'fan' ? 0xff7832 : 0x7ff7ff;
+    const coreColor = sourceKind === 'fan' ? 0xfff6cf : 0xf2ffff;
+    const displayDiameter = visualDiameter * 0.96 + ENEMY_PROJECTILE_GLOW_DISTANCE * 2;
+    const shellRadius = (visualDiameter * 0.48 * size) / displayDiameter;
+    this.paintCompositePoint(texture.context, size, shellRadius, shellColor, midColor, coreColor);
+    texture.refresh();
+    texture.setFilter(Phaser.Textures.FilterMode.LINEAR);
+    return textureKey;
+  }
+
+  private paintCompositeCapsule(
+    context: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+    shellWidth: number,
+    shellHeight: number,
+    coreWidth: number,
+    coreHeight: number,
+    shellColor: number,
+    midColor: number,
+    coreColor: number
+  ): void {
+    const image = context.createImageData(width, height);
+    const centerX = (width - 1) * 0.5;
+    const centerY = (height - 1) * 0.5;
+    const shellRadius = shellHeight * 0.5;
+    const coreRadius = coreHeight * 0.5;
+    const shellHalfSpine = Math.max(0, shellWidth * 0.5 - shellRadius);
+    const midWidth = shellWidth * 0.9;
+    const midHeight = shellHeight * 0.82;
+    const midRadius = midHeight * 0.5;
+    const midHalfSpine = Math.max(0, midWidth * 0.5 - midRadius);
+    const coreHalfSpine = Math.max(0, coreWidth * 0.5 - coreRadius);
+    const shellRgb = this.colorChannels(shellColor);
+    const midRgb = this.colorChannels(midColor);
+    const coreRgb = this.colorChannels(coreColor);
+    const haloSigma = 2.6;
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const shellNearestX = Phaser.Math.Clamp(x, centerX - shellHalfSpine, centerX + shellHalfSpine);
+        const midNearestX = Phaser.Math.Clamp(x, centerX - midHalfSpine, centerX + midHalfSpine);
+        const coreNearestX = Phaser.Math.Clamp(x, centerX - coreHalfSpine, centerX + coreHalfSpine);
+        const shellSdf = Math.hypot(x - shellNearestX, y - centerY) - shellRadius;
+        const midSdf = Math.hypot(x - midNearestX, y - centerY) - midRadius;
+        const coreSdf = Math.hypot(x - coreNearestX, y - centerY) - coreRadius;
+        this.writeCompositePixel(
+          image.data,
+          (y * width + x) * 4,
+          shellRgb,
+          midRgb,
+          coreRgb,
+          shellSdf,
+          midSdf,
+          coreSdf,
+          haloSigma
+        );
       }
     }
     context.putImageData(image, 0, 0);
-    texture.refresh();
-    texture.setFilter(Phaser.Textures.FilterMode.LINEAR);
-    return PROJECTILE_POINT_GLOW_TEXTURE;
   }
 
-  /** 只替换自发光合成：尺寸由调用方现有参数提供，不触碰判定或运动逻辑。 */
-  private attachProjectileGlowLayer(
-    bullet: Phaser.GameObjects.Rectangle,
-    textureKey: string,
-    color: number,
-    width: number,
-    height: number,
-    offsetX: number,
-    offsetY: number,
-    alpha: number
-  ): Phaser.GameObjects.Image {
-    const glow = this.add
-      .image(bullet.x + offsetX, bullet.y + offsetY, textureKey)
-      .setDisplaySize(width, height)
-      .setRotation(bullet.rotation)
-      .setTintMode(Phaser.TintModes.FILL)
-      .setTint(color)
-      .setAlpha(alpha)
-      .setBlendMode(Phaser.BlendModes.ADD)
-      .setDepth(bullet.depth - 0.003);
-    bullet.setData('projectileGlowLayers', [glow]);
-    bullet.setData('projectileGlowOffsetX', offsetX);
-    bullet.setData('projectileGlowOffsetY', offsetY);
-    return glow;
-  }
+  private paintCompositePoint(
+    context: CanvasRenderingContext2D,
+    size: number,
+    shellRadius: number,
+    shellColor: number,
+    midColor: number,
+    coreColor: number
+  ): void {
+    const image = context.createImageData(size, size);
+    const center = (size - 1) * 0.5;
+    const midRadius = shellRadius * 0.82;
+    const coreRadius = shellRadius * 0.56;
+    const shellRgb = this.colorChannels(shellColor);
+    const midRgb = this.colorChannels(midColor);
+    const coreRgb = this.colorChannels(coreColor);
+    const haloSigma = 2.4;
 
-  private syncProjectileGlowLayers(bullet: Phaser.GameObjects.Rectangle): void {
-    const layers = bullet.getData('projectileGlowLayers') as Phaser.GameObjects.Image[] | undefined;
-    if (!layers) return;
-    const offsetX = (bullet.getData('projectileGlowOffsetX') as number | undefined) ?? 0;
-    const offsetY = (bullet.getData('projectileGlowOffsetY') as number | undefined) ?? 0;
-    for (const layer of layers) {
-      if (!layer.active) continue;
-      layer
-        .setPosition(bullet.x + offsetX, bullet.y + offsetY)
-        .setRotation(bullet.rotation)
-        .setVisible(bullet.visible)
-        .setDepth(bullet.depth - 0.003);
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const distance = Math.hypot(x - center, y - center);
+        this.writeCompositePixel(
+          image.data,
+          (y * size + x) * 4,
+          shellRgb,
+          midRgb,
+          coreRgb,
+          distance - shellRadius,
+          distance - midRadius,
+          distance - coreRadius,
+          haloSigma
+        );
+      }
     }
+    context.putImageData(image, 0, 0);
   }
 
-  private destroyProjectileGlowLayers(bullet: Phaser.GameObjects.Rectangle): void {
-    const layers = bullet.getData('projectileGlowLayers') as Phaser.GameObjects.Image[] | undefined;
-    for (const layer of layers ?? []) {
-      if (layer.active) layer.destroy();
-    }
-    bullet.setData('projectileGlowLayers', undefined);
+  private writeCompositePixel(
+    data: Uint8ClampedArray,
+    index: number,
+    shellRgb: { r: number; g: number; b: number },
+    midRgb: { r: number; g: number; b: number },
+    coreRgb: { r: number; g: number; b: number },
+    shellSdf: number,
+    midSdf: number,
+    coreSdf: number,
+    haloSigma: number
+  ): void {
+    const shellCoverage = Phaser.Math.Clamp(0.5 - shellSdf, 0, 1);
+    const midCoverage = Phaser.Math.Clamp(0.5 - midSdf, 0, 1);
+    const coreCoverage = Phaser.Math.Clamp(0.5 - coreSdf, 0, 1);
+    const outsideDistance = Math.max(0, shellSdf);
+    const haloAlpha = shellSdf > -0.5
+      ? 0.24 * Math.exp(-(outsideDistance * outsideDistance) / (2 * haloSigma * haloSigma))
+      : 0;
+    const shellAlpha = shellCoverage + haloAlpha * (1 - shellCoverage);
+    const midAndShellAlpha = midCoverage + shellAlpha * (1 - midCoverage);
+    const outAlpha = coreCoverage + midAndShellAlpha * (1 - coreCoverage);
+    if (outAlpha <= 0.001) return;
+
+    const shellWeight = shellAlpha * (1 - midCoverage) * (1 - coreCoverage);
+    const midWeight = midCoverage * (1 - coreCoverage);
+    data[index] = Math.round((coreRgb.r * coreCoverage + midRgb.r * midWeight + shellRgb.r * shellWeight) / outAlpha);
+    data[index + 1] = Math.round((coreRgb.g * coreCoverage + midRgb.g * midWeight + shellRgb.g * shellWeight) / outAlpha);
+    data[index + 2] = Math.round((coreRgb.b * coreCoverage + midRgb.b * midWeight + shellRgb.b * shellWeight) / outAlpha);
+    data[index + 3] = Math.round(outAlpha * 255);
+  }
+
+  private colorChannels(color: number): { r: number; g: number; b: number } {
+    return {
+      r: (color >> 16) & 0xff,
+      g: (color >> 8) & 0xff,
+      b: color & 0xff
+    };
   }
 
   private positionStraightBulletHitboxes(
@@ -2742,15 +2815,15 @@ export class MainScene extends Phaser.Scene {
     size: number,
     angle: number
   ): void {
-    const projectileVisual = bullet.getData('projectileVisual') as Phaser.GameObjects.Shape | undefined;
+    const offsetX = (bullet.getData('projectileVisualOffsetX') as number | undefined) ?? 0;
+    const offsetY = (bullet.getData('projectileVisualOffsetY') as number | undefined) ?? 0;
+    const projectileVisual = bullet.getData('projectileVisual') as Phaser.GameObjects.Image | undefined;
     if (projectileVisual?.active) {
-      const offsetX = (bullet.getData('projectileVisualOffsetX') as number | undefined) ?? 0;
-      const offsetY = (bullet.getData('projectileVisualOffsetY') as number | undefined) ?? 0;
       projectileVisual
         .setPosition(bullet.x + offsetX, bullet.y + offsetY)
-        .setRotation(bullet.rotation);
+        .setRotation(bullet.rotation)
+        .setVisible(bullet.visible);
     }
-    this.syncProjectileGlowLayers(bullet);
     const hitboxes = bullet.getData('hitboxes') as Phaser.GameObjects.Rectangle[] | undefined;
     if (!hitboxes) return;
     const offset = Math.max(0, (length - size) * 0.5);
@@ -2985,7 +3058,10 @@ export class MainScene extends Phaser.Scene {
   ): void {
     if (showRadialBurst) {
       const outer = this.add.circle(x, y, 16).setStrokeStyle(heavy ? 5 : 4, color, 0.95).setDepth(6);
-      const inner = this.add.circle(x, y, 10).setStrokeStyle(3, 0xffffff, 0.9).setDepth(6);
+      const inner = this.add
+        .circle(x, y, 10)
+        .setStrokeStyle(3, this.mixColorWithWhite(color, 0.66), 0.9)
+        .setDepth(6);
       this.tweens.add({
         targets: outer,
         scale: heavy ? 3.4 : 2.6,
@@ -3055,16 +3131,16 @@ export class MainScene extends Phaser.Scene {
   ): void {
     const halfRad = Phaser.Math.DegToRad(halfArcDeg);
     const full = halfArcDeg >= 180;
-    const gfx = this.add.graphics().setDepth(6).setBlendMode(Phaser.BlendModes.ADD).enableFilters();
+    const gfx = this.add.graphics().setDepth(6).setBlendMode(Phaser.BlendModes.NORMAL).enableFilters();
     const filters = gfx.filters;
     if (filters) {
-      const glow = filters.internal.addGlow(0xf97316, 0.55, 0.04, 1, false, 2, worldSize(18));
+      const glow = filters.internal.addGlow(0xf97316, 0.18, 0.02, 1, false, 2, worldSize(18));
       glow.setPaddingOverride(null);
       const bloom = filters.internal.addParallelFilters();
       bloom.top.addThreshold(0.04, 1);
-      bloom.top.addBlur(2, 8, 8, 0.55, 0xf97316, 3);
+      bloom.top.addBlur(2, 8, 8, 0.18, 0xf97316, 3);
       bloom.blend.blendMode = Phaser.BlendModes.ADD;
-      bloom.blend.amount = 0.25;
+      bloom.blend.amount = 0.05;
     }
     const damaged = new Set<Enemy>();
 
@@ -3083,15 +3159,21 @@ export class MainScene extends Phaser.Scene {
       ease: 'Cubic.easeOut',
       onUpdate: () => {
         const radius = 24 + counter.value * (maxRadius - 24);
+        const waveAlpha = 1 - counter.value * 0.8;
+        const strokeWave = (): void => {
+          if (full) {
+            gfx.strokeCircle(x, y, radius);
+          } else {
+            gfx.beginPath();
+            gfx.arc(x, y, radius, angle - halfRad, angle + halfRad, false);
+            gfx.strokePath();
+          }
+        };
         gfx.clear();
-        gfx.lineStyle(worldSize(5), 0xf97316, (1 - counter.value * 0.8) * 0.6);
-        if (full) {
-          gfx.strokeCircle(x, y, radius);
-        } else {
-          gfx.beginPath();
-          gfx.arc(x, y, radius, angle - halfRad, angle + halfRad, false);
-          gfx.strokePath();
-        }
+        gfx.lineStyle(worldSize(5), 0xf97316, waveAlpha * 0.78);
+        strokeWave();
+        gfx.lineStyle(worldSize(2), this.mixColorWithWhite(0xf97316, 0.52), waveAlpha * 0.82);
+        strokeWave();
         // 波前清弹
         for (const obj of this.bullets.getChildren().slice()) {
           const bullet = obj as Phaser.GameObjects.Rectangle;
@@ -3149,14 +3231,15 @@ export class MainScene extends Phaser.Scene {
   ): void {
     const fanOrbDiameter = worldSize(9);
     const displayColor = sourceKind === 'fan' ? FAN_BULLET_COLOR : GUARD_BULLET_COLOR;
-    const coreColor = this.mixColorWithWhite(displayColor, 0.18);
     const visualDiameter = sourceKind === 'fan' ? fanOrbDiameter : ENEMY_BULLET_THICKNESS;
+    const compositeDiameter = visualDiameter * 0.96 + ENEMY_PROJECTILE_GLOW_DISTANCE * 2;
     const bullet = this.add
-      .rectangle(x, y, ENEMY_BULLET_THICKNESS, ENEMY_BULLET_THICKNESS, coreColor, 0)
+      .rectangle(x, y, ENEMY_BULLET_THICKNESS, ENEMY_BULLET_THICKNESS, displayColor, 0)
       .setRotation(angle)
       .setDepth(4);
     const projectileVisual = this.add
-      .circle(x, y, visualDiameter * 0.48, coreColor, 0.52)
+      .image(x, y, this.ensureEnemyProjectileTexture(sourceKind, visualDiameter))
+      .setDisplaySize(compositeDiameter, compositeDiameter)
       .setDepth(4)
       .setBlendMode(Phaser.BlendModes.NORMAL);
     this.bullets.add(bullet);
@@ -3169,20 +3252,11 @@ export class MainScene extends Phaser.Scene {
     bullet.setData('angle', angle);
     bullet.setData('baseSpeed', speed);
     bullet.setData('sourceKind', sourceKind);
+    bullet.setData('visualColor', displayColor);
     bullet.setData('despawnBeat', Math.floor(this.conductor.beatFloatAt(this.conductor.now())) + 8);
     bullet.setData('projectileVisual', projectileVisual);
     bullet.setData('trailColor', displayColor);
     bullet.setData('trailThickness', hitboxSize);
-    this.attachProjectileGlowLayer(
-      bullet,
-      this.ensureProjectilePointGlowTexture(),
-      displayColor,
-      visualDiameter * 0.96 + ENEMY_PROJECTILE_GLOW_DISTANCE * 2,
-      visualDiameter * 0.96 + ENEMY_PROJECTILE_GLOW_DISTANCE * 2,
-      0,
-      0,
-      0.08
-    );
     bullet.setData('bursting', this.tuningEditor.enemyBulletBeatSurgeEnabled);
     bullet.setData('hitboxMode', 'straight');
     bullet.setData('hitboxLength', hitboxLength);
@@ -3307,26 +3381,32 @@ export class MainScene extends Phaser.Scene {
       const visualStartX = emitterX + directionX * PLAYER_STRAIGHT_MUZZLE_GAP;
       const visualStartY = emitterY + directionY * PLAYER_STRAIGHT_MUZZLE_GAP;
       // 判定段仍从武器端前置后的点开始，宿主位于原判定段中点；
-      // 源任务的短亮芯与胶囊外晕均以该中心为锚，不改变三点方盒覆盖。
+      // 可见胶囊稍后仅向前端内收并锁住既有尾端，不改变宿主或三点方盒覆盖。
       const spawnX = visualStartX + directionX * bulletLength * 0.5;
       const spawnY = visualStartY + directionY * bulletLength * 0.5;
-      const coreColor = onBeat ? 0xffffff : this.mixColorWithWhite(color, 0.66);
       const bullet = this.add.rectangle(
         spawnX,
         spawnY,
         bulletLength,
         BULLET_THICKNESS,
-        coreColor,
-        onBeat ? 0.58 : 0.52
+        color,
+        0
       )
         .setDisplaySize(
           bulletLength * PLAYER_LINE_CORE_LENGTH_SCALE,
           BULLET_THICKNESS * PLAYER_LINE_CORE_THICKNESS_SCALE
         )
         .setRotation(shotAngle)
-        .setDepth(4)
-        .setBlendMode(Phaser.BlendModes.ADD)
-        .setStrokeStyle();
+        .setDepth(4);
+      const projectileVisual = this.add
+        .image(spawnX, spawnY, this.ensurePlayerProjectileTexture(onBeat))
+        .setDisplaySize(
+          bulletLength * PLAYER_LINE_GLOW_LENGTH_SCALE,
+          BULLET_THICKNESS * PLAYER_LINE_GLOW_THICKNESS_SCALE
+        )
+        .setRotation(shotAngle)
+        .setBlendMode(Phaser.BlendModes.NORMAL)
+        .setDepth(4);
       this.playerBullets.add(bullet);
       const body = bullet.body as Phaser.Physics.Arcade.Body;
       body.setSize(BULLET_THICKNESS, BULLET_THICKNESS, true);
@@ -3342,18 +3422,16 @@ export class MainScene extends Phaser.Scene {
           ? Infinity
           : this.tuningEditor.glowstickMaxRange * rangeScale
       );
+      bullet.setData('visualColor', color);
+      bullet.setData('projectileVisual', projectileVisual);
+      const visualCenterOffset =
+        -bulletLength * (PLAYER_LINE_CORE_LENGTH_SCALE - PLAYER_LINE_VISIBLE_LENGTH_SCALE) * 0.5;
+      bullet.setData('projectileVisualOffsetX', directionX * visualCenterOffset);
+      bullet.setData('projectileVisualOffsetY', directionY * visualCenterOffset);
+      bullet.setData('fpvDisplayWidth', bulletLength * PLAYER_LINE_VISIBLE_LENGTH_SCALE);
+      bullet.setData('fpvDisplayHeight', BULLET_THICKNESS * PLAYER_LINE_CORE_THICKNESS_SCALE);
       bullet.setData('trailColor', color);
       bullet.setData('trailThickness', BULLET_THICKNESS);
-      this.attachProjectileGlowLayer(
-        bullet,
-        this.ensureProjectileSoftGlowTexture(),
-        color,
-        bulletLength * PLAYER_LINE_GLOW_LENGTH_SCALE,
-        BULLET_THICKNESS * PLAYER_LINE_GLOW_THICKNESS_SCALE,
-        0,
-        0,
-        0.34
-      );
       bullet.setData('knockbackAngle', shotAngle);
       bullet.setData('knockbackSpeed', GLOWSTICK_KNOCKBACK_SPEED);
       bullet.setData('hitboxMode', 'straight');
@@ -3393,10 +3471,14 @@ export class MainScene extends Phaser.Scene {
     const bullets = activeLayers.map(({ radius, lengthScale: layerLengthScale }) => {
       const arcLength = baseLength * layerLengthScale * lengthScale;
       const halfArcAngle = arcLength / (2 * radius);
+      const glowVisual = this.add
+        .graphics()
+        .setDepth(3.999)
+        .setBlendMode(Phaser.BlendModes.ADD);
       const visual = this.add
         .graphics()
         .setDepth(4)
-        .setBlendMode(Phaser.BlendModes.ADD);
+        .setBlendMode(Phaser.BlendModes.NORMAL);
       const bullet = this.add
         .rectangle(originX, originY, arcLength, BULLET_THICKNESS + 4, BATON_BULLET_COLOR, 0)
         .setDepth(4);
@@ -3407,6 +3489,7 @@ export class MainScene extends Phaser.Scene {
       bullet.setData('damage', damage);
       bullet.setData('despawnBeat', Infinity);
       bullet.setData('batonVisual', visual);
+      bullet.setData('batonGlowVisual', glowVisual);
       bullet.setData('trailColor', BATON_BULLET_COLOR);
       bullet.setData('trailThickness', BULLET_THICKNESS + 4);
       // 扫击 Graphics 已连续绘制整条弧线；再为每一帧生成运动尾迹只会
@@ -3415,13 +3498,13 @@ export class MainScene extends Phaser.Scene {
       bullet.setData('knockbackSpeed', BATON_KNOCKBACK_SPEED);
       bullet.setData('hitboxMode', 'arc');
       this.createBulletHitboxes(bullet, this.playerBulletHitboxes, BULLET_THICKNESS);
-      return { bullet, visual, radius, halfArcAngle };
+      return { bullet, visual, glowVisual, radius, halfArcAngle };
     });
 
     const sweep = { progress: 0 };
     const updatePositions = (): void => {
       const angle = Phaser.Math.Linear(startAngle, endAngle, sweep.progress);
-      for (const { bullet, visual, radius, halfArcAngle } of bullets) {
+      for (const { bullet, visual, glowVisual, radius, halfArcAngle } of bullets) {
         if (!bullet.active) continue;
         const x = originX + Math.cos(angle) * radius;
         const y = originY + Math.sin(angle) * radius;
@@ -3430,17 +3513,26 @@ export class MainScene extends Phaser.Scene {
         (bullet.body as Phaser.Physics.Arcade.Body).reset(x, y);
         this.positionArcBulletHitboxes(bullet, originX, originY, radius, angle, halfArcAngle);
         bullet.setData('knockbackAngle', angle + (clockwise ? Math.PI / 2 : -Math.PI / 2));
+        glowVisual.clear();
+        glowVisual.lineStyle(
+          BULLET_THICKNESS * 2.4,
+          BATON_BULLET_COLOR,
+          onBeat ? 0.07 : 0.05
+        );
+        glowVisual.beginPath();
+        glowVisual.arc(originX, originY, radius, angle - halfArcAngle, angle + halfArcAngle, false);
+        glowVisual.strokePath();
         visual.clear();
-        // 用两层 ADD 线替代每条弧线独立的 Glow/Bloom 过滤器。
-        // 仍保留亮边观感，但避免高 Combo 时多条实时滤镜打断主循环。
-        visual.lineStyle(BULLET_THICKNESS * 2.4, BATON_BULLET_COLOR, 0.12);
+        // 主体使用正常混合保留实色轮廓；单独的低 Alpha ADD 线只负责贴边泛光。
+        // 仍不为每条弧线创建实时滤镜，避免高 Combo 时打断主循环。
+        visual.lineStyle(BULLET_THICKNESS, BATON_BULLET_COLOR, 0.9);
         visual.beginPath();
         visual.arc(originX, originY, radius, angle - halfArcAngle, angle + halfArcAngle, false);
         visual.strokePath();
         visual.lineStyle(
-          BULLET_THICKNESS,
-          this.mixColorWithWhite(BATON_BULLET_COLOR, onBeat ? 0.82 : 0.7),
-          0.62
+          BULLET_THICKNESS * 0.3,
+          this.mixColorWithWhite(BATON_BULLET_COLOR, onBeat ? 0.72 : 0.56),
+          onBeat ? 0.9 : 0.82
         );
         visual.beginPath();
         visual.arc(originX, originY, radius, angle - halfArcAngle, angle + halfArcAngle, false);
@@ -3490,7 +3582,7 @@ export class MainScene extends Phaser.Scene {
 
         const angle = bullet.rotation;
         const length = Phaser.Math.Clamp(speed * 0.045 * WORLD_OBJECT_SCALE, worldSize(8), worldSize(42));
-        const alpha = Phaser.Math.Clamp(0.04 + speed / 6000, 0.05, 0.16);
+        const alpha = Phaser.Math.Clamp(0.03 + speed / 8000, 0.04, 0.09);
         const color = (bullet.getData('trailColor') as number | undefined) ?? bullet.fillColor;
         const thickness = (bullet.getData('trailThickness') as number | undefined) ?? BULLET_THICKNESS;
         const trail = this.add
@@ -3519,9 +3611,10 @@ export class MainScene extends Phaser.Scene {
   private destroyPlayerBullet(bullet: Phaser.GameObjects.Rectangle): void {
     const batonVisual = bullet.getData('batonVisual') as Phaser.GameObjects.Graphics | undefined;
     if (batonVisual?.active) batonVisual.destroy();
-    const projectileVisual = bullet.getData('projectileVisual') as Phaser.GameObjects.Shape | undefined;
+    const batonGlowVisual = bullet.getData('batonGlowVisual') as Phaser.GameObjects.Graphics | undefined;
+    if (batonGlowVisual?.active) batonGlowVisual.destroy();
+    const projectileVisual = bullet.getData('projectileVisual') as Phaser.GameObjects.Image | undefined;
     if (projectileVisual?.active) projectileVisual.destroy();
-    this.destroyProjectileGlowLayers(bullet);
     this.destroyBulletHitboxes(bullet);
     if (bullet.active) bullet.destroy();
   }
@@ -3530,9 +3623,8 @@ export class MainScene extends Phaser.Scene {
   private destroyEnemyBullet(bullet: Phaser.GameObjects.Rectangle): void {
     const heldTrail = bullet.getData('heldTrail') as Phaser.GameObjects.Rectangle | undefined;
     if (heldTrail?.active) heldTrail.destroy();
-    const projectileVisual = bullet.getData('projectileVisual') as Phaser.GameObjects.Shape | undefined;
+    const projectileVisual = bullet.getData('projectileVisual') as Phaser.GameObjects.Image | undefined;
     if (projectileVisual?.active) projectileVisual.destroy();
-    this.destroyProjectileGlowLayers(bullet);
     this.destroyBulletHitboxes(bullet);
     if (bullet.active) bullet.destroy();
   }
@@ -3579,7 +3671,13 @@ export class MainScene extends Phaser.Scene {
     for (let i = 0; i < (strong ? 8 : 4); i++) {
       const sparkAngle = (Math.PI * 2 * i) / (strong ? 8 : 4);
       const spark = this.add
-        .rectangle(x, y, worldSize(strong ? 12 : 8), worldSize(3), i % 2 === 0 ? color : 0xffffff)
+        .rectangle(
+          x,
+          y,
+          worldSize(strong ? 12 : 8),
+          worldSize(3),
+          i % 2 === 0 ? color : this.mixColorWithWhite(color, 0.58)
+        )
         .setDepth(8);
       spark.setRotation(sparkAngle);
       this.tweens.add({
@@ -3984,19 +4082,28 @@ export class MainScene extends Phaser.Scene {
       this.fireGlowstickLaser(originX, originY, angle, damage, onBeat);
       return;
     }
+    const chargeGlow = this.add.graphics({ x: originX, y: originY })
+      .setName('glowstick-heavy-laser-charge-glow')
+      .setDepth(6.999)
+      .setScale(0.45)
+      .setAlpha(0.3)
+      .setBlendMode(Phaser.BlendModes.ADD);
+    chargeGlow.lineStyle(worldSize(onBeat ? 8 : 5), PLAYER_BULLET_COLOR, 0.1);
+    chargeGlow.strokeCircle(0, 0, worldSize(onBeat ? 24 : 16));
     const charge = this.add.graphics({ x: originX, y: originY })
       .setName('glowstick-heavy-laser-charge')
       .setDepth(7)
       .setScale(0.45)
       .setAlpha(0.3)
-      .setBlendMode(Phaser.BlendModes.ADD);
-    charge.lineStyle(worldSize(onBeat ? 8 : 5), PLAYER_BULLET_COLOR, 0.55);
+      .setBlendMode(Phaser.BlendModes.NORMAL);
+    charge.lineStyle(worldSize(onBeat ? 8 : 5), PLAYER_BULLET_COLOR, 0.86);
     charge.strokeCircle(0, 0, worldSize(onBeat ? 24 : 16));
-    charge.lineStyle(worldSize(3), 0xffffff, 0.7);
+    charge.lineStyle(worldSize(3), this.mixColorWithWhite(PLAYER_BULLET_COLOR, 0.68), 0.9);
     charge.strokeCircle(0, 0, worldSize(onBeat ? 10 : 7));
+    charge.setData('attackGlowVisual', chargeGlow);
     this.activeSpecialAttackFx.add(charge);
     this.tweens.add({
-      targets: charge,
+      targets: [charge, chargeGlow],
       scale: 1.55,
       alpha: 0.62,
       duration: chargeDelay,
@@ -4024,16 +4131,25 @@ export class MainScene extends Phaser.Scene {
     const endX = originX + directionX * length;
     const endY = originY + directionY * length;
     const beamHalfWidth = this.tuningEditor.glowstickHeavyLaserThickness * (onBeat ? 0.5 : 0.275);
+    const laserGlow = this.add.graphics()
+      .setName('glowstick-heavy-laser-glow')
+      .setDepth(6.999)
+      .setBlendMode(Phaser.BlendModes.ADD);
+    laserGlow.lineStyle(beamHalfWidth * 2.8, PLAYER_BULLET_COLOR, 0.06);
+    laserGlow.lineBetween(originX, originY, endX, endY);
     const laser = this.add.graphics()
       .setName('glowstick-heavy-laser')
       .setDepth(7)
-      .setBlendMode(Phaser.BlendModes.ADD);
-    laser.lineStyle(beamHalfWidth * 2.8, PLAYER_BULLET_COLOR, 0.1);
+      .setBlendMode(Phaser.BlendModes.NORMAL);
+    laser.lineStyle(beamHalfWidth * 1.45, PLAYER_BULLET_COLOR, 0.86);
     laser.lineBetween(originX, originY, endX, endY);
-    laser.lineStyle(beamHalfWidth * 1.45, PLAYER_BULLET_COLOR, 0.42);
+    laser.lineStyle(
+      Math.max(worldSize(4), beamHalfWidth * 0.38),
+      this.mixColorWithWhite(PLAYER_BULLET_COLOR, 0.72),
+      0.92
+    );
     laser.lineBetween(originX, originY, endX, endY);
-    laser.lineStyle(Math.max(worldSize(4), beamHalfWidth * 0.38), 0xffffff, 0.62);
-    laser.lineBetween(originX, originY, endX, endY);
+    laser.setData('attackGlowVisual', laserGlow);
     this.activeSpecialAttackFx.add(laser);
 
     for (const enemy of [...this.enemies]) {
@@ -4048,7 +4164,7 @@ export class MainScene extends Phaser.Scene {
     }
 
     this.tweens.add({
-      targets: laser,
+      targets: [laser, laserGlow],
       alpha: 0,
       duration: onBeat ? 240 : 170,
       ease: 'Cubic.easeOut',
@@ -4066,25 +4182,35 @@ export class MainScene extends Phaser.Scene {
   ): void {
     const radius = worldSize(onBeat ? 48 : 34);
     const range = this.tuningEditor.batonHeavyCrescentRange * (onBeat ? 1 : 0.5);
+    const crescentGlow = this.add.graphics({ x: originX, y: originY })
+      .setName('baton-heavy-crescent-glow')
+      .setDepth(6.999)
+      .setRotation(angle)
+      .setBlendMode(Phaser.BlendModes.ADD);
+    crescentGlow.lineStyle(worldSize(onBeat ? 24 : 16), BATON_BULLET_COLOR, 0.06);
+    crescentGlow.beginPath();
+    crescentGlow.arc(0, 0, radius, -0.95, 0.95, false);
+    crescentGlow.strokePath();
     const crescent = this.add.graphics({ x: originX, y: originY })
       .setName('baton-heavy-crescent')
       .setDepth(7)
       .setRotation(angle)
-      .setBlendMode(Phaser.BlendModes.ADD);
+      .setBlendMode(Phaser.BlendModes.NORMAL);
     crescent.setData('maxRange', range);
     crescent.setData('slowdownStartDistance', range * 0.85);
-    crescent.lineStyle(worldSize(onBeat ? 24 : 16), BATON_BULLET_COLOR, 0.1);
+    crescent.lineStyle(worldSize(onBeat ? 9 : 6), BATON_BULLET_COLOR, 0.86);
     crescent.beginPath();
     crescent.arc(0, 0, radius, -0.95, 0.95, false);
     crescent.strokePath();
-    crescent.lineStyle(worldSize(onBeat ? 9 : 6), BATON_BULLET_COLOR, 0.52);
+    crescent.lineStyle(
+      worldSize(onBeat ? 3 : 2),
+      this.mixColorWithWhite(BATON_BULLET_COLOR, 0.68),
+      0.9
+    );
     crescent.beginPath();
     crescent.arc(0, 0, radius, -0.95, 0.95, false);
     crescent.strokePath();
-    crescent.lineStyle(worldSize(onBeat ? 3 : 2), 0xffffff, 0.62);
-    crescent.beginPath();
-    crescent.arc(0, 0, radius, -0.95, 0.95, false);
-    crescent.strokePath();
+    crescent.setData('attackGlowVisual', crescentGlow);
     this.activeSpecialAttackFx.add(crescent);
 
     const hitEnemies = new Set<Enemy>();
@@ -4102,7 +4228,7 @@ export class MainScene extends Phaser.Scene {
     checkHits();
     const speed = worldSize(720) * this.tuningEditor.batonSweepSpeed;
     this.tweens.add({
-      targets: crescent,
+      targets: [crescent, crescentGlow],
       x: originX + Math.cos(angle) * range,
       y: originY + Math.sin(angle) * range,
       duration: range / speed * 1000,
@@ -4115,7 +4241,7 @@ export class MainScene extends Phaser.Scene {
       onUpdate: checkHits,
       onComplete: () => {
         this.tweens.add({
-          targets: crescent,
+          targets: [crescent, crescentGlow],
           alpha: 0,
           scaleX: 1.16,
           scaleY: 1.16,
@@ -4138,6 +4264,7 @@ export class MainScene extends Phaser.Scene {
   }
 
   private destroySpecialAttackFx(effect: Phaser.GameObjects.Graphics): void {
+    const glow = effect.getData('attackGlowVisual') as Phaser.GameObjects.Graphics | undefined;
     const timer = this.activeSpecialAttackTimers.get(effect);
     if (timer) {
       timer.remove();
@@ -4145,21 +4272,31 @@ export class MainScene extends Phaser.Scene {
     }
     this.activeSpecialAttackFx.delete(effect);
     this.tweens.killTweensOf(effect);
+    if (glow) {
+      this.tweens.killTweensOf(glow);
+      if (glow.active) glow.destroy();
+    }
     if (effect.active) effect.destroy();
   }
 
   /** Fever 满格或按 C 调试时，以贯穿全屏的竖向发光条从左向右逐列清除敌弹。 */
   private triggerFeverScreenClear(): void {
     const enemyBullets = this.bullets.getChildren().slice() as Phaser.GameObjects.Rectangle[];
-    const makeStrip = (x: number, width: number, color: number, alpha: number) => this.add
+    const makeStrip = (
+      x: number,
+      width: number,
+      color: number,
+      alpha: number,
+      blendMode = Phaser.BlendModes.ADD
+    ) => this.add
       .rectangle(x, 0, width, VIEW_HEIGHT * 1.08, color, alpha)
-      .setBlendMode(Phaser.BlendModes.ADD);
+      .setBlendMode(blendMode);
     const sweep = this.add.container(-180, VIEW_HEIGHT / 2, [
-      makeStrip(-70, 260, 0xff7a00, 0.04),
-      makeStrip(-24, 132, 0xffa31a, 0.1),
-      makeStrip(10, 62, 0xffd166, 0.28),
-      makeStrip(34, 16, 0xffffff, 0.58),
-      makeStrip(52, 28, 0xfff1a8, 0.36)
+      makeStrip(-70, 260, 0xff7a00, 0.015),
+      makeStrip(-24, 132, 0xffa31a, 0.035),
+      makeStrip(10, 62, 0xffd166, 0.08),
+      makeStrip(34, 16, 0xffffff, 0.88, Phaser.BlendModes.NORMAL),
+      makeStrip(52, 28, 0xfff1a8, 0.12)
     ])
       .setName('fever-screen-clear-sweep')
       .setScrollFactor(0)
