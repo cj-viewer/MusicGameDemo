@@ -23,7 +23,8 @@ import {
   MAIN_CAMERA_LOOK_DEAD_ZONE,
   MAIN_CAMERA_LOOK_MAX_X,
   MAIN_CAMERA_LOOK_MAX_Y,
-  screenLayerOffset
+  screenLayerOffset,
+  applyScreenLayerScrollFactor
 } from '../game/cameraConfig';
 import { UI_SCALE, VIEW_HEIGHT, VIEW_WIDTH, ui as hd } from '../game/displayConfig';
 import {
@@ -1414,14 +1415,16 @@ export class MainScene extends Phaser.Scene {
     objects.push(hint);
     objects.push(fpvLabel, this.fpvToggleButton, this.fpvToggleText);
     this.tuningEditor.container.add(debugObjects);
+    // 新增的分页容器与按钮也要归零 scrollFactor，否则 P 面板命中区同样偏移
+    applyScreenLayerScrollFactor(this.tuningEditor.container);
 
     this.volumePanel = this.add.container(0, 0, objects)
       .setDepth(2000)
       .setPosition(CAMERA_BASE_SCROLL_X, CAMERA_BASE_SCROLL_Y)
       .setScale(UI_SCALE / MAIN_CAMERA_BASE_ZOOM)
-      .setScrollFactor(0)
       .setVisible(false)
       .setActive(false);
+    applyScreenLayerScrollFactor(this.volumePanel);
 
     this.fpvToggleButton.on('pointerdown', () => this.setFpvWindowEnabled(!this.fpvWindowEnabled));
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
