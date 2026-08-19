@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { MAIN_CAMERA_BASE_ZOOM, screenLayerOffset } from './cameraConfig';
+import { MAIN_CAMERA_BASE_ZOOM, applyScreenLayerScrollFactor, screenLayerOffset } from './cameraConfig';
 import { UI_SCALE, VIEW_HEIGHT, VIEW_WIDTH } from './displayConfig';
 import type { AttackJudgement } from './ComboSystem';
 import type { WeaponId } from './weapons';
@@ -206,9 +206,8 @@ export class TuningEditor {
       .container(screenLayerOffset(VIEW_WIDTH), screenLayerOffset(VIEW_HEIGHT), objects)
       .setDepth(31)
       .setScale(UI_SCALE / MAIN_CAMERA_BASE_ZOOM)
-      // 交互子项与主镜头共用同一变换；MainScene 在打开时把容器锚到当前镜头。
-      .setScrollFactor(1)
       .setVisible(false);
+    applyScreenLayerScrollFactor(this.container);
     this.refresh();
   }
 

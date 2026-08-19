@@ -22,7 +22,8 @@ import {
   MAIN_CAMERA_LOOK_DEAD_ZONE,
   MAIN_CAMERA_LOOK_MAX_X,
   MAIN_CAMERA_LOOK_MAX_Y,
-  screenLayerOffset
+  screenLayerOffset,
+  applyScreenLayerScrollFactor
 } from '../game/cameraConfig';
 import { UI_SCALE, VIEW_HEIGHT, VIEW_WIDTH, ui as hd } from '../game/displayConfig';
 import {
@@ -1393,15 +1394,16 @@ export class MainScene extends Phaser.Scene {
     objects.push(hint);
     objects.push(fpvLabel, this.fpvToggleButton, this.fpvToggleText);
     this.tuningEditor.container.add(debugObjects);
+    // 新增的分页容器与按钮也要归零 scrollFactor，否则 P 面板命中区同样偏移
+    applyScreenLayerScrollFactor(this.tuningEditor.container);
 
     this.volumePanel = this.add.container(0, 0, objects)
       .setDepth(2000)
       .setPosition(CAMERA_BASE_SCROLL_X, CAMERA_BASE_SCROLL_Y)
       .setScale(UI_SCALE / MAIN_CAMERA_BASE_ZOOM)
-      // 固定视觉位置由打开时的镜头锚点实现，保留 scrollFactor=1 让输入命中与渲染一致。
-      .setScrollFactor(1)
       .setVisible(false)
       .setActive(false);
+    applyScreenLayerScrollFactor(this.volumePanel);
 
     this.fpvToggleButton.on('pointerdown', () => this.setFpvWindowEnabled(!this.fpvWindowEnabled));
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
@@ -1501,14 +1503,6 @@ export class MainScene extends Phaser.Scene {
     this.volumePanelVisible = visible;
     this.volumeDragging = null;
     const captureToken = ++this.volumePanelCaptureToken;
-    if (visible) {
-      const camera = this.cameras.main;
-      // 镜头在暂停期间保持静止；叠加基准偏移后，画面位置不变且点击区不再错位。
-      this.volumePanel.setPosition(
-        camera.scrollX + CAMERA_BASE_SCROLL_X,
-        camera.scrollY + CAMERA_BASE_SCROLL_Y
-      );
-    }
     this.volumePanel.setVisible(false).setActive(visible);
     if (visible) {
       this.refreshVolumeControl();
@@ -1549,14 +1543,6 @@ export class MainScene extends Phaser.Scene {
   }
 
   private setTuningEditorVisible(visible: boolean): void {
-    if (visible) {
-      const camera = this.cameras.main;
-      // P 面板与 Esc 面板使用同一套可交互屏幕锚定规则。
-      this.tuningEditor.container.setPosition(
-        camera.scrollX + CAMERA_BASE_SCROLL_X,
-        camera.scrollY + CAMERA_BASE_SCROLL_Y
-      );
-    }
     this.tuningEditor.setVisible(visible);
     if (visible) {
       this.refreshCombatControls();
