@@ -18,6 +18,14 @@ import {
 } from './guardAnimation';
 import { BGM_TRACKS, DEFAULT_TUTORIAL_BGM_SLOT, bgmAssetPath, type BgmTrack } from './bgmTracks';
 import { preloadStageEnvironments } from './PinkStageEnvironment';
+import {
+  TUTORIAL_CHARACTER_ATTACK_EFFECT_FRAMES,
+  TUTORIAL_CHARACTER_FRAME_COUNTS,
+  tutorialCharacterAssetPath,
+  tutorialCharacterAttackEffectAssetPath,
+  tutorialCharacterAttackEffectTextureKey,
+  tutorialCharacterTextureKey
+} from './tutorialCharacterAnimation';
 
 const asset = (file: string): string => `${import.meta.env.BASE_URL}assets/${file}`;
 export const TUTORIAL_PATTERN_PANEL_KEY = 'tutorial-pattern-panel';
@@ -69,6 +77,13 @@ export function queueCoreAssets(scene: Phaser.Scene): void {
     asset('images/ui/tutorial/tutorial-control-dash.png')
   );
   scene.load.image('guard', asset('images/characters/guard.png'));
+  scene.load.image('player-shadow', asset('images/characters/player/player_shadow.png'));
+  scene.load.image('npc-fan-shadow', asset('images/characters/npc/npc_fan01/npc_fan01_shadow.png'));
+  scene.load.image('npc-guard-shadow', asset('images/characters/npc/npc_guard01/npc_guard01_shadow.png'));
+  scene.load.image(
+    'tutorial-character-shadow',
+    asset('images/characters/npc/npc_tutorial01/npc_tutorial01_shadow.png')
+  );
   for (const action of ['idle', 'run'] as const) {
     for (let frame = 1; frame <= GUARD_CHARACTER_FRAME_COUNT; frame++) {
       scene.load.image(
@@ -90,6 +105,22 @@ export function queueCoreAssets(scene: Phaser.Scene): void {
       scene.load.image(
         fanAttackEffectTextureKey(effect, frame),
         asset(fanAttackEffectAssetPath(effect, frame))
+      );
+    }
+  }
+  for (const action of ['idle', 'run', 'roll'] as const) {
+    for (let frame = 1; frame <= TUTORIAL_CHARACTER_FRAME_COUNTS[action]; frame++) {
+      scene.load.image(
+        tutorialCharacterTextureKey(action, frame),
+        asset(tutorialCharacterAssetPath(action, frame))
+      );
+    }
+  }
+  for (const effect of ['attack-light', 'attack-hard'] as const) {
+    for (const frame of TUTORIAL_CHARACTER_ATTACK_EFFECT_FRAMES[effect]) {
+      scene.load.image(
+        tutorialCharacterAttackEffectTextureKey(effect, frame),
+        asset(tutorialCharacterAttackEffectAssetPath(effect, frame))
       );
     }
   }

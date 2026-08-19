@@ -25,9 +25,20 @@ import {
   playGuardAttackEffect
 } from './guardAnimation';
 import { enableEmissiveBloom } from './EmissiveFx';
+import {
+  TUTORIAL_CHARACTER_ATTACK_DURATION_MS,
+  TUTORIAL_CHARACTER_BODY_SOURCE_BOUNDS,
+  TUTORIAL_CHARACTER_ROLL_DURATION_MS,
+  TUTORIAL_CHARACTER_SPRITE_SCALE,
+  playTutorialCharacterAnimation,
+  playTutorialCharacterAttackEffect,
+  tutorialCharacterTextureKey
+} from './tutorialCharacterAnimation';
 
 const GUARD_EMISSIVE_COLOR = 0x52efff;
 const FAN_EMISSIVE_COLOR = 0xff543d;
+const CHARACTER_SHADOW_ALPHA = 0.45;
+const CHARACTER_SHADOW_DEPTH_OFFSET = 0.004;
 
 export type EnemyKind = 'smallGuard' | 'midGuard' | 'fan';
 
@@ -38,6 +49,15 @@ interface EnemyBodySourceBounds {
   height: number;
   offsetX: number;
   offsetY: number;
+}
+
+interface EnemyShadowOptions {
+  textureKey: string;
+  scale: number;
+  /** 仅保安使用：阴影沿当前朝向做轻微水平偏移。 */
+  facingOffsetX?: number;
+  /** 阴影落点的额外下移量。 */
+  offsetY?: number;
 }
 
 /** 敌人基类：移动逐帧更新，攻击和方向重选由节拍驱动。 */
@@ -57,13 +77,16 @@ export abstract class Enemy {
   private knockbackVelocity = new Phaser.Math.Vector2();
   private readonly baseScaleX: number;
   private readonly baseScaleY: number;
+  private readonly shadow?: Phaser.GameObjects.Image;
+  private readonly shadowOptions?: EnemyShadowOptions;
 
   constructor(
     scene: MainScene,
     go: EnemyVisual,
     hp: number,
     color: number,
-    bodySourceBounds?: EnemyBodySourceBounds
+    bodySourceBounds?: EnemyBodySourceBounds,
+    shadowOptions?: EnemyShadowOptions
   ) {
     this.scene = scene;
     this.go = go as VisualWithBody;
@@ -73,6 +96,14 @@ export abstract class Enemy {
     this.bodySourceBounds = bodySourceBounds;
     this.baseScaleX = go.scaleX;
     this.baseScaleY = go.scaleY;
+    this.shadowOptions = shadowOptions;
+    if (shadowOptions) {
+      this.shadow = scene.add
+        .image(go.x, go.y, shadowOptions.textureKey)
+        .setScale(shadowOptions.scale)
+        .setAlpha(CHARACTER_SHADOW_ALPHA);
+      scene.textures.get(shadowOptions.textureKey).setFilter(Phaser.Textures.FilterMode.NEAREST);
+    }
     go.setDepth(3);
     scene.physics.add.existing(go);
     if (bodySourceBounds) {
@@ -110,6 +141,16 @@ export abstract class Enemy {
     const bx = this.go.x - worldSize(14);
     const by = this.go.y - this.radius - worldSize(12);
     const characterDepth = worldDepth(this.go.y + this.go.body.halfHeight);
+    if (this.shadow) {
+      const shadowY = this.go.y + (this.go.height * (Math.abs(this.go.scaleY) - this.baseScaleY)) / 2;
+      const facingOffset = this.shadowOptions?.facingOffsetX
+        ? ((this.go instanceof Phaser.GameObjects.Image || this.go instanceof Phaser.GameObjects.Sprite) && this.go.flipX ? 1 : -1)
+          * this.shadowOptions.facingOffsetX
+        : 0;
+      this.shadow
+        .setPosition(this.go.x + facingOffset, shadowY + (this.shadowOptions?.offsetY ?? 0))
+        .setDepth(characterDepth - CHARACTER_SHADOW_DEPTH_OFFSET);
+    }
     this.go.setDepth(characterDepth);
     this.hpBarBg.setDepth(characterDepth + 0.001);
     this.hpBar.setDepth(characterDepth + 0.002);
@@ -204,6 +245,14 @@ export abstract class Enemy {
     this.hpBar.destroy();
     this.scene.spawnEnemyDeathExplosion(this.x, this.y, this.kind);
     this.go.body.enable = false;
+    if (this.shadow) {
+      this.scene.tweens.add({
+        targets: this.shadow,
+        alpha: 0,
+        duration: 200,
+        onComplete: () => this.shadow?.destroy()
+      });
+    }
     this.scene.tweens.add({
       targets: this.go,
       alpha: 0,
@@ -215,9 +264,36 @@ export abstract class Enemy {
     this.scene.onEnemyKilled(this);
   }
 
+  /** 教学展示对象退场：保留死亡视觉，但不结算波次、掉落或击杀事件。 */
+  protected retireWithoutReward(): void {
+    if (this.dead) return;
+    this.dead = true;
+    this.hpBarBg.destroy();
+    this.hpBar.destroy();
+    this.scene.spawnEnemyDeathExplosion(this.x, this.y, this.kind);
+    this.go.body.enable = false;
+    if (this.shadow) {
+      this.scene.tweens.add({
+        targets: this.shadow,
+        alpha: 0,
+        duration: 200,
+        onComplete: () => this.shadow?.destroy()
+      });
+    }
+    this.scene.tweens.add({
+      targets: this.go,
+      alpha: 0,
+      scaleX: this.go.scaleX * 1.35,
+      scaleY: this.go.scaleY * 1.35,
+      duration: 200,
+      onComplete: () => this.go.destroy()
+    });
+  }
+
   destroy(): void {
     this.hpBarBg.destroy();
     this.hpBar.destroy();
+    this.shadow?.destroy();
     this.go.destroy();
   }
 
@@ -291,7 +367,19 @@ export class SmallGuard extends Enemy {
     const sprite = scene.add
       .sprite(x, y, guardCharacterTextureKey('run', 1))
       .setScale(GUARD_SPRITE_SCALE);
-    super(scene, sprite, 40, 0xffffff, GUARD_BODY_SOURCE_BOUNDS);
+    super(
+      scene,
+      sprite,
+      40,
+      0xffffff,
+      GUARD_BODY_SOURCE_BOUNDS,
+      {
+        textureKey: 'npc-guard-shadow',
+        scale: GUARD_SPRITE_SCALE,
+        facingOffsetX: worldSize(6),
+        offsetY: worldSize(7)
+      }
+    );
     this.sprite = sprite;
     this.attackFx = scene.add
       .sprite(x, y, 'npc-guard-attack-light-fx-1')
@@ -440,7 +528,19 @@ export class MidGuard extends Enemy {
     const sprite = scene.add
       .sprite(x, y, guardCharacterTextureKey('idle', 1))
       .setScale(GUARD_SPRITE_SCALE);
-    super(scene, sprite, 60, 0xffffff, GUARD_BODY_SOURCE_BOUNDS);
+    super(
+      scene,
+      sprite,
+      60,
+      0xffffff,
+      GUARD_BODY_SOURCE_BOUNDS,
+      {
+        textureKey: 'npc-guard-shadow',
+        scale: GUARD_SPRITE_SCALE,
+        facingOffsetX: worldSize(6),
+        offsetY: worldSize(7)
+      }
+    );
     this.sprite = sprite;
     playGuardAnimation(this.sprite, 'idle');
     this.lockedAngle = this.scene.quantizeEnemyAttackAngle(this.angleToPlayer());
@@ -536,15 +636,20 @@ export class FanEnemy extends Enemy {
   private attackUntil = 0;
   private weaponAttackUntil = 0;
   private aimAngle = Math.PI;
-  private readonly tutorialSpectator: boolean;
 
-  constructor(scene: MainScene, x: number, y: number, options: { tutorialSpectator?: boolean } = {}) {
+  constructor(scene: MainScene, x: number, y: number) {
     const sprite = scene.add
       .sprite(x, y, fanCharacterTextureKey('run', 1))
       .setScale(FAN_SPRITE_SCALE);
-    super(scene, sprite, 40, 0xffffff, FAN_BODY_SOURCE_BOUNDS);
+    super(
+      scene,
+      sprite,
+      40,
+      0xffffff,
+      FAN_BODY_SOURCE_BOUNDS,
+      { textureKey: 'npc-fan-shadow', scale: FAN_SPRITE_SCALE }
+    );
     this.sprite = sprite;
-    this.tutorialSpectator = options.tutorialSpectator ?? false;
     this.attackFx = scene.add
       .sprite(x, y, 'npc-fan-attack-hard-fx-2')
       .setScale(FAN_SPRITE_SCALE)
@@ -562,8 +667,7 @@ export class FanEnemy extends Enemy {
     this.weaponSprite = scene.add
       .image(x, y, 'npc-fan-weapon-glowstick')
       .setOrigin(FAN_WEAPON_ORIGIN.x, FAN_WEAPON_ORIGIN.y)
-      .setScale(FAN_WEAPON_SCALE)
-      .setVisible(!this.tutorialSpectator);
+      .setScale(FAN_WEAPON_SCALE);
     scene.textures.get('npc-fan-weapon-glowstick').setFilter(Phaser.Textures.FilterMode.NEAREST);
     playFanAnimation(this.sprite, 'run');
     this.chooseMovementAngle();
@@ -582,7 +686,6 @@ export class FanEnemy extends Enemy {
 
   onBeat(info: BeatInfo): void {
     if (this.dead) return;
-    if (this.tutorialSpectator) return;
     this.chooseMovementAngle();
     this.scene.scheduleEnemyAttacks(this.kind, info.globalBeat, () => {
       if (this.dead) return;
@@ -593,14 +696,6 @@ export class FanEnemy extends Enemy {
   }
 
   protected move(_dtMs: number): void {
-    if (this.tutorialSpectator) {
-      this.movementAngle = this.angleToPlayer();
-      const v = this.scene.physics.velocityFromRotation(this.movementAngle, FanEnemy.MOVE_SPEED * 0.68);
-      this.go.body.setVelocity(v.x, v.y);
-      this.aimAngle = this.movementAngle;
-      playFanAnimation(this.sprite, 'run');
-      return;
-    }
     this.applyMovementVelocity();
     if (this.scene.time.now >= this.attackUntil && this.sprite.anims.currentAnim?.key !== 'fan-run') {
       playFanAnimation(this.sprite, 'run', true);
@@ -687,5 +782,143 @@ export class FanEnemy extends Enemy {
       )
       .setDepth(characterDepth - 0.001);
     if (this.scene.time.now >= this.weaponAttackUntil) this.weaponSprite.setRotation(0);
+  }
+}
+
+/**
+ * 教学池塘角色：无手持武器，使用 Idle / Run / Roll 本体动画，
+ * 攻击时从嘴部位置发射粉丝系点弹并叠加独立轻 / 重特效。
+ */
+export class TutorialCharacter extends Enemy {
+  readonly kind = 'fan';
+  private static readonly MOVE_SPEED = 66 * 0.68;
+  private static readonly IDLE_DISTANCE = worldSize(112);
+  private readonly sprite: Phaser.GameObjects.Sprite;
+  private readonly attackFx: Phaser.GameObjects.Sprite;
+  private movementAngle = 0;
+  private aimAngle = Math.PI;
+  private rollUntil = 0;
+  private attackUntil = 0;
+  private nextAttackIsHeavy = false;
+
+  constructor(scene: MainScene, x: number, y: number) {
+    const sprite = scene.add
+      .sprite(x, y, tutorialCharacterTextureKey('roll', 1))
+      .setScale(TUTORIAL_CHARACTER_SPRITE_SCALE);
+    super(
+      scene,
+      sprite,
+      40,
+      0xffffff,
+      TUTORIAL_CHARACTER_BODY_SOURCE_BOUNDS,
+      { textureKey: 'tutorial-character-shadow', scale: TUTORIAL_CHARACTER_SPRITE_SCALE }
+    );
+    this.sprite = sprite;
+    this.attackFx = scene.add
+      .sprite(x, y, 'tutorial-character-attack-light-fx-1')
+      .setScale(TUTORIAL_CHARACTER_SPRITE_SCALE)
+      .setAlpha(0.84)
+      .setVisible(false);
+    enableEmissiveBloom(this.attackFx, FAN_EMISSIVE_COLOR, {
+      glowStrength: 0.22,
+      innerStrength: 0.04,
+      glowDistance: 21,
+      glowQuality: 2,
+      blurRadius: 9,
+      bloomAmount: 0.055,
+      threshold: 0.06
+    });
+    this.chooseMovementAngle();
+    this.rollUntil = scene.time.now + TUTORIAL_CHARACTER_ROLL_DURATION_MS;
+    playTutorialCharacterAnimation(this.sprite, 'roll', true);
+  }
+
+  onSpawned(): void {
+    this.chooseMovementAngle();
+  }
+
+  update(dtMs: number): void {
+    super.update(dtMs);
+    if (this.dead) return;
+    const facingRight = Math.cos(this.aimAngle) >= 0;
+    const characterDepth = worldDepth(this.go.y + this.go.body.halfHeight);
+    // 教学角色与正式粉丝共用“右朝向为 flipX”的贴图约定。
+    this.sprite.setFlipX(facingRight);
+    this.attackFx
+      .setPosition(this.x, this.y)
+      .setFlipX(facingRight)
+      .setDepth(characterDepth - 0.002);
+  }
+
+  onBeat(info: BeatInfo): void {
+    if (this.dead || this.scene.time.now < this.rollUntil) return;
+    this.chooseMovementAngle();
+    this.scene.scheduleEnemyAttacks(this.kind, info.globalBeat, () => {
+      if (this.dead) return;
+      this.aimAngle = this.scene.quantizeEnemyAttackAngle(this.angleToPlayer());
+      const heavy = this.nextAttackIsHeavy;
+      this.nextAttackIsHeavy = !this.nextAttackIsHeavy;
+      this.attackUntil = this.scene.time.now + TUTORIAL_CHARACTER_ATTACK_DURATION_MS;
+      playTutorialCharacterAttackEffect(this.attackFx, heavy ? 'attack-hard' : 'attack-light');
+      const side = Math.cos(this.aimAngle) >= 0 ? 1 : -1;
+      this.scene.spawnEnemyProjectile(
+        this.x + side * worldSize(18),
+        this.y - worldSize(8),
+        this.aimAngle,
+        this.kind
+      );
+    });
+  }
+
+  protected move(_dtMs: number): void {
+    if (this.scene.time.now < this.rollUntil) {
+      const v = this.scene.physics.velocityFromRotation(
+        this.movementAngle,
+        TutorialCharacter.MOVE_SPEED * 1.35
+      );
+      this.go.body.setVelocity(v.x, v.y);
+      return;
+    }
+
+    const distance = this.distToPlayer();
+    if (distance <= TutorialCharacter.IDLE_DISTANCE) {
+      this.go.body.setVelocity(0, 0);
+      if (this.scene.time.now >= this.attackUntil) playTutorialCharacterAnimation(this.sprite, 'idle');
+      return;
+    }
+
+    const v = this.scene.physics.velocityFromRotation(this.movementAngle, TutorialCharacter.MOVE_SPEED);
+    this.go.body.setVelocity(v.x, v.y);
+    if (this.scene.time.now >= this.attackUntil) playTutorialCharacterAnimation(this.sprite, 'run');
+    this.aimAngle = this.movementAngle;
+  }
+
+  protected die(): void {
+    if (this.attackFx.active) this.attackFx.destroy();
+    super.retireWithoutReward();
+  }
+
+  /** 新一轮教学角色出现前，当前角色先播放无奖励的死亡退场。 */
+  retire(): void {
+    if (this.attackFx.active) this.attackFx.destroy();
+    this.retireWithoutReward();
+  }
+
+  destroy(): void {
+    if (this.attackFx.active) this.attackFx.destroy();
+    super.destroy();
+  }
+
+  protected onGameOverIdle(): void {
+    this.attackFx.setVisible(false);
+    playTutorialCharacterAnimation(this.sprite, 'idle', true);
+  }
+
+  private chooseMovementAngle(): void {
+    const maxOffset = this.distToPlayer() < 90 ? 38 : 18;
+    this.movementAngle = this.angleToPlayer() + Phaser.Math.DegToRad(
+      Phaser.Math.FloatBetween(-maxOffset, maxOffset)
+    );
+    if (this.scene.time.now >= this.attackUntil) this.aimAngle = this.movementAngle;
   }
 }

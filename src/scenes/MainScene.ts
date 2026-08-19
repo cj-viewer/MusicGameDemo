@@ -10,9 +10,10 @@ import { HUD } from '../game/HUD';
 import { Player } from '../game/Player';
 import { registerPlayerAnimations } from '../game/playerAnimation';
 import { BATON, GLOWSTICKS, getAttackSpec, type WeaponDef, type WeaponId } from '../game/weapons';
-import { Enemy, FanEnemy, SmallGuard, type EnemyKind } from '../game/enemies';
+import { Enemy, FanEnemy, SmallGuard, TutorialCharacter, type EnemyKind } from '../game/enemies';
 import { registerFanAnimations } from '../game/fanAnimation';
 import { registerGuardAnimations } from '../game/guardAnimation';
+import { registerTutorialCharacterAnimations } from '../game/tutorialCharacterAnimation';
 import { GAMEPAD_BUTTON, rumbleParameters, type RumbleKind } from '../game/GamepadControls';
 import { WORLD_OBJECT_SCALE, worldSize } from '../game/visualScale';
 import type { FpvMiniScene } from './FpvMiniScene';
@@ -235,8 +236,9 @@ const WAVE_ENEMY_COUNTS = [2, 6, 12, 18, 24];
 
 interface Pickup {
   go: Phaser.GameObjects.Container;
-  parts: Phaser.GameObjects.Rectangle[];
-  colors: number[];
+  weaponVisual: Phaser.GameObjects.Image;
+  ring: Phaser.GameObjects.Arc;
+  ringGlow: Phaser.Filters.Glow | null;
   baseY: number;
   weapon: WeaponDef;
 }
@@ -333,6 +335,7 @@ export class MainScene extends Phaser.Scene {
   private patternIcons: Phaser.GameObjects.Shape[] = [];
   private patternPanelMode: 'tutorial' | 'compact' = 'compact';
   private formalPatternBaseX = 0;
+  private formalPatternBaseY = 0;
   /** 用于忽略已过期的延迟隐藏回调。 */
   private formalPatternVisibilityRun = 0;
   private tutorialBeatHighlights: Phaser.GameObjects.Image[] = [];
@@ -354,8 +357,8 @@ export class MainScene extends Phaser.Scene {
   private tutorialControlRunId = 0;
   /** 当前页面会话中已经实际淡入过的操作卡；教学重练或 R 重开均不重复展示。 */
   private readonly tutorialControlShownTasks = new Set<number>();
-  /** 教学池塘中的观众粉丝：每小节换一只，只展示、不持武器、不攻击。 */
-  private tutorialFans: FanEnemy[] = [];
+  /** 教学池塘角色：每两小节换一只，无武器并从嘴部发射点弹。 */
+  private tutorialCharacters: TutorialCharacter[] = [];
   /** 确认按钮点击后短暂屏蔽攻击输入，避免同一次点击又触发挥击 */
   private suppressAttackUntil = 0;
   /** 进入游戏的节拍倒计时（每小节减一），-1 表示未激活 */
@@ -541,7 +544,7 @@ export class MainScene extends Phaser.Scene {
       const hitbox = hitboxGO as Phaser.GameObjects.Rectangle;
       const bullet = hitbox.getData('ownerBullet') as Phaser.GameObjects.Rectangle | undefined;
       if (!bullet?.active) return;
-      const enemy = this.enemies.find((candidate) => candidate.go === enemyGO);
+      const enemy = [...this.enemies, ...this.tutorialCharacters].find((candidate) => candidate.go === enemyGO);
       if (enemy && !enemy.dead) {
         enemy.takeDamage(
           bullet.getData('damage') as number,
@@ -582,7 +585,7 @@ export class MainScene extends Phaser.Scene {
     this.player.update(this.time.now, delta);
     this.hud.updatePlayerHpPosition(this.player.x, this.player.y);
     for (const enemy of this.enemies) enemy.update(delta);
-    for (const fan of this.tutorialFans) fan.update(delta);
+    for (const character of this.tutorialCharacters) character.update(delta);
     this.updateEnemyBulletBeatSurge(delta);
     this.updateStraightBulletHitboxes();
     this.updateBulletTrails(delta);
@@ -967,6 +970,7 @@ export class MainScene extends Phaser.Scene {
   private createEnemyAnimations(): void {
     registerFanAnimations(this);
     registerGuardAnimations(this);
+    registerTutorialCharacterAnimations(this);
   }
 
   private rumbleGamepad(pad: Phaser.Input.Gamepad.Gamepad, kind: RumbleKind): void {
@@ -1882,8 +1886,8 @@ export class MainScene extends Phaser.Scene {
   private startTutorial(): void {
     this.state = 'tutorial';
     this.stageEnvironment.showTutorial();
-    this.clearTutorialFans();
-    this.spawnTutorialFan();
+    this.clearTutorialCharacters();
+    this.spawnTutorialCharacter();
     this.tutorialStreak = 0;
     this.tutorialTimingOffsets = [];
     this.tutorialCalibrationBeats.clear();
@@ -2117,6 +2121,7 @@ export class MainScene extends Phaser.Scene {
     }
     this.patternPanel = ui;
     this.formalPatternBaseX = ui.x;
+    this.formalPatternBaseY = ui.y;
     if (!tutorial) ui.setVisible(false);
   }
 
@@ -2194,21 +2199,39 @@ export class MainScene extends Phaser.Scene {
     return ordered.length % 2 === 0 ? (ordered[middle - 1] + ordered[middle]) / 2 : ordered[middle];
   }
 
-  /** 教学中每两小节替换一次观众粉丝；连招成败由输入状态机即时结算。 */
+  /** 教学角色按拍移动和口吐弹幕，每两小节从池塘中刷新一只。 */
   private onTutorialBeat(info: BeatInfo): void {
-    if (info.beatInMeasure === 0 && info.measure > 0 && info.measure % 2 === 0) this.spawnTutorialFan();
+    for (const character of this.tutorialCharacters) {
+      character.pulseBeat(false);
+      character.onBeat(info);
+    }
+    if (info.beatInMeasure === 0 && info.measure > 0 && info.measure % 4 === 0) this.refreshTutorialCharacter();
   }
 
-  private spawnTutorialFan(): void {
-    const fan = new FanEnemy(this, hd(946), hd(365), { tutorialSpectator: true });
-    this.tutorialFans.push(fan);
-    // 池塘中心只保留当前一只展示粉丝，避免教学越久越拥挤。
-    while (this.tutorialFans.length > 1) this.tutorialFans.shift()?.destroy();
+  private spawnTutorialCharacter(): void {
+    const character = new TutorialCharacter(this, hd(946), hd(365));
+    this.tutorialCharacters.push(character);
+    // 教学角色也进入玩家攻击判定组；其死亡路径不会影响正式波次或掉落。
+    this.enemyGroup.add(character.go);
+    character.onSpawned();
   }
 
-  private clearTutorialFans(): void {
-    this.tutorialFans.forEach((fan) => fan.destroy());
-    this.tutorialFans = [];
+  /** 16 拍后先让当前教学角色死亡退场，再生成下一只，避免无过渡重叠。 */
+  private refreshTutorialCharacter(): void {
+    const previous = this.tutorialCharacters.shift();
+    if (!previous) {
+      this.spawnTutorialCharacter();
+      return;
+    }
+    previous.retire();
+    this.time.delayedCall(220, () => {
+      if (this.state === 'tutorial' && this.tutorialCharacters.length === 0) this.spawnTutorialCharacter();
+    });
+  }
+
+  private clearTutorialCharacters(): void {
+    this.tutorialCharacters.forEach((character) => character.destroy());
+    this.tutorialCharacters = [];
   }
 
   private completeTutorialCombo(): void {
@@ -2249,6 +2272,20 @@ export class MainScene extends Phaser.Scene {
       ? FORMAL_PATTERN_HEAVY_COLOR
       : FORMAL_PATTERN_LIGHT_COLOR;
     this.setFormalPatternIconColor(beatIdx, hitColor);
+    // 第一关顶部的四拍节奏条：正确命中时围绕原位快速上下颤动。
+    this.tweens.killTweensOf(panel);
+    panel.setY(this.formalPatternBaseY);
+    this.tweens.addCounter({
+      from: 0,
+      to: Math.PI * 4,
+      duration: 180,
+      ease: 'Sine.easeInOut',
+      onUpdate: (tween) => {
+        const phase = tween.getValue() ?? 0;
+        panel.setY(this.formalPatternBaseY + Math.sin(phase) * 6);
+      },
+      onComplete: () => panel.setY(this.formalPatternBaseY)
+    });
     const ring = this.add.circle(icon.x, icon.y, 16).setStrokeStyle(3, hitColor, 0.82);
     panel.add(ring);
     this.tweens.add({
@@ -2280,7 +2317,7 @@ export class MainScene extends Phaser.Scene {
     if (this.patternPanelMode !== 'compact' || !this.patternPanel) return;
     this.formalPatternVisibilityRun++;
     this.tweens.killTweensOf(this.patternPanel);
-    this.patternPanel.setPosition(this.formalPatternBaseX, this.patternPanel.y).setVisible(true).setAlpha(1);
+    this.patternPanel.setPosition(this.formalPatternBaseX, this.formalPatternBaseY).setVisible(true).setAlpha(1);
     this.patternIcons.forEach((_, i) => this.setFormalPatternIconColor(i, FORMAL_PATTERN_BASE_COLOR));
   }
 
@@ -2289,7 +2326,7 @@ export class MainScene extends Phaser.Scene {
     const run = ++this.formalPatternVisibilityRun;
     const hide = () => {
       if (run !== this.formalPatternVisibilityRun || this.combo.isComboActive || !this.patternPanel) return;
-      this.patternPanel.setPosition(this.formalPatternBaseX, this.patternPanel.y).setVisible(false);
+      this.patternPanel.setPosition(this.formalPatternBaseX, this.formalPatternBaseY).setVisible(false);
     };
     if (delay > 0) this.time.delayedCall(delay, hide);
     else hide();
@@ -2300,7 +2337,7 @@ export class MainScene extends Phaser.Scene {
     const panel = this.patternPanel;
     const run = ++this.formalPatternVisibilityRun;
     this.tweens.killTweensOf(panel);
-    panel.setPosition(this.formalPatternBaseX, panel.y).setVisible(true).setAlpha(1);
+    panel.setPosition(this.formalPatternBaseX, this.formalPatternBaseY).setVisible(true).setAlpha(1);
     this.patternIcons.forEach((_, i) => this.setFormalPatternIconColor(i, 0xfca5a5));
     this.tweens.add({
       targets: panel,
@@ -2401,7 +2438,7 @@ export class MainScene extends Phaser.Scene {
     this.confirmUi?.destroy();
     this.confirmUi = undefined;
     this.destroyTutorialControlGuide();
-    this.clearTutorialFans();
+    this.clearTutorialCharacters();
     // 正式关切换为紧凑四拍图标条；两关均不再创建整场扩散框。
     this.buildPatternPanel(false);
     this.hud.setBeatGuideVisible(false);
@@ -2582,7 +2619,7 @@ export class MainScene extends Phaser.Scene {
     let bestIsInMovementCone = false;
     const halfPriorityCone = Phaser.Math.DegToRad(22.5);
 
-    for (const enemy of [...this.enemies, ...this.tutorialFans]) {
+    for (const enemy of [...this.enemies, ...this.tutorialCharacters]) {
       if (enemy.dead) continue;
       const enemyAngle = Phaser.Math.Angle.Between(this.player.x, this.player.y, enemy.x, enemy.y);
       const distance = Phaser.Math.Distance.Between(this.player.x, this.player.y, enemy.x, enemy.y);
@@ -3192,13 +3229,13 @@ export class MainScene extends Phaser.Scene {
     const gfx = this.add.graphics().setDepth(6).setBlendMode(Phaser.BlendModes.NORMAL).enableFilters();
     const filters = gfx.filters;
     if (filters) {
-      const glow = filters.internal.addGlow(0xf97316, 0.18, 0.02, 1, false, 2, worldSize(18));
+      const glow = filters.internal.addGlow(0xf97316, 0.52, 0.08, 1, false, 2, worldSize(26));
       glow.setPaddingOverride(null);
       const bloom = filters.internal.addParallelFilters();
       bloom.top.addThreshold(0.04, 1);
-      bloom.top.addBlur(2, 8, 8, 0.18, 0xf97316, 3);
+      bloom.top.addBlur(2, 11, 11, 0.42, 0xf97316, 3);
       bloom.blend.blendMode = Phaser.BlendModes.ADD;
-      bloom.blend.amount = 0.05;
+      bloom.blend.amount = 0.14;
     }
     const damaged = new Set<Enemy>();
 
@@ -3238,7 +3275,7 @@ export class MainScene extends Phaser.Scene {
           if (inSector(bullet.x, bullet.y, radius)) this.destroyEnemyBullet(bullet);
         }
         // 波前伤害（每个敌人只结算一次）
-        for (const enemy of [...this.enemies]) {
+        for (const enemy of [...this.enemies, ...this.tutorialCharacters]) {
           if (enemy.dead || damaged.has(enemy)) continue;
           if (inSector(enemy.x, enemy.y, radius + enemy.radius)) {
             damaged.add(enemy);
@@ -3252,7 +3289,7 @@ export class MainScene extends Phaser.Scene {
 
   damageEnemiesInArc(x: number, y: number, angle: number, radius: number, halfArcDeg: number, damage: number): void {
     const halfRad = Phaser.Math.DegToRad(halfArcDeg);
-    for (const enemy of [...this.enemies]) {
+    for (const enemy of [...this.enemies, ...this.tutorialCharacters]) {
       if (enemy.dead) continue;
       const dist = Phaser.Math.Distance.Between(x, y, enemy.x, enemy.y);
       if (dist > radius + enemy.radius) continue;
@@ -4194,37 +4231,34 @@ export class MainScene extends Phaser.Scene {
 
   private spawnPickup(x: number, y: number, weapon: WeaponDef): void {
     const go = this.add.container(x, y).setDepth(2);
-    const parts: Phaser.GameObjects.Rectangle[] = [];
-    const colors: number[] = [];
-
-    if (weapon.id === GLOWSTICKS.id) {
-      for (const offset of [-9, 9]) {
-        parts.push(
-          this.add
-            .rectangle(worldSize(offset), 0, worldSize(30), worldSize(7.5), 0xef4444)
-            .setRotation(-Math.PI / 2)
-        );
-        colors.push(0xef4444);
-      }
-    } else {
-      parts.push(this.add.rectangle(0, 0, worldSize(51), worldSize(9), 0xa855f7).setRotation(-Math.PI / 2));
-      colors.push(0xa855f7);
-    }
-
-    go.add(parts);
-    this.pickups.push({ go, parts, colors, baseY: y, weapon });
+    const isGlowstick = weapon.id === GLOWSTICKS.id;
+    const color = isGlowstick ? 0xffa340 : 0x9be8ff;
+    const ring = this.add
+      .circle(0, 0, worldSize(24))
+      .setStrokeStyle(worldSize(2), color, 0.82)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .enableFilters();
+    const ringGlow = ring.filters?.internal.addGlow(color, 0.54, 0.04, 1, false, 2, worldSize(15)) ?? null;
+    if (ringGlow) ringGlow.setPaddingOverride(null);
+    const weaponVisual = this.add
+      .image(0, 0, isGlowstick ? 'player-weapon-glowsticks' : 'player-weapon-baton')
+      .setScale(isGlowstick ? 0.56 : 0.5)
+      .setRotation(isGlowstick ? -Math.PI / 4 : -Math.PI / 8);
+    go.add([ring, weaponVisual]);
+    this.pickups.push({ go, weaponVisual, ring, ringGlow, baseY: y, weapon });
   }
 
   private pulsePickups(): void {
     const riseDuration = Math.max(80, this.conductor.beatDur * 420);
     for (const pickup of this.pickups) {
       this.tweens.killTweensOf(pickup.go);
+      this.tweens.killTweensOf(pickup.ring);
       pickup.go.setY(pickup.baseY);
-      pickup.parts.forEach((part) => part.setFillStyle(0xffffff));
+      pickup.weaponVisual.setTintFill();
+      pickup.ring.setScale(0.82).setAlpha(0.9);
+      if (pickup.ringGlow) pickup.ringGlow.outerStrength = 0.38;
       this.time.delayedCall(90, () => {
-        pickup.parts.forEach((part, index) => {
-          if (part.active) part.setFillStyle(pickup.colors[index]);
-        });
+        if (pickup.weaponVisual.active) pickup.weaponVisual.clearTint();
       });
       this.tweens.add({
         targets: pickup.go,
@@ -4232,6 +4266,18 @@ export class MainScene extends Phaser.Scene {
         duration: riseDuration,
         ease: 'Sine.Out',
         yoyo: true
+      });
+      this.tweens.add({
+        targets: pickup.ring,
+        scale: 1.65,
+        alpha: 0.18,
+        duration: riseDuration,
+        ease: 'Sine.Out',
+        yoyo: true,
+        onComplete: () => {
+          if (pickup.ring.active) pickup.ring.setScale(1).setAlpha(0.82);
+          if (pickup.ringGlow) pickup.ringGlow.outerStrength = 0.54;
+        }
       });
     }
   }

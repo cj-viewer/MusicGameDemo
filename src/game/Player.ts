@@ -44,6 +44,8 @@ const HARD_ATTACK_EFFECT_ALPHA = 0.86;
 const HARD_ATTACK_EFFECT_SCALE = 1.18;
 const LIGHT_ATTACK_EMISSIVE_COLOR = 0xfff36b;
 const HARD_ATTACK_EMISSIVE_COLOR = 0xf28cff;
+const CHARACTER_SHADOW_ALPHA = 0.45;
+const CHARACTER_SHADOW_DEPTH_OFFSET = 0.004;
 /** 角色脚底锚定的 Y 轴上弹：轻拍 +5%、重拍 +10%，横轴和镜像不参与缩放。 */
 const CHARACTER_BEAT_PULSE_LIGHT_SCALE_Y = 1.05;
 const CHARACTER_BEAT_PULSE_HEAVY_SCALE_Y = 1.1;
@@ -71,6 +73,7 @@ export class Player {
   private attackFx: Phaser.GameObjects.Sprite;
   private attackBloom: EmissiveBloomHandle;
   private weaponSprite: Phaser.GameObjects.Image;
+  private shadowSprite: Phaser.GameObjects.Image;
   private keys: Record<'W' | 'A' | 'S' | 'D', Phaser.Input.Keyboard.Key>;
   private invulnUntil = 0;
   private lastTrailAt = 0;
@@ -114,6 +117,11 @@ export class Player {
       }
     );
     this.attackFx.on(Phaser.Animations.Events.ANIMATION_COMPLETE, () => this.attackFx.setVisible(false));
+    this.shadowSprite = scene.add
+      .image(x, y, 'player-shadow')
+      .setScale(PLAYER_SPRITE_SCALE)
+      .setAlpha(CHARACTER_SHADOW_ALPHA);
+    scene.textures.get('player-shadow').setFilter(Phaser.Textures.FilterMode.NEAREST);
     this.weaponSprite = scene.add
       .image(x, y, 'player-weapon-glowsticks')
       .setOrigin(LIGHT_STICK_ORIGIN.x, LIGHT_STICK_ORIGIN.y)
@@ -161,6 +169,10 @@ export class Player {
     }
 
     const playerDepth = worldDepth(this.y + this.body.halfHeight);
+    const shadowY = this.y + (this.go.height * (this.go.scaleY - PLAYER_SPRITE_SCALE)) / 2;
+    this.shadowSprite
+      .setPosition(this.x, shadowY)
+      .setDepth(playerDepth - CHARACTER_SHADOW_DEPTH_OFFSET);
     this.go.setDepth(playerDepth);
     this.weaponSprite.setDepth(playerDepth + 0.002);
     if (this.attackFx.visible) {
@@ -342,6 +354,7 @@ export class Player {
     this.setAction(Math.random() < 0.5 ? 'death-1' : 'death-2', true);
     this.go.setAlpha(1);
     this.attackFx.setVisible(false);
+    this.shadowSprite.setVisible(false);
     this.weaponSprite.setVisible(false);
   }
 
@@ -357,6 +370,7 @@ export class Player {
     playPlayerAnimation(this.go, 'idle', true);
     this.go.setAlpha(1);
     this.attackFx.setVisible(false);
+    this.shadowSprite.setVisible(true);
     this.weaponSprite.setVisible(true).setRotation(0);
     this.updateWeaponVisual();
   }

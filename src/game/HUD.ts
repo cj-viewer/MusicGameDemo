@@ -156,7 +156,7 @@ export class HUD {
       .setDepth(10);
 
     this.feverText = scene.add
-      .text(METER_X, COMBO_LABEL_Y, 'ComboMeter', {
+      .text(METER_X, COMBO_LABEL_Y, '', {
         fontFamily: HUD_FONT,
         fontSize: '15px',
         color: HUD_TEXT_COLOR,
@@ -166,7 +166,7 @@ export class HUD {
       })
       .setOrigin(0.5)
       .setDepth(11)
-      .setVisible(true);
+      .setVisible(false);
 
     this.meterGfx = scene.add.graphics().setDepth(10);
     this.meterBeatRing = scene.add
