@@ -23,7 +23,6 @@ import {
 } from './EmissiveFx';
 
 export const PLAYER_RADIUS = worldSize(16);
-const MOVE_SPEED = 260;
 const MOVE_ACCELERATION = 1050;
 const MOVE_DECELERATION = 720;
 const DODGE_DISTANCE = 160;
@@ -74,6 +73,7 @@ export class Player {
   private attackBloom: EmissiveBloomHandle;
   private weaponSprite: Phaser.GameObjects.Image;
   private shadowSprite: Phaser.GameObjects.Image;
+  private aimArrow: Phaser.GameObjects.Triangle;
   private keys: Record<'W' | 'A' | 'S' | 'D', Phaser.Input.Keyboard.Key>;
   private invulnUntil = 0;
   private lastTrailAt = 0;
@@ -82,6 +82,8 @@ export class Player {
   private actionLockedUntil = 0;
   private weaponAttackUntil = 0;
   private lastDodgeAt = -Infinity;
+  private knockbackUntil = 0;
+  private knockbackVelocity = new Phaser.Math.Vector2();
   private dead = false;
 
   constructor(scene: MainScene, x: number, y: number) {
@@ -121,6 +123,10 @@ export class Player {
       .image(x, y, 'player-shadow')
       .setScale(PLAYER_SPRITE_SCALE)
       .setAlpha(CHARACTER_SHADOW_ALPHA);
+    this.aimArrow = scene.add
+      .triangle(x, y, -10, -7, -10, 7, 12, 0, 0xfde68a, 0.92)
+      .setStrokeStyle(2, 0xffffff, 0.95)
+      .setVisible(false);
     scene.textures.get('player-shadow').setFilter(Phaser.Textures.FilterMode.NEAREST);
     this.weaponSprite = scene.add
       .image(x, y, 'player-weapon-glowsticks')
@@ -146,18 +152,24 @@ export class Player {
     if (this.dead) return;
 
     // 移动（闪避期间由 tween 控制位移）
-    if (!this.isDodging) {
+    if (!this.isDodging && timeMs < this.knockbackUntil) {
+      this.body.setVelocity(this.knockbackVelocity.x, this.knockbackVelocity.y);
+    } else if (!this.isDodging) {
       const dir = this.moveDir();
+      const moveSpeed = this.scene.getPlayerMoveSpeed();
+      const targetVelocity = dir.clone().scale(moveSpeed);
+      if (dir.lengthSq() > 0 && this.body.velocity.dot(targetVelocity) < 0) {
+        this.body.setVelocity(0, 0);
+      }
       const acceleration = dir.lengthSq() > 0 ? MOVE_ACCELERATION : MOVE_DECELERATION;
       const maxChange = acceleration * Math.min(dtMs, 50) / 1000;
       this.body.setVelocity(
-        this.moveTowards(this.body.velocity.x, dir.x * MOVE_SPEED, maxChange),
-        this.moveTowards(this.body.velocity.y, dir.y * MOVE_SPEED, maxChange)
+        this.moveTowards(this.body.velocity.x, targetVelocity.x, maxChange),
+        this.moveTowards(this.body.velocity.y, targetVelocity.y, maxChange)
       );
     }
 
-    // 自动瞄准：移动方向前方扇区内的目标享受两倍距离权重。
-    this.updateAutoAim();
+    this.refreshAimDirection();
 
     // 正式素材默认朝左；锁定方向在右侧时水平翻转。
     this.go.setFlipX(Math.cos(this.aimAngle) >= 0);
@@ -173,6 +185,17 @@ export class Player {
     this.shadowSprite
       .setPosition(this.x, shadowY)
       .setDepth(playerDepth - CHARACTER_SHADOW_DEPTH_OFFSET);
+    const manualAimEnabled = this.scene.isManualAimEnabled();
+    const arrowAnchorY = this.y + this.body.halfHeight;
+    const arrowOffset = worldSize(28);
+    this.aimArrow
+      .setVisible(manualAimEnabled)
+      .setPosition(
+        this.x + Math.cos(this.aimAngle) * arrowOffset,
+        arrowAnchorY + Math.sin(this.aimAngle) * arrowOffset
+      )
+      .setRotation(this.aimAngle)
+      .setDepth(playerDepth - 0.003);
     this.go.setDepth(playerDepth);
     this.weaponSprite.setDepth(playerDepth + 0.002);
     if (this.attackFx.visible) {
@@ -336,6 +359,20 @@ export class Player {
     }
   }
 
+  /** 攻击触发前也刷新一次，保证鼠标按下的同一帧就使用最新指向。 */
+  refreshAimDirection(): void {
+    if (this.scene.isManualAimEnabled()) this.updateManualAim();
+    else this.updateAutoAim();
+  }
+
+  /** Boss 践踏等强制位移；闪避期间保持原有无敌与位移控制。 */
+  applyKnockback(angle: number, speed: number, durationMs = 260): void {
+    if (this.dead || this.isDodging || speed <= 0) return;
+    this.knockbackVelocity.setToPolar(angle, speed);
+    this.knockbackUntil = this.scene.time.now + durationMs;
+    this.body.setVelocity(this.knockbackVelocity.x, this.knockbackVelocity.y);
+  }
+
   /** Fever Time 的正确输入恢复生命，不超过最大生命。 */
   heal(amount: number): void {
     if (this.dead || amount <= 0) return;
@@ -357,6 +394,7 @@ export class Player {
     this.go.setAlpha(1);
     this.attackFx.setVisible(false);
     this.shadowSprite.setVisible(false);
+    this.aimArrow.setVisible(false);
     this.weaponSprite.setVisible(false);
   }
 
@@ -422,6 +460,16 @@ export class Player {
     const movement = this.moveDir();
     if (movement.lengthSq() > 0) this.lastMoveAngle = Math.atan2(movement.y, movement.x);
     this.aimAngle = this.scene.getAutoAimAngle(this.lastMoveAngle);
+    this.rawAimAngle = this.aimAngle;
+  }
+
+  private updateManualAim(): void {
+    const pointer = this.scene.input.activePointer;
+    pointer.updateWorldPoint(this.scene.cameras.main);
+    const dx = pointer.worldX - this.x;
+    const dy = pointer.worldY - (this.y + this.body.halfHeight);
+    if (dx * dx + dy * dy < 1) return;
+    this.aimAngle = Math.atan2(dy, dx);
     this.rawAimAngle = this.aimAngle;
   }
 

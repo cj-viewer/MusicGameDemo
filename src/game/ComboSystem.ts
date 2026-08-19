@@ -1,6 +1,7 @@
-import Phaser from 'phaser';
 import type { Conductor } from '../core/Conductor';
 import type { BeatKey } from './weapons';
+
+const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 
 /** Perfect：校准后距离拍点不超过 0.1 秒。 */
 export const PERFECT_INPUT_WINDOW = 0.1;
@@ -46,8 +47,13 @@ export type InputResult =
 
 /** Fever Time 持续拍数（4 小节） */
 export const FEVER_DURATION_BEATS = 16;
-export const FEVER_ENERGY_MULTIPLIER = 3;
 export const FEVER_ACTIVE_GAIN_SCALE = 0.5;
+
+export interface ComboEnergyRewards {
+  perfect: number;
+  good: number;
+  patternComplete: number;
+}
 
 const LEVEL_DAMAGE_BONUS = [0, 0.1, 0.15, 0.2, 0.25, 0.3];
 
@@ -75,6 +81,11 @@ export class ComboSystem {
   private feverUntilBeat = -1;
   /** 教学以玩家真实输入时间估算的设备延迟；正值表示输入到达程序时偏晚。 */
   private inputLatencyOffset = 0;
+  private energyRewards: ComboEnergyRewards = {
+    perfect: 4,
+    good: 3,
+    patternComplete: 10
+  };
 
   private conductor: Conductor;
 
@@ -117,7 +128,7 @@ export class ComboSystem {
   feverRemainRatio(): number {
     if (!this.feverActive()) return 0;
     const bf = this.conductor.beatFloatAt(this.conductor.now());
-    return Phaser.Math.Clamp((this.feverUntilBeat - bf) / FEVER_DURATION_BEATS, 0, 1);
+    return clamp((this.feverUntilBeat - bf) / FEVER_DURATION_BEATS, 0, 1);
   }
 
   /** 按浮点拍位置精确结束 Fever，避免小数拍回充被量化成整拍。 */
@@ -139,11 +150,19 @@ export class ComboSystem {
    * 校准值只平移判定时钟，不修改音频节拍本身。限制在 120ms 内，避免一次异常输入扩大窗口。
    */
   setInputLatencyOffset(seconds: number): void {
-    this.inputLatencyOffset = Phaser.Math.Clamp(seconds, -0.12, 0.12);
+    this.inputLatencyOffset = clamp(seconds, -0.12, 0.12);
   }
 
   getInputLatencyOffset(): number {
     return this.inputLatencyOffset;
+  }
+
+  setEnergyRewards(rewards: ComboEnergyRewards): void {
+    this.energyRewards = {
+      perfect: Math.max(0, rewards.perfect),
+      good: Math.max(0, rewards.good),
+      patternComplete: Math.max(0, rewards.patternComplete)
+    };
   }
 
   handleInput(btn: BeatKey, t: number): InputResult {
@@ -176,7 +195,10 @@ export class ComboSystem {
       const beatIdx = this.comboActive ? this.comboStep : 0;
       const completesCombo = this.comboActive && this.comboStep === this.pattern.length - 1;
       this.consumedBeat = n;
-      this.addCorrectInputProgress(2);
+      this.addCorrectInputProgress(this.energyRewards[timingJudgement]);
+      if (completesCombo) {
+        this.addCorrectInputProgress(this.energyRewards.patternComplete);
+      }
 
       if (!this.comboActive) {
         this.comboActive = true;
@@ -233,9 +255,9 @@ export class ComboSystem {
     };
   }
 
-  /** 所有 Fever 能量来源统一按当前获取倍率结算。 */
+  /** 直接增加 ComboMeter 点数；F 调试键使用此入口充满量表。 */
   addProgress(amount: number): void {
-    this.progress = Math.min(100, this.progress + amount * FEVER_ENERGY_MULTIPLIER);
+    this.progress = Math.min(100, this.progress + Math.max(0, amount));
   }
 
   /**
@@ -264,7 +286,7 @@ export class ComboSystem {
       return;
     }
 
-    const gainedEnergy = amount * FEVER_ENERGY_MULTIPLIER * FEVER_ACTIVE_GAIN_SCALE;
+    const gainedEnergy = amount * FEVER_ACTIVE_GAIN_SCALE;
     const extensionBeats = (gainedEnergy / 100) * FEVER_DURATION_BEATS;
     const beatFloat = Math.max(0, this.conductor.beatFloatAt(this.conductor.now()));
     this.feverUntilBeat = Math.min(

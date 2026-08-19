@@ -40,7 +40,7 @@ const FAN_EMISSIVE_COLOR = 0xff543d;
 const CHARACTER_SHADOW_ALPHA = 0.45;
 const CHARACTER_SHADOW_DEPTH_OFFSET = 0.004;
 
-export type EnemyKind = 'smallGuard' | 'midGuard' | 'fan';
+export type EnemyKind = 'smallGuard' | 'midGuard' | 'fan' | 'bossGuard';
 
 type EnemyVisual = Phaser.GameObjects.Shape | Phaser.GameObjects.Image | Phaser.GameObjects.Sprite;
 type VisualWithBody = EnemyVisual & { body: Phaser.Physics.Arcade.Body };
@@ -54,10 +54,16 @@ interface EnemyBodySourceBounds {
 interface EnemyShadowOptions {
   textureKey: string;
   scale: number;
+  /** 相对角色基础比例的阴影缩放；Boss 可独立收小旧警卫阴影。 */
+  scaleMultiplier?: number;
+  /** 不随朝向翻转的固定水平偏移。 */
+  offsetX?: number;
   /** 仅保安使用：阴影沿当前朝向做轻微水平偏移。 */
   facingOffsetX?: number;
   /** 阴影落点的额外下移量。 */
   offsetY?: number;
+  /** 阴影低于角色的深度差。 */
+  depthOffset?: number;
 }
 
 /** 敌人基类：移动逐帧更新，攻击和方向重选由节拍驱动。 */
@@ -69,14 +75,14 @@ export abstract class Enemy {
   maxHp: number;
   dead = false;
 
-  private hpBarBg: Phaser.GameObjects.Rectangle;
-  private hpBar: Phaser.GameObjects.Rectangle;
+  private hpBarBg?: Phaser.GameObjects.Rectangle;
+  private hpBar?: Phaser.GameObjects.Rectangle;
   private baseColor: number;
   private bodySourceBounds?: EnemyBodySourceBounds;
   private knockbackUntil = 0;
   private knockbackVelocity = new Phaser.Math.Vector2();
-  private readonly baseScaleX: number;
-  private readonly baseScaleY: number;
+  private baseScaleX: number;
+  private baseScaleY: number;
   private readonly shadow?: Phaser.GameObjects.Image;
   private readonly shadowOptions?: EnemyShadowOptions;
 
@@ -86,7 +92,8 @@ export abstract class Enemy {
     hp: number,
     color: number,
     bodySourceBounds?: EnemyBodySourceBounds,
-    shadowOptions?: EnemyShadowOptions
+    shadowOptions?: EnemyShadowOptions,
+    showLocalHealthBar = true
   ) {
     this.scene = scene;
     this.go = go as VisualWithBody;
@@ -100,7 +107,7 @@ export abstract class Enemy {
     if (shadowOptions) {
       this.shadow = scene.add
         .image(go.x, go.y, shadowOptions.textureKey)
-        .setScale(shadowOptions.scale)
+        .setScale(shadowOptions.scale * (shadowOptions.scaleMultiplier ?? 1))
         .setAlpha(CHARACTER_SHADOW_ALPHA);
       scene.textures.get(shadowOptions.textureKey).setFilter(Phaser.Textures.FilterMode.NEAREST);
     }
@@ -113,8 +120,10 @@ export abstract class Enemy {
     }
     this.go.body.setCollideWorldBounds(true);
 
-    this.hpBarBg = scene.add.rectangle(go.x, go.y, worldSize(28), worldSize(4), 0x1f2937).setDepth(3).setOrigin(0, 0.5);
-    this.hpBar = scene.add.rectangle(go.x, go.y, worldSize(28), worldSize(4), 0x86efac).setDepth(3).setOrigin(0, 0.5);
+    if (showLocalHealthBar) {
+      this.hpBarBg = scene.add.rectangle(go.x, go.y, worldSize(28), worldSize(4), 0x1f2937).setDepth(3).setOrigin(0, 0.5);
+      this.hpBar = scene.add.rectangle(go.x, go.y, worldSize(28), worldSize(4), 0x86efac).setDepth(3).setOrigin(0, 0.5);
+    }
   }
 
   get x(): number {
@@ -148,19 +157,29 @@ export abstract class Enemy {
           * this.shadowOptions.facingOffsetX
         : 0;
       this.shadow
-        .setPosition(this.go.x + facingOffset, shadowY + (this.shadowOptions?.offsetY ?? 0))
-        .setDepth(characterDepth - CHARACTER_SHADOW_DEPTH_OFFSET);
+        .setPosition(
+          this.go.x + (this.shadowOptions?.offsetX ?? 0) + facingOffset,
+          shadowY + (this.shadowOptions?.offsetY ?? 0)
+        )
+        .setDepth(characterDepth - (this.shadowOptions?.depthOffset ?? CHARACTER_SHADOW_DEPTH_OFFSET));
     }
     this.go.setDepth(characterDepth);
-    this.hpBarBg.setDepth(characterDepth + 0.001);
-    this.hpBar.setDepth(characterDepth + 0.002);
-    this.hpBarBg.setPosition(bx, by);
-    this.hpBar.setPosition(bx, by);
-    this.hpBar.scaleX = this.hp / this.maxHp;
+    this.hpBarBg?.setDepth(characterDepth + 0.001).setPosition(bx, by);
+    this.hpBar?.setDepth(characterDepth + 0.002).setPosition(bx, by);
+    if (this.hpBar) this.hpBar.scaleX = this.hp / this.maxHp;
   }
 
   abstract onBeat(info: BeatInfo): void;
   protected abstract move(dtMs: number): void;
+
+  /** 更新单位基础体型，并同步角色、阴影与后续节拍缩放的基准。 */
+  protected setVisualScale(scale: number): void {
+    this.scene.tweens.killTweensOf(this.go);
+    this.baseScaleX = scale;
+    this.baseScaleY = scale;
+    this.go.setScale(scale);
+    this.shadow?.setScale(scale * (this.shadowOptions?.scaleMultiplier ?? 1));
+  }
 
   /** 所有敌人按轻 / 重拍节奏脚底锚定，只做纵向上弹。 */
   pulseBeat(heavy: boolean): void {
@@ -221,6 +240,7 @@ export abstract class Enemy {
   takeDamage(amount: number, knockbackAngle?: number, knockbackSpeed = 0): void {
     if (this.dead) return;
     this.hp -= amount;
+    if (this.kind === 'bossGuard') this.scene.onBossHealthChanged(Math.max(0, this.hp), this.maxHp);
     if (knockbackAngle !== undefined && knockbackSpeed > 0) {
       this.knockbackVelocity.setToPolar(knockbackAngle, knockbackSpeed);
       this.knockbackUntil = this.scene.time.now + 160;
@@ -241,8 +261,8 @@ export abstract class Enemy {
 
   protected die(): void {
     this.dead = true;
-    this.hpBarBg.destroy();
-    this.hpBar.destroy();
+    this.hpBarBg?.destroy();
+    this.hpBar?.destroy();
     this.scene.spawnEnemyDeathExplosion(this.x, this.y, this.kind);
     this.go.body.enable = false;
     if (this.shadow) {
@@ -268,8 +288,8 @@ export abstract class Enemy {
   protected retireWithoutReward(): void {
     if (this.dead) return;
     this.dead = true;
-    this.hpBarBg.destroy();
-    this.hpBar.destroy();
+    this.hpBarBg?.destroy();
+    this.hpBar?.destroy();
     this.scene.spawnEnemyDeathExplosion(this.x, this.y, this.kind);
     this.go.body.enable = false;
     if (this.shadow) {
@@ -291,8 +311,8 @@ export abstract class Enemy {
   }
 
   destroy(): void {
-    this.hpBarBg.destroy();
-    this.hpBar.destroy();
+    this.hpBarBg?.destroy();
+    this.hpBar?.destroy();
     this.shadow?.destroy();
     this.go.destroy();
   }
@@ -508,6 +528,109 @@ export class SmallGuard extends Enemy {
         });
       }
     });
+  }
+}
+
+/** 警卫 Boss：默认 3.5 倍体型、缓慢追击，按循环释放三类远程攻击并在近身时践踏。 */
+export class BossGuard extends Enemy {
+  readonly kind = 'bossGuard';
+  private readonly sprite: Phaser.GameObjects.Sprite;
+  private movementAngle = Math.PI;
+  private attackIndex = 0;
+  private lastAttackBeat = -Infinity;
+  private lastStompBeat = -Infinity;
+
+  constructor(scene: MainScene, x: number, y: number) {
+    const config = scene.getBossCombatConfig();
+    const scale = GUARD_SPRITE_SCALE * config.sizeMultiplier;
+    const sprite = scene.add
+      .sprite(x, y, guardCharacterTextureKey('idle', 1))
+      .setScale(scale);
+    super(
+      scene,
+      sprite,
+      config.maxHp,
+      0xffffff,
+      GUARD_BODY_SOURCE_BOUNDS,
+      {
+        textureKey: 'npc-guard-shadow',
+        scale,
+        scaleMultiplier: 0.55,
+        offsetX: worldSize(17),
+        offsetY: worldSize(110),
+        depthOffset: 0.02
+      },
+      false
+    );
+    this.sprite = sprite;
+    playGuardAnimation(this.sprite, 'idle');
+    scene.onBossSpawned(this);
+  }
+
+  setSizeMultiplier(multiplier: number): void {
+    this.setVisualScale(GUARD_SPRITE_SCALE * multiplier);
+  }
+
+  /** Boss 保持稳定体型，不参与普通敌人的每拍纵向弹跳。 */
+  pulseBeat(_heavy: boolean): void {}
+
+  /** Boss 正常受伤，但忽略玩家武器传入的击退角度与速度。 */
+  takeDamage(amount: number, _knockbackAngle?: number, _knockbackSpeed = 0): void {
+    super.takeDamage(amount);
+  }
+
+  onBeat(info: BeatInfo): void {
+    if (this.dead) return;
+    this.movementAngle = this.angleToPlayer();
+    const config = this.scene.getBossCombatConfig();
+    const interval = Math.max(1, Math.round(config.attackIntervalBeats));
+    if (info.globalBeat - this.lastStompBeat >= Math.max(4, interval)
+      && this.distToPlayer() <= config.stompRadius * 0.82) {
+      this.lastStompBeat = info.globalBeat;
+      this.telegraph();
+      this.scene.time.delayedCall(260, () => {
+        if (!this.dead) this.scene.spawnBossStomp(this.x, this.y);
+      });
+      return;
+    }
+    if (info.globalBeat - this.lastAttackBeat < interval) return;
+    this.lastAttackBeat = info.globalBeat;
+    const angle = this.angleToPlayer();
+    this.setFacingFlip(angle);
+    this.telegraph();
+    if (this.attackIndex === 0) this.scene.spawnBossTripleShot(this.x, this.y, angle);
+    else if (this.attackIndex === 1) this.scene.spawnBossCrescentWave(this.x, this.y, angle);
+    else this.scene.spawnBossNoteFormation();
+    this.attackIndex = (this.attackIndex + 1) % 3;
+  }
+
+  update(dtMs: number): void {
+    super.update(dtMs);
+    if (this.dead) return;
+    const moving = this.go.body.velocity.lengthSq() > 1;
+    playGuardAnimation(this.sprite, moving ? 'run' : 'idle');
+    this.setFacingFlip(this.movementAngle);
+  }
+
+  protected move(_dtMs: number): void {
+    const config = this.scene.getBossCombatConfig();
+    const angle = this.angleToPlayer();
+    this.movementAngle = angle;
+    if (this.distToPlayer() <= config.stompRadius * 0.48) {
+      this.go.body.setVelocity(0, 0);
+      return;
+    }
+    const velocity = this.scene.physics.velocityFromRotation(angle, config.moveSpeed);
+    this.go.body.setVelocity(velocity.x, velocity.y);
+  }
+
+  protected die(): void {
+    this.scene.onBossDefeated(this);
+    super.die();
+  }
+
+  protected onGameOverIdle(): void {
+    playGuardAnimation(this.sprite, 'idle', true);
   }
 }
 

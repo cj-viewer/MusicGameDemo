@@ -32,6 +32,7 @@ const PLAYER_HP_BAR_WIDTH = 128;
 const PLAYER_HP_OFFSET_Y = 80;
 const HUD_FRAME_COLOR = 0xfffdf1;
 const HUD_GLASS_COLOR = 0xf2f0e8;
+const COMBO_METER_PROGRESS_COLOR = 0xf97316;
 const HUD_TEXT_COLOR = '#fffdf1';
 const HUD_MUTED_TEXT_COLOR = '#e3eee8';
 const HUD_FONT = '"Arial Narrow", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif';
@@ -89,6 +90,9 @@ export class HUD {
   private screenLayer: Phaser.GameObjects.Container;
   private formalStatusLayer: Phaser.GameObjects.Container;
   private playerHpLayer: Phaser.GameObjects.Container;
+  private bossHealthLayer: Phaser.GameObjects.Container;
+  private bossHealthFill: Phaser.GameObjects.Rectangle;
+  private bossHealthValue: Phaser.GameObjects.Text;
 
   constructor(scene: Phaser.Scene, conductor: Conductor) {
     this.scene = scene;
@@ -175,9 +179,10 @@ export class HUD {
       .setFillStyle(0, 0)
       .setDepth(10);
     this.meterText = scene.add
-      .text(METER_X, METER_Y, '0', {
+      .text(METER_X, METER_Y, '0%', {
         fontFamily: HUD_FONT,
-        fontSize: '20px',
+        fontSize: '11px',
+        fontStyle: 'bold',
         color: HUD_TEXT_COLOR,
         resolution: 2
       })
@@ -293,6 +298,32 @@ export class HUD {
       this.stateText,
       this.messageText
     ]);
+
+    const bossBarWidth = 760;
+    const bossBarY = 610;
+    const bossBackdrop = scene.add
+      .rectangle(640, bossBarY, bossBarWidth + 12, 24, 0x09090b, 0.9)
+      .setStrokeStyle(1, 0xd6d3d1, 0.7);
+    this.bossHealthFill = scene.add
+      .rectangle(640 - bossBarWidth / 2, bossBarY, bossBarWidth, 14, 0x991b1b, 1)
+      .setOrigin(0, 0.5);
+    const bossName = scene.add.text(640 - bossBarWidth / 2, bossBarY - 26, '警卫长', {
+      fontFamily: HUD_FONT,
+      fontSize: '18px',
+      fontStyle: 'bold',
+      color: '#fff7ed',
+      resolution: 2
+    }).setOrigin(0, 0.5);
+    this.bossHealthValue = scene.add.text(640 + bossBarWidth / 2, bossBarY - 26, '', {
+      fontFamily: HUD_FONT,
+      fontSize: '13px',
+      color: '#fecaca',
+      resolution: 2
+    }).setOrigin(1, 0.5);
+    this.bossHealthLayer = scene.add
+      .container(0, 0, [bossBackdrop, this.bossHealthFill, bossName, this.bossHealthValue])
+      .setVisible(false);
+    this.screenLayer.add(this.bossHealthLayer);
 
     this.playerHpLayer = scene.add
       .container(0, 0, [playerHpChrome, this.hpLabel, this.hpBarBg, this.hpBar, this.hpText])
@@ -680,12 +711,12 @@ export class HUD {
     this.meterGfx.lineStyle(2, HUD_FRAME_COLOR, 0.28);
     this.meterGfx.strokeCircle(METER_X, METER_Y, METER_RADIUS);
     if (ratio > 0) {
-      this.meterGfx.lineStyle(4, 0xffd68a, 0.95);
+      this.meterGfx.lineStyle(4, COMBO_METER_PROGRESS_COLOR, 0.95);
       this.meterGfx.beginPath();
       this.meterGfx.arc(METER_X, METER_Y, METER_RADIUS, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio, false);
       this.meterGfx.strokePath();
     }
-    this.meterText.setText('F');
+    this.meterText.setText(`${Math.round(Phaser.Math.Clamp(ratio, 0, 1) * 100)}%`);
   }
 
   setCombo(progress: number, level: number): void {
@@ -695,12 +726,12 @@ export class HUD {
     this.meterGfx.strokeCircle(METER_X, METER_Y, METER_RADIUS);
     const toNext = level >= 5 ? 1 : (progress - level * 20) / 20;
     if (toNext > 0) {
-      this.meterGfx.lineStyle(3, level >= 5 ? 0xffd68a : 0xd8f3ed, 0.95);
+      this.meterGfx.lineStyle(3, COMBO_METER_PROGRESS_COLOR, 0.95);
       this.meterGfx.beginPath();
       this.meterGfx.arc(METER_X, METER_Y, METER_RADIUS, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * toNext, false);
       this.meterGfx.strokePath();
     }
-    this.meterText.setText(level > 0 ? `${level}` : '');
+    this.meterText.setText(`${Math.round(Phaser.Math.Clamp(progress, 0, 100))}%`);
   }
 
   pulseCombo(): void {
@@ -728,6 +759,16 @@ export class HUD {
 
   setWave(text: string): void {
     this.waveText.setText(text);
+  }
+
+  setBossHealth(hp: number, maxHp: number): void {
+    const safeMax = Math.max(1, maxHp);
+    this.bossHealthFill.scaleX = Phaser.Math.Clamp(hp / safeMax, 0, 1);
+    this.bossHealthValue.setText(`${Math.ceil(Math.max(0, hp))} / ${Math.ceil(safeMax)}`);
+  }
+
+  setBossHealthVisible(visible: boolean): void {
+    this.bossHealthLayer.setVisible(visible);
   }
 
   /** 胜利后让场景底层标记继续跟拍呼吸，但不改变其底层 depth。 */

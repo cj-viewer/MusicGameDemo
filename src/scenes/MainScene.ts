@@ -10,7 +10,7 @@ import { HUD } from '../game/HUD';
 import { Player } from '../game/Player';
 import { registerPlayerAnimations } from '../game/playerAnimation';
 import { BATON, GLOWSTICKS, getAttackSpec, type WeaponDef, type WeaponId } from '../game/weapons';
-import { Enemy, FanEnemy, SmallGuard, TutorialCharacter, type EnemyKind } from '../game/enemies';
+import { BossGuard, Enemy, FanEnemy, SmallGuard, TutorialCharacter, type EnemyKind } from '../game/enemies';
 import { registerFanAnimations } from '../game/fanAnimation';
 import { registerGuardAnimations } from '../game/guardAnimation';
 import { registerTutorialCharacterAnimations } from '../game/tutorialCharacterAnimation';
@@ -124,6 +124,12 @@ const PLAYER_PROJECTILE_TEXTURE = 'fx-projectile-player-composite';
 const PLAYER_PROJECTILE_ON_BEAT_TEXTURE = 'fx-projectile-player-composite-on-beat';
 const GUARD_PROJECTILE_TEXTURE = 'fx-projectile-guard-composite';
 const FAN_PROJECTILE_TEXTURE = 'fx-projectile-fan-composite';
+const BOSS_TRIPLE_PROJECTILE_TEXTURE = 'fx-projectile-boss-triple-composite';
+const BOSS_NOTE_PROJECTILE_TEXTURE = 'fx-projectile-boss-note-composite';
+const BOSS_TRIPLE_BULLET_COLOR = 0x3b82f6;
+const BOSS_NOTE_BULLET_COLOR = 0x22c55e;
+const BOSS_CRESCENT_COLOR = 0xa855f7;
+type BossProjectileStyle = 'triple' | 'note';
 /** 透明宿主沿用既有尺寸；主画面可见胶囊缩短 20%，判定段与外部纹理包围不变。 */
 const PLAYER_LINE_CORE_LENGTH_SCALE = 1.35;
 const PLAYER_LINE_VISIBLE_LENGTH_SCALE = PLAYER_LINE_CORE_LENGTH_SCALE * 0.8;
@@ -194,8 +200,9 @@ type GameState = 'title' | 'tutorial' | 'tutorialConfirm' | 'playing' | 'intermi
 const TUTORIAL_TARGET_STREAK = 3;
 type AudioChannel = 'master' | 'bgm' | 'rhythm' | SfxCategory;
 type VolumeControlChannel = AudioChannel | 'enemyDeath';
-type CombatSettingsPage = 'speed' | 'playerDamage' | 'enemy' | 'mode';
+type CombatSettingsPage = 'speed' | 'playerDamage' | 'comboMeter' | 'enemy' | 'boss' | 'mode';
 type CombatSettingKey =
+  | 'playerMoveSpeed'
   | 'glowstickBulletSpeed'
   | 'glowstickLightAttackSpeed'
   | 'glowstickHeavyAttackSpeed'
@@ -206,6 +213,8 @@ type CombatSettingKey =
   | 'smallGuardAttackFrequency'
   | 'fanBulletSpeed'
   | 'fanAttackFrequency'
+  | 'enemyStraightBulletSpeedMultiplier'
+  | 'enemyBulletSizeMultiplier'
   | 'glowstickHeavyChargeDelayMs'
   | 'glowstickHeavyLaserThickness'
   | 'batonHeavyCrescentRange'
@@ -221,10 +230,29 @@ type CombatSettingKey =
   | 'batonPerfectDamageMultiplier'
   | 'batonGoodDamageMultiplier'
   | 'batonPoorDamageMultiplier'
+  | 'comboPerfectReward'
+  | 'comboGoodReward'
+  | 'comboPatternCompleteReward'
   | 'smallGuardDamage'
   | 'fanDamage'
   | 'glowstickDropChance'
-  | 'batonDropChance';
+  | 'batonDropChance'
+  | 'waveSpawnMinBatchSize'
+  | 'waveSpawnMaxBatchSize'
+  | 'waveSpawnMinIntervalSeconds'
+  | 'waveSpawnMaxIntervalSeconds'
+  | 'bossMaxHp'
+  | 'bossSizeMultiplier'
+  | 'bossMoveSpeed'
+  | 'bossAttackIntervalBeats'
+  | 'bossProjectileDamage'
+  | 'bossProjectileSpeed'
+  | 'bossCrescentSpeed'
+  | 'bossStompRadius'
+  | 'bossStompKnockback'
+  | 'bossNoteFormationSpeed'
+  | 'bossNoteFormationBulletSize'
+  | 'bossMinionCount';
 
 interface VolumeSliderVisual {
   fill: Phaser.GameObjects.Rectangle;
@@ -234,6 +262,7 @@ interface VolumeSliderVisual {
 }
 
 const WAVE_ENEMY_COUNTS = [2, 6, 12, 18, 24];
+const BOSS_WAVE_INDEX = WAVE_ENEMY_COUNTS.length;
 
 interface Pickup {
   go: Phaser.GameObjects.Container;
@@ -243,6 +272,8 @@ interface Pickup {
   baseY: number;
   weapon: WeaponDef;
 }
+
+type WaveEnemyFactory = () => Enemy;
 
 export class MainScene extends Phaser.Scene {
   conductor!: Conductor;
@@ -278,6 +309,8 @@ export class MainScene extends Phaser.Scene {
   private combatTabButtons: Partial<Record<CombatSettingsPage, Phaser.GameObjects.Rectangle>> = {};
   private heavyModeToggleButtons: Partial<Record<WeaponId, Phaser.GameObjects.Rectangle>> = {};
   private heavyModeToggleTexts: Partial<Record<WeaponId, Phaser.GameObjects.Text>> = {};
+  private manualAimToggleButton!: Phaser.GameObjects.Rectangle;
+  private manualAimToggleText!: Phaser.GameObjects.Text;
   private volumePanelVisible = false;
   private volumeDragging: VolumeControlChannel | null = null;
   private fpvWindowEnabled = true;
@@ -318,6 +351,9 @@ export class MainScene extends Phaser.Scene {
   private state: GameState = 'title';
   private waveIdx = -1;
   private displayedWaveNumber = 0;
+  private pendingWaveSpawns: WaveEnemyFactory[] = [];
+  private waveSpawnTimer?: Phaser.Time.TimerEvent;
+  private waveAdvanceTimer?: Phaser.Time.TimerEvent;
   private victoryAchieved = false;
   private lastComboLevel = 0;
   /** 首拍命中后，为后续 2 / 3 / 4 拍显示旧版小节缩放判定框。 */
@@ -436,6 +472,9 @@ export class MainScene extends Phaser.Scene {
     this.volumeDragging = null;
     this.waveIdx = -1;
     this.displayedWaveNumber = 0;
+    this.pendingWaveSpawns = [];
+    this.waveSpawnTimer = undefined;
+    this.waveAdvanceTimer = undefined;
     this.victoryAchieved = false;
     this.lastComboLevel = 0;
     this.arenaRhythmIntensity = 0;
@@ -527,6 +566,8 @@ export class MainScene extends Phaser.Scene {
     this.tuningEditor.enemyBulletSpeed = DEFAULT_ENEMY_BULLET_SPEED;
     this.tuningEditor.tutorialBgmSlot = DEFAULT_TUTORIAL_BGM_SLOT;
     this.tuningEditor.levelBgmSlot = DEFAULT_LEVEL_BGM_SLOT;
+    this.tuningEditor.loadPersistedConfig();
+    this.syncComboEnergyRewards();
     this.createSettingsPanel();
 
     this.enemyGroup = this.physics.add.group();
@@ -593,6 +634,7 @@ export class MainScene extends Phaser.Scene {
     for (const character of this.tutorialCharacters) character.update(delta);
     this.updateEnemyBulletBeatSurge(delta);
     this.updateStraightBulletHitboxes();
+    this.updateSpecialEnemyProjectiles();
     this.updateBulletTrails(delta);
     this.cleanupBullets();
     this.checkPickups();
@@ -606,6 +648,14 @@ export class MainScene extends Phaser.Scene {
   /** 供右上角观察窗读取的只读状态；它不拥有任何主玩法状态。 */
   get isGamePaused(): boolean {
     return this.gamePaused;
+  }
+
+  getPlayerMoveSpeed(): number {
+    return this.tuningEditor?.playerMoveSpeed ?? 260;
+  }
+
+  isManualAimEnabled(): boolean {
+    return this.tuningEditor?.manualAimEnabled ?? false;
   }
 
   get isTitleScreen(): boolean {
@@ -626,6 +676,49 @@ export class MainScene extends Phaser.Scene {
 
   get fpvPlayerBullets(): readonly Phaser.GameObjects.GameObject[] {
     return this.playerBullets?.getChildren() ?? [];
+  }
+
+  getBossCombatConfig(): {
+    maxHp: number;
+    sizeMultiplier: number;
+    moveSpeed: number;
+    attackIntervalBeats: number;
+    projectileDamage: number;
+    projectileSpeed: number;
+    crescentSpeed: number;
+    stompRadius: number;
+    stompKnockback: number;
+    noteFormationSpeed: number;
+    noteFormationBulletSize: number;
+    minionCount: number;
+  } {
+    return {
+      maxHp: this.tuningEditor.bossMaxHp,
+      sizeMultiplier: this.tuningEditor.bossSizeMultiplier,
+      moveSpeed: this.tuningEditor.bossMoveSpeed,
+      attackIntervalBeats: this.tuningEditor.bossAttackIntervalBeats,
+      projectileDamage: this.tuningEditor.bossProjectileDamage,
+      projectileSpeed: this.tuningEditor.bossProjectileSpeed,
+      crescentSpeed: this.tuningEditor.bossCrescentSpeed,
+      stompRadius: this.tuningEditor.bossStompRadius,
+      stompKnockback: this.tuningEditor.bossStompKnockback,
+      noteFormationSpeed: this.tuningEditor.bossNoteFormationSpeed,
+      noteFormationBulletSize: this.tuningEditor.bossNoteFormationBulletSize,
+      minionCount: this.tuningEditor.bossMinionCount
+    };
+  }
+
+  onBossSpawned(boss: BossGuard): void {
+    this.hud.setBossHealth(boss.hp, boss.maxHp);
+    this.hud.setBossHealthVisible(true);
+  }
+
+  onBossHealthChanged(hp: number, maxHp: number): void {
+    this.hud.setBossHealth(hp, maxHp);
+  }
+
+  onBossDefeated(_boss: BossGuard): void {
+    this.hud.setBossHealthVisible(false);
   }
 
   // ---------- 输入 ----------
@@ -717,6 +810,7 @@ export class MainScene extends Phaser.Scene {
         this.refreshComboHUD();
       }
     });
+
   }
 
   private restartGame(): void {
@@ -727,6 +821,11 @@ export class MainScene extends Phaser.Scene {
   }
 
   private cleanupForRestart(): void {
+    this.waveSpawnTimer?.remove();
+    this.waveAdvanceTimer?.remove();
+    this.pendingWaveSpawns = [];
+    this.waveSpawnTimer = undefined;
+    this.waveAdvanceTimer = undefined;
     this.destroyTutorialControlGuide();
     this.volumePanelCaptureToken++;
     this.volumePanelFrostImage?.setVisible(false);
@@ -784,6 +883,7 @@ export class MainScene extends Phaser.Scene {
 
   private handleAttackInput(btn: 'L' | 'H', pad?: Phaser.Input.Gamepad.Gamepad): boolean {
     if (this.gamePaused) return false;
+    this.player.refreshAimDirection();
     if (this.state === 'tutorial') this.recordTutorialCalibrationCandidate(btn);
     const result = this.combo.handleInput(btn, this.conductor.now());
     const attackPerformed = result.type === 'correct' || result.type === 'wrong';
@@ -1265,14 +1365,18 @@ export class MainScene extends Phaser.Scene {
       this.combatTabButtons[page] = rect;
       debugObjects.push(rect, text);
     };
-    addCombatTab('speed', 720, '速度 / 频率');
-    addCombatTab('playerDamage', 850, '玩家伤害');
+    addCombatTab('speed', 650, '速度 / 频率');
+    addCombatTab('playerDamage', 760, '玩家伤害');
+    addCombatTab('comboMeter', 870, '量表 / Fever');
     addCombatTab('enemy', 980, '敌人 / 掉落');
-    addCombatTab('mode', 1110, '模式 / 导出');
+    addCombatTab('boss', 1090, 'Boss');
+    addCombatTab('mode', 1200, '模式 / 导出');
 
     const speedPageObjects: Phaser.GameObjects.GameObject[] = [];
     const playerDamagePageObjects: Phaser.GameObjects.GameObject[] = [];
+    const comboMeterPageObjects: Phaser.GameObjects.GameObject[] = [];
     const enemyPageObjects: Phaser.GameObjects.GameObject[] = [];
+    const bossPageObjects: Phaser.GameObjects.GameObject[] = [];
     const modePageObjects: Phaser.GameObjects.GameObject[] = [];
     const addStepButton = (
       target: Phaser.GameObjects.GameObject[],
@@ -1312,16 +1416,17 @@ export class MainScene extends Phaser.Scene {
       addStepButton(target, 1100, y, '+', () => this.adjustCombatSetting(key, step));
     };
 
-    addCombatRow(speedPageObjects, 'glowstickBulletSpeed', 145, '荧光棒弹速', 20);
-    addCombatRow(speedPageObjects, 'glowstickLightAttackSpeed', 190, '荧光棒轻击速度', 0.1);
-    addCombatRow(speedPageObjects, 'glowstickHeavyAttackSpeed', 235, '荧光棒重击速度', 0.1);
-    addCombatRow(speedPageObjects, 'batonSweepSpeed', 280, '警棍弧弹飞行速度', 0.1);
-    addCombatRow(speedPageObjects, 'batonLightAttackSpeed', 325, '警棍轻击速度', 0.1);
-    addCombatRow(speedPageObjects, 'batonHeavyAttackSpeed', 370, '警棍重击速度', 0.1);
-    addCombatRow(speedPageObjects, 'smallGuardBulletSpeed', 415, '保安弹速', 20);
-    addCombatRow(speedPageObjects, 'smallGuardAttackFrequency', 460, '保安攻击频率', 0.25);
-    addCombatRow(speedPageObjects, 'fanBulletSpeed', 505, '粉丝弹速', 20);
-    addCombatRow(speedPageObjects, 'fanAttackFrequency', 550, '粉丝攻击频率', 0.25);
+    addCombatRow(speedPageObjects, 'playerMoveSpeed', 145, '玩家移动速度', 20);
+    addCombatRow(speedPageObjects, 'glowstickBulletSpeed', 190, '荧光棒弹速', 20);
+    addCombatRow(speedPageObjects, 'glowstickLightAttackSpeed', 235, '荧光棒轻击速度', 0.1);
+    addCombatRow(speedPageObjects, 'glowstickHeavyAttackSpeed', 280, '荧光棒重击速度', 0.1);
+    addCombatRow(speedPageObjects, 'batonSweepSpeed', 325, '警棍弧弹飞行速度', 0.1);
+    addCombatRow(speedPageObjects, 'batonLightAttackSpeed', 370, '警棍轻击速度', 0.1);
+    addCombatRow(speedPageObjects, 'batonHeavyAttackSpeed', 415, '警棍重击速度', 0.1);
+    addCombatRow(speedPageObjects, 'smallGuardBulletSpeed', 460, '保安弹速', 20);
+    addCombatRow(speedPageObjects, 'smallGuardAttackFrequency', 505, '保安攻击频率', 0.05);
+    addCombatRow(speedPageObjects, 'fanBulletSpeed', 550, '粉丝弹速', 20);
+    addCombatRow(speedPageObjects, 'fanAttackFrequency', 595, '粉丝攻击频率', 0.05);
 
     const playerDamageRows: Array<[CombatSettingKey, string, number]> = [
       ['glowstickLightDamage', '荧光棒轻击基础伤害', 1],
@@ -1339,14 +1444,50 @@ export class MainScene extends Phaser.Scene {
       addCombatRow(playerDamagePageObjects, key, 158 + index * 44, label, step);
     });
 
+    const comboMeterRows: Array<[CombatSettingKey, string, number]> = [
+      ['comboPerfectReward', 'PERFECT 单拍量表', 1],
+      ['comboGoodReward', 'GOOD 单拍量表', 1],
+      ['comboPatternCompleteReward', '完整四段 Pattern 奖励', 1]
+    ];
+    comboMeterRows.forEach(([key, label, step], index) => {
+      addCombatRow(comboMeterPageObjects, key, 180 + index * 65, label, step);
+    });
+    comboMeterPageObjects.push(this.add.text(690, 390, '任一步错拍、错键或漏拍，都不会获得完整 Pattern 奖励。', {
+      fontFamily: 'Arial', fontSize: '14px', color: '#94a3b8'
+    }).setOrigin(0, 0.5));
+
     const enemyRows: Array<[CombatSettingKey, string, number]> = [
+      ['enemyStraightBulletSpeedMultiplier', '敌人直射弹速倍率', 0.05],
+      ['enemyBulletSizeMultiplier', '敌弹视觉 / 碰撞尺寸', 0.05],
       ['smallGuardDamage', '保安弹幕伤害', 1],
       ['fanDamage', '粉丝弹幕伤害', 1],
       ['glowstickDropChance', '荧光棒掉落概率', 0.05],
-      ['batonDropChance', '警棍掉落概率', 0.05]
+      ['batonDropChance', '警棍掉落概率', 0.05],
+      ['waveSpawnMinBatchSize', '每批最少敌人数', 1],
+      ['waveSpawnMaxBatchSize', '每批最多敌人数', 1],
+      ['waveSpawnMinIntervalSeconds', '批次最短间隔', 0.5],
+      ['waveSpawnMaxIntervalSeconds', '批次最长间隔', 0.5]
     ];
     enemyRows.forEach(([key, label, step], index) => {
-      addCombatRow(enemyPageObjects, key, 180 + index * 65, label, step);
+      addCombatRow(enemyPageObjects, key, 150 + index * 47, label, step);
+    });
+
+    const bossRows: Array<[CombatSettingKey, string, number]> = [
+      ['bossMaxHp', '最大生命', 100],
+      ['bossSizeMultiplier', '体型倍率', 0.25],
+      ['bossMoveSpeed', '移动速度', 5],
+      ['bossAttackIntervalBeats', '攻击间隔（拍）', 1],
+      ['bossProjectileDamage', '攻击伤害', 1],
+      ['bossProjectileSpeed', '大弹丸速度', 10],
+      ['bossCrescentSpeed', '半月波速度', 5],
+      ['bossStompRadius', '践踏半径', 10],
+      ['bossStompKnockback', '践踏击退', 20],
+      ['bossNoteFormationSpeed', '音符阵列速度', 5],
+      ['bossNoteFormationBulletSize', '音符子弹大小', 0.1],
+      ['bossMinionCount', '随行小弟数量', 1]
+    ];
+    bossRows.forEach(([key, label, step], index) => {
+      addCombatRow(bossPageObjects, key, 155 + index * 40, label, step);
     });
 
     const addHeavyModeToggle = (weaponId: WeaponId, y: number, label: string): void => {
@@ -1372,37 +1513,70 @@ export class MainScene extends Phaser.Scene {
       this.heavyModeToggleTexts[weaponId] = text;
       modePageObjects.push(button, text);
     };
-    addHeavyModeToggle('glowsticks', 155, '荧光棒重击：贯屏激光');
-    addHeavyModeToggle('baton', 200, '警棍重击：击退月牙波');
-    addCombatRow(modePageObjects, 'glowstickHeavyChargeDelayMs', 250, '荧光棒重击充能延迟', 50);
-    addCombatRow(modePageObjects, 'glowstickHeavyLaserThickness', 295, '荧光棒激光粗细', 4);
-    addCombatRow(modePageObjects, 'batonHeavyCrescentRange', 340, '警棍重击最远距离', 40);
-    addCombatRow(modePageObjects, 'batonLightSweepAngle', 385, '警棍轻击范围角度', 10);
-    addCombatRow(modePageObjects, 'batonLightSweepRange', 430, '警棍轻击距离范围', 10);
+    modePageObjects.push(this.add.text(690, 155, '玩家瞄准模式', {
+      fontFamily: 'Arial', fontSize: '16px', color: '#cbd5e1'
+    }).setOrigin(0, 0.5));
+    this.manualAimToggleButton = this.add.rectangle(1040, 155, 150, 36, 0x334155)
+      .setStrokeStyle(1, 0x94a3b8)
+      .setInteractive({ useHandCursor: true });
+    this.manualAimToggleText = this.add.text(1040, 155, '', {
+      fontFamily: 'Arial', fontSize: '15px', fontStyle: 'bold', color: '#ffffff'
+    }).setOrigin(0.5);
+    this.manualAimToggleButton.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      pointer.event.stopPropagation();
+      this.tuningEditor.manualAimEnabled = !this.tuningEditor.manualAimEnabled;
+      this.player.refreshAimDirection();
+      this.refreshCombatControls();
+    });
+    modePageObjects.push(this.manualAimToggleButton, this.manualAimToggleText);
+    addHeavyModeToggle('glowsticks', 200, '荧光棒重击：贯屏激光');
+    addHeavyModeToggle('baton', 245, '警棍重击：击退月牙波');
+    addCombatRow(modePageObjects, 'glowstickHeavyChargeDelayMs', 295, '荧光棒重击充能延迟', 50);
+    addCombatRow(modePageObjects, 'glowstickHeavyLaserThickness', 340, '荧光棒激光粗细', 4);
+    addCombatRow(modePageObjects, 'batonHeavyCrescentRange', 385, '警棍重击最远距离', 40);
+    addCombatRow(modePageObjects, 'batonLightSweepAngle', 430, '警棍轻击范围角度', 10);
+    addCombatRow(modePageObjects, 'batonLightSweepRange', 475, '警棍轻击距离范围', 10);
 
-    const exportButton = this.add.rectangle(900, 500, 310, 40, 0x0f766e)
+    const saveButton = this.add.rectangle(810, 535, 220, 40, 0x92400e)
+      .setStrokeStyle(2, 0xfbbf24, 0.95)
+      .setInteractive({ useHandCursor: true });
+    const saveText = this.add.text(810, 535, '保存当前配置', {
+      fontFamily: 'Arial', fontSize: '17px', fontStyle: 'bold', color: '#fff7ed'
+    }).setOrigin(0.5);
+    const exportButton = this.add.rectangle(1060, 535, 220, 40, 0x0f766e)
       .setStrokeStyle(2, 0x67e8f9, 0.95)
       .setInteractive({ useHandCursor: true });
-    const exportText = this.add.text(900, 500, '导出当前战斗参数 TXT', {
+    const exportText = this.add.text(1060, 535, '导出参数 TXT', {
       fontFamily: 'Arial', fontSize: '17px', fontStyle: 'bold', color: '#ecfeff'
     }).setOrigin(0.5);
-    const exportHint = this.add.text(690, 538, '包含玩家、武器、敌人、掉落及本页模式参数', {
+    const persistenceHint = this.add.text(690, 573, '保存会写入本浏览器并在刷新后自动恢复；导出仍生成 TXT 文件。', {
       fontFamily: 'Arial', fontSize: '14px', color: '#94a3b8'
     }).setOrigin(0, 0.5);
+    saveButton.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
+      pointer.event.stopPropagation();
+      const saved = this.tuningEditor.savePersistedConfig();
+      persistenceHint
+        .setColor(saved ? '#86efac' : '#fca5a5')
+        .setText(saved ? '配置已保存；刷新或下次打开游戏时会自动恢复。' : '保存失败：浏览器未允许本机存储。');
+    });
     exportButton.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       pointer.event.stopPropagation();
       this.tuningEditor.downloadCombatConfigTxt();
     });
-    modePageObjects.push(exportButton, exportText, exportHint);
+    modePageObjects.push(saveButton, saveText, exportButton, exportText, persistenceHint);
 
     this.combatPageContainers.speed = this.add.container(0, 0, speedPageObjects);
     this.combatPageContainers.playerDamage = this.add.container(0, 0, playerDamagePageObjects);
+    this.combatPageContainers.comboMeter = this.add.container(0, 0, comboMeterPageObjects);
     this.combatPageContainers.enemy = this.add.container(0, 0, enemyPageObjects);
+    this.combatPageContainers.boss = this.add.container(0, 0, bossPageObjects);
     this.combatPageContainers.mode = this.add.container(0, 0, modePageObjects);
     debugObjects.push(
       this.combatPageContainers.speed,
       this.combatPageContainers.playerDamage,
+      this.combatPageContainers.comboMeter,
       this.combatPageContainers.enemy,
+      this.combatPageContainers.boss,
       this.combatPageContainers.mode
     );
 
@@ -1453,7 +1627,7 @@ export class MainScene extends Phaser.Scene {
 
   private setCombatSettingsPage(page: CombatSettingsPage): void {
     this.combatSettingsPage = page;
-    for (const candidate of ['speed', 'playerDamage', 'enemy', 'mode'] as const) {
+    for (const candidate of ['speed', 'playerDamage', 'comboMeter', 'enemy', 'boss', 'mode'] as const) {
       const active = candidate === page;
       const pageContainer = this.combatPageContainers[candidate];
       pageContainer?.setVisible(active).setActive(active);
@@ -1663,6 +1837,13 @@ export class MainScene extends Phaser.Scene {
 
   private adjustCombatSetting(key: CombatSettingKey, delta: number): void {
     switch (key) {
+      case 'playerMoveSpeed':
+        this.tuningEditor.playerMoveSpeed = Phaser.Math.Clamp(
+          this.tuningEditor.playerMoveSpeed + delta,
+          80,
+          600
+        );
+        break;
       case 'glowstickBulletSpeed':
         this.tuningEditor.glowstickBulletSpeed = Phaser.Math.Clamp(
           this.tuningEditor.glowstickBulletSpeed + delta,
@@ -1683,7 +1864,57 @@ export class MainScene extends Phaser.Scene {
         break;
       case 'smallGuardAttackFrequency':
       case 'fanAttackFrequency':
-        this.tuningEditor[key] = Phaser.Math.Clamp(this.tuningEditor[key] + delta, 0.25, 8);
+        this.tuningEditor[key] = Phaser.Math.Clamp(this.tuningEditor[key] + delta, 0.05, 8);
+        break;
+      case 'enemyStraightBulletSpeedMultiplier':
+        this.tuningEditor.enemyStraightBulletSpeedMultiplier = Phaser.Math.Clamp(
+          this.tuningEditor.enemyStraightBulletSpeedMultiplier + delta,
+          1,
+          3
+        );
+        break;
+      case 'enemyBulletSizeMultiplier':
+        this.tuningEditor.enemyBulletSizeMultiplier = Phaser.Math.Clamp(
+          this.tuningEditor.enemyBulletSizeMultiplier + delta,
+          0.5,
+          3
+        );
+        break;
+      case 'waveSpawnMinBatchSize':
+        this.tuningEditor.waveSpawnMinBatchSize = Phaser.Math.Clamp(
+          Math.round(this.tuningEditor.waveSpawnMinBatchSize + delta), 1, 20
+        );
+        this.tuningEditor.waveSpawnMaxBatchSize = Math.max(
+          this.tuningEditor.waveSpawnMaxBatchSize,
+          this.tuningEditor.waveSpawnMinBatchSize
+        );
+        break;
+      case 'waveSpawnMaxBatchSize':
+        this.tuningEditor.waveSpawnMaxBatchSize = Phaser.Math.Clamp(
+          Math.round(this.tuningEditor.waveSpawnMaxBatchSize + delta), 1, 20
+        );
+        this.tuningEditor.waveSpawnMinBatchSize = Math.min(
+          this.tuningEditor.waveSpawnMinBatchSize,
+          this.tuningEditor.waveSpawnMaxBatchSize
+        );
+        break;
+      case 'waveSpawnMinIntervalSeconds':
+        this.tuningEditor.waveSpawnMinIntervalSeconds = Phaser.Math.Clamp(
+          Math.round((this.tuningEditor.waveSpawnMinIntervalSeconds + delta) * 2) / 2, 0.5, 30
+        );
+        this.tuningEditor.waveSpawnMaxIntervalSeconds = Math.max(
+          this.tuningEditor.waveSpawnMaxIntervalSeconds,
+          this.tuningEditor.waveSpawnMinIntervalSeconds
+        );
+        break;
+      case 'waveSpawnMaxIntervalSeconds':
+        this.tuningEditor.waveSpawnMaxIntervalSeconds = Phaser.Math.Clamp(
+          Math.round((this.tuningEditor.waveSpawnMaxIntervalSeconds + delta) * 2) / 2, 0.5, 30
+        );
+        this.tuningEditor.waveSpawnMinIntervalSeconds = Math.min(
+          this.tuningEditor.waveSpawnMinIntervalSeconds,
+          this.tuningEditor.waveSpawnMaxIntervalSeconds
+        );
         break;
       case 'glowstickHeavyChargeDelayMs':
         this.tuningEditor.glowstickHeavyChargeDelayMs = Phaser.Math.Clamp(
@@ -1790,6 +2021,12 @@ export class MainScene extends Phaser.Scene {
           3
         );
         break;
+      case 'comboPerfectReward':
+      case 'comboGoodReward':
+      case 'comboPatternCompleteReward':
+        this.tuningEditor[key] = Phaser.Math.Clamp(this.tuningEditor[key] + delta, 0, 100);
+        this.syncComboEnergyRewards();
+        break;
       case 'smallGuardDamage':
         this.tuningEditor.enemyProjectileDamage.smallGuard = Phaser.Math.Clamp(
           this.tuningEditor.enemyProjectileDamage.smallGuard + delta,
@@ -1820,6 +2057,52 @@ export class MainScene extends Phaser.Scene {
           1
         );
         break;
+      case 'bossMaxHp':
+        this.tuningEditor.bossMaxHp = Phaser.Math.Clamp(this.tuningEditor.bossMaxHp + delta, 100, 10000);
+        this.syncActiveBossMaxHp();
+        break;
+      case 'bossSizeMultiplier':
+        this.tuningEditor.bossSizeMultiplier = Phaser.Math.Clamp(
+          this.tuningEditor.bossSizeMultiplier + delta, 2, 6
+        );
+        this.syncActiveBossSize();
+        break;
+      case 'bossMoveSpeed':
+        this.tuningEditor.bossMoveSpeed = Phaser.Math.Clamp(this.tuningEditor.bossMoveSpeed + delta, 0, 160);
+        break;
+      case 'bossAttackIntervalBeats':
+        this.tuningEditor.bossAttackIntervalBeats = Phaser.Math.Clamp(
+          Math.round(this.tuningEditor.bossAttackIntervalBeats + delta), 1, 16
+        );
+        break;
+      case 'bossProjectileDamage':
+        this.tuningEditor.bossProjectileDamage = Phaser.Math.Clamp(this.tuningEditor.bossProjectileDamage + delta, 0, 100);
+        break;
+      case 'bossProjectileSpeed':
+        this.tuningEditor.bossProjectileSpeed = Phaser.Math.Clamp(this.tuningEditor.bossProjectileSpeed + delta, 40, 800);
+        break;
+      case 'bossCrescentSpeed':
+        this.tuningEditor.bossCrescentSpeed = Phaser.Math.Clamp(this.tuningEditor.bossCrescentSpeed + delta, 20, 400);
+        break;
+      case 'bossStompRadius':
+        this.tuningEditor.bossStompRadius = Phaser.Math.Clamp(this.tuningEditor.bossStompRadius + delta, 80, 600);
+        break;
+      case 'bossStompKnockback':
+        this.tuningEditor.bossStompKnockback = Phaser.Math.Clamp(this.tuningEditor.bossStompKnockback + delta, 0, 1200);
+        break;
+      case 'bossNoteFormationSpeed':
+        this.tuningEditor.bossNoteFormationSpeed = Phaser.Math.Clamp(this.tuningEditor.bossNoteFormationSpeed + delta, 20, 300);
+        break;
+      case 'bossNoteFormationBulletSize':
+        this.tuningEditor.bossNoteFormationBulletSize = Phaser.Math.Clamp(
+          this.tuningEditor.bossNoteFormationBulletSize + delta, 0.5, 2
+        );
+        break;
+      case 'bossMinionCount':
+        this.tuningEditor.bossMinionCount = Phaser.Math.Clamp(
+          Math.round(this.tuningEditor.bossMinionCount + delta), 0, 20
+        );
+        break;
     }
     this.refreshCombatControls();
   }
@@ -1827,6 +2110,7 @@ export class MainScene extends Phaser.Scene {
   private refreshCombatControls(): void {
     const percent = (value: number): string => `${Math.round(value * 100)}%`;
     const values: Record<CombatSettingKey, string> = {
+      playerMoveSpeed: `${Math.round(this.tuningEditor.playerMoveSpeed)} px/s`,
       glowstickBulletSpeed: `${Math.round(this.tuningEditor.glowstickBulletSpeed)} px/s`,
       glowstickLightAttackSpeed: percent(this.tuningEditor.glowstickLightAttackSpeed),
       glowstickHeavyAttackSpeed: percent(this.tuningEditor.glowstickHeavyAttackSpeed),
@@ -1837,6 +2121,8 @@ export class MainScene extends Phaser.Scene {
       smallGuardAttackFrequency: `${this.tuningEditor.smallGuardAttackFrequency.toFixed(2)} 次/拍`,
       fanBulletSpeed: `${Math.round(this.tuningEditor.fanBulletSpeed)} px/s`,
       fanAttackFrequency: `${this.tuningEditor.fanAttackFrequency.toFixed(2)} 次/拍`,
+      enemyStraightBulletSpeedMultiplier: percent(this.tuningEditor.enemyStraightBulletSpeedMultiplier),
+      enemyBulletSizeMultiplier: percent(this.tuningEditor.enemyBulletSizeMultiplier),
       glowstickHeavyChargeDelayMs: `${Math.round(this.tuningEditor.glowstickHeavyChargeDelayMs)} ms`,
       glowstickHeavyLaserThickness: `${Math.round(this.tuningEditor.glowstickHeavyLaserThickness)} px`,
       batonHeavyCrescentRange: `${Math.round(this.tuningEditor.batonHeavyCrescentRange)} px`,
@@ -1854,10 +2140,29 @@ export class MainScene extends Phaser.Scene {
       batonPerfectDamageMultiplier: percent(this.tuningEditor.weaponJudgementDamageMultipliers.baton.perfect),
       batonGoodDamageMultiplier: percent(this.tuningEditor.weaponJudgementDamageMultipliers.baton.good),
       batonPoorDamageMultiplier: percent(this.tuningEditor.weaponJudgementDamageMultipliers.baton.poor),
+      comboPerfectReward: `${this.tuningEditor.comboPerfectReward} 点`,
+      comboGoodReward: `${this.tuningEditor.comboGoodReward} 点`,
+      comboPatternCompleteReward: `${this.tuningEditor.comboPatternCompleteReward} 点`,
       smallGuardDamage: `${Math.round(this.tuningEditor.enemyProjectileDamage.smallGuard)} 点`,
       fanDamage: `${Math.round(this.tuningEditor.enemyProjectileDamage.fan)} 点`,
       glowstickDropChance: percent(this.tuningEditor.weaponDropChances.glowsticks),
-      batonDropChance: percent(this.tuningEditor.weaponDropChances.baton)
+      batonDropChance: percent(this.tuningEditor.weaponDropChances.baton),
+      waveSpawnMinBatchSize: `${Math.round(this.tuningEditor.waveSpawnMinBatchSize)} 名`,
+      waveSpawnMaxBatchSize: `${Math.round(this.tuningEditor.waveSpawnMaxBatchSize)} 名`,
+      waveSpawnMinIntervalSeconds: `${this.tuningEditor.waveSpawnMinIntervalSeconds.toFixed(1)} 秒`,
+      waveSpawnMaxIntervalSeconds: `${this.tuningEditor.waveSpawnMaxIntervalSeconds.toFixed(1)} 秒`
+      ,bossMaxHp: `${Math.round(this.tuningEditor.bossMaxHp)} 点`
+      ,bossSizeMultiplier: `${this.tuningEditor.bossSizeMultiplier.toFixed(2)}x`
+      ,bossMoveSpeed: `${Math.round(this.tuningEditor.bossMoveSpeed)} px/s`
+      ,bossAttackIntervalBeats: `${Math.round(this.tuningEditor.bossAttackIntervalBeats)} 拍`
+      ,bossProjectileDamage: `${Math.round(this.tuningEditor.bossProjectileDamage)} 点`
+      ,bossProjectileSpeed: `${Math.round(this.tuningEditor.bossProjectileSpeed)} px/s`
+      ,bossCrescentSpeed: `${Math.round(this.tuningEditor.bossCrescentSpeed)} px/s`
+      ,bossStompRadius: `${Math.round(this.tuningEditor.bossStompRadius)} px`
+      ,bossStompKnockback: `${Math.round(this.tuningEditor.bossStompKnockback)} px/s`
+      ,bossNoteFormationSpeed: `${Math.round(this.tuningEditor.bossNoteFormationSpeed)} px/s`
+      ,bossNoteFormationBulletSize: percent(this.tuningEditor.bossNoteFormationBulletSize)
+      ,bossMinionCount: `${Math.round(this.tuningEditor.bossMinionCount)} 名`
     };
     for (const [key, text] of Object.entries(this.combatValueTexts) as Array<
       [CombatSettingKey, Phaser.GameObjects.Text]
@@ -1871,6 +2176,33 @@ export class MainScene extends Phaser.Scene {
       this.heavyModeToggleButtons[weaponId]?.setFillStyle(enabled ? 0x0f766e : 0x334155);
       this.heavyModeToggleTexts[weaponId]?.setText(enabled ? '新模式开启' : '沿用旧模式');
     }
+    if (this.manualAimToggleButton && this.manualAimToggleText) {
+      this.manualAimToggleButton.setFillStyle(this.tuningEditor.manualAimEnabled ? 0x0f766e : 0x334155);
+      this.manualAimToggleText.setText(this.tuningEditor.manualAimEnabled ? '手动瞄准' : '自动瞄准');
+    }
+  }
+
+  private syncComboEnergyRewards(): void {
+    this.combo.setEnergyRewards({
+      perfect: this.tuningEditor.comboPerfectReward,
+      good: this.tuningEditor.comboGoodReward,
+      patternComplete: this.tuningEditor.comboPatternCompleteReward
+    });
+  }
+
+  private syncActiveBossMaxHp(): void {
+    const boss = this.enemies.find((enemy): enemy is BossGuard => enemy instanceof BossGuard);
+    if (!boss || boss.dead) return;
+    const ratio = boss.maxHp > 0 ? boss.hp / boss.maxHp : 1;
+    boss.maxHp = this.tuningEditor.bossMaxHp;
+    boss.hp = Math.max(1, boss.maxHp * ratio);
+    this.onBossHealthChanged(boss.hp, boss.maxHp);
+  }
+
+  private syncActiveBossSize(): void {
+    const boss = this.enemies.find((enemy): enemy is BossGuard => enemy instanceof BossGuard);
+    if (!boss || boss.dead) return;
+    boss.setSizeMultiplier(this.tuningEditor.bossSizeMultiplier);
   }
 
   private syncEnemyProjectileDamage(kind: 'smallGuard' | 'fan'): void {
@@ -2504,16 +2836,41 @@ export class MainScene extends Phaser.Scene {
 
   private startWave(idx: number): void {
     if (this.state === 'over') return;
+    this.waveSpawnTimer?.remove();
+    this.waveAdvanceTimer?.remove();
+    this.waveSpawnTimer = undefined;
+    this.waveAdvanceTimer = undefined;
     this.waveIdx = idx;
     this.displayedWaveNumber++;
     this.state = 'playing';
     this.hud.setWave(`Wave ${this.displayedWaveNumber}`);
-    this.flashMessage(`WAVE ${this.displayedWaveNumber}`);
+    this.flashMessage(idx === BOSS_WAVE_INDEX ? 'BOSS：警卫长' : `WAVE ${this.displayedWaveNumber}`);
+    this.pendingWaveSpawns = this.buildWaveSpawnQueue(idx);
+    this.spawnNextWaveBatch();
+  }
+
+  private buildWaveSpawnQueue(idx: number): WaveEnemyFactory[] {
+    const queue: WaveEnemyFactory[] = [];
+    if (idx === BOSS_WAVE_INDEX) {
+      const bossX = ARENA.x + ARENA.width - worldSize(150);
+      const bossY = ARENA.y + ARENA.height / 2;
+      queue.push(() => new BossGuard(this, bossX, bossY));
+      const minionCount = Math.max(0, Math.round(this.tuningEditor.bossMinionCount));
+      for (let index = 0; index < minionCount; index++) {
+        const [x, y] = this.spawnPointOnArenaEdge(index, Math.max(1, minionCount));
+        queue.push(() => new FanEnemy(this, x, y));
+      }
+      return queue;
+    }
 
     if (idx === 0) {
-      this.addWaveEnemy(new SmallGuard(this, ...this.spawnPointOnArenaEdge(0, 2)));
-      this.addWaveEnemy(new FanEnemy(this, ...this.spawnPointOnArenaEdge(1, 2)));
-      return;
+      const [guardX, guardY] = this.spawnPointOnArenaEdge(0, 2);
+      const [fanX, fanY] = this.spawnPointOnArenaEdge(1, 2);
+      queue.push(
+        () => new SmallGuard(this, guardX, guardY),
+        () => new FanEnemy(this, fanX, fanY)
+      );
+      return queue;
     }
     // Wave 2 / 3 保留一粉丝两保安的三人小队；从 Wave 4 起改为一粉丝一保安。
     const pairedFormation = idx >= 3;
@@ -2523,12 +2880,81 @@ export class MainScene extends Phaser.Scene {
       const towardCenter = Phaser.Math.Angle.Between(x, y, VIEW_WIDTH / 2, VIEW_HEIGHT / 2);
       const side = Phaser.Math.DegToRad(90);
       const offset = worldSize(34);
-      this.addWaveEnemy(new FanEnemy(this, x, y));
-      this.addWaveEnemy(new SmallGuard(this, x + Math.cos(towardCenter + side) * offset, y + Math.sin(towardCenter + side) * offset));
+      const guardAX = x + Math.cos(towardCenter + side) * offset;
+      const guardAY = y + Math.sin(towardCenter + side) * offset;
+      queue.push(
+        () => new FanEnemy(this, x, y),
+        () => new SmallGuard(this, guardAX, guardAY)
+      );
       if (!pairedFormation) {
-        this.addWaveEnemy(new SmallGuard(this, x + Math.cos(towardCenter - side) * offset, y + Math.sin(towardCenter - side) * offset));
+        const guardBX = x + Math.cos(towardCenter - side) * offset;
+        const guardBY = y + Math.sin(towardCenter - side) * offset;
+        queue.push(() => new SmallGuard(this, guardBX, guardBY));
       }
     }
+    return queue;
+  }
+
+  private spawnNextWaveBatch(): void {
+    this.waveSpawnTimer = undefined;
+    if (this.state !== 'playing' || this.pendingWaveSpawns.length === 0) {
+      this.tryCompleteWave();
+      return;
+    }
+
+    const minBatchSize = Math.max(1, Math.round(Math.min(
+      this.tuningEditor.waveSpawnMinBatchSize,
+      this.tuningEditor.waveSpawnMaxBatchSize
+    )));
+    const maxBatchSize = Math.max(minBatchSize, Math.round(Math.max(
+      this.tuningEditor.waveSpawnMinBatchSize,
+      this.tuningEditor.waveSpawnMaxBatchSize
+    )));
+    const batchSize = Math.min(
+      this.pendingWaveSpawns.length,
+      Phaser.Math.Between(minBatchSize, maxBatchSize)
+    );
+    for (const createEnemy of this.pendingWaveSpawns.splice(0, batchSize)) {
+      this.addWaveEnemy(createEnemy());
+    }
+
+    if (this.pendingWaveSpawns.length === 0) {
+      this.tryCompleteWave();
+      return;
+    }
+
+    const minInterval = Math.max(0.5, Math.min(
+      this.tuningEditor.waveSpawnMinIntervalSeconds,
+      this.tuningEditor.waveSpawnMaxIntervalSeconds
+    ));
+    const maxInterval = Math.max(minInterval, Math.max(
+      this.tuningEditor.waveSpawnMinIntervalSeconds,
+      this.tuningEditor.waveSpawnMaxIntervalSeconds
+    ));
+    const delayMs = Phaser.Math.FloatBetween(minInterval, maxInterval) * 1000;
+    this.waveSpawnTimer = this.time.delayedCall(delayMs, this.spawnNextWaveBatch, [], this);
+  }
+
+  private tryCompleteWave(): void {
+    if (
+      this.state !== 'playing'
+      || this.pendingWaveSpawns.length > 0
+      || this.waveSpawnTimer
+      || this.enemies.length > 0
+      || this.waveAdvanceTimer
+    ) return;
+
+    const completedBossWave = this.waveIdx === BOSS_WAVE_INDEX;
+    if (completedBossWave && !this.victoryAchieved) {
+      this.victoryAchieved = true;
+      this.hud.setVictoryVisible(true);
+    }
+    this.state = 'intermission';
+    this.waveAdvanceTimer = this.time.delayedCall(2000, () => {
+      this.waveAdvanceTimer = undefined;
+      if (this.state === 'over') return;
+      this.startWave(completedBossWave ? WAVE_ENEMY_COUNTS.length - 1 : this.waveIdx + 1);
+    });
   }
 
   private addWaveEnemy(enemy: Enemy): void {
@@ -2551,25 +2977,7 @@ export class MainScene extends Phaser.Scene {
       this.spawnPickup(enemy.x, enemy.y, drop);
     }
 
-    if (this.enemies.length === 0 && this.state === 'playing') {
-      if (this.waveIdx >= WAVE_ENEMY_COUNTS.length - 1) {
-        if (!this.victoryAchieved) {
-          this.victoryAchieved = true;
-          this.hud.setVictoryVisible(true);
-        }
-        this.state = 'intermission';
-        this.time.delayedCall(2000, () => {
-          if (this.state !== 'over') this.startWave(WAVE_ENEMY_COUNTS.length - 1);
-        });
-      } else {
-        this.state = 'intermission';
-        this.time.delayedCall(2000, () => startNext(this));
-        const next = this.waveIdx + 1;
-        function startNext(scene: MainScene): void {
-          if (scene.state !== 'over') scene.startWave(next);
-        }
-      }
-    }
+    this.tryCompleteWave();
   }
 
   private spawnPointOnArenaEdge(index: number, total: number): [number, number] {
@@ -2595,6 +3003,11 @@ export class MainScene extends Phaser.Scene {
   onPlayerDied(): void {
     if (this.state === 'over') return;
     this.state = 'over';
+    this.waveSpawnTimer?.remove();
+    this.waveAdvanceTimer?.remove();
+    this.waveSpawnTimer = undefined;
+    this.waveAdvanceTimer = undefined;
+    this.pendingWaveSpawns = [];
     this.clearAllProjectiles();
     this.player.die();
     for (const enemy of this.enemies) enemy.enterGameOverIdle();
@@ -2692,6 +3105,7 @@ export class MainScene extends Phaser.Scene {
   }
 
   private getEnemyBulletSpeed(kind: EnemyKind): number {
+    if (kind === 'bossGuard') return this.tuningEditor.bossProjectileSpeed;
     return kind === 'fan'
       ? this.tuningEditor.fanBulletSpeed
       : this.tuningEditor.smallGuardBulletSpeed;
@@ -2788,17 +3202,37 @@ export class MainScene extends Phaser.Scene {
     return textureKey;
   }
 
-  private ensureEnemyProjectileTexture(sourceKind: EnemyKind, visualDiameter: number): string {
-    const textureKey = sourceKind === 'fan' ? FAN_PROJECTILE_TEXTURE : GUARD_PROJECTILE_TEXTURE;
+  private ensureEnemyProjectileTexture(
+    sourceKind: EnemyKind,
+    visualDiameter: number,
+    bossStyle: BossProjectileStyle = 'triple'
+  ): string {
+    const textureKey = sourceKind === 'fan'
+      ? FAN_PROJECTILE_TEXTURE
+      : sourceKind === 'bossGuard'
+        ? bossStyle === 'note' ? BOSS_NOTE_PROJECTILE_TEXTURE : BOSS_TRIPLE_PROJECTILE_TEXTURE
+        : GUARD_PROJECTILE_TEXTURE;
     if (this.textures.exists(textureKey)) return textureKey;
 
     const size = 64;
     const texture = this.textures.createCanvas(textureKey, size, size);
     if (!texture) return '__WHITE';
 
-    const shellColor = sourceKind === 'fan' ? 0xd92c16 : 0x18b6cf;
-    const midColor = sourceKind === 'fan' ? 0xff7832 : 0x7ff7ff;
-    const coreColor = sourceKind === 'fan' ? 0xfff6cf : 0xf2ffff;
+    const shellColor = sourceKind === 'fan'
+      ? 0xd92c16
+      : sourceKind === 'bossGuard'
+        ? bossStyle === 'note' ? 0x15803d : 0x1d4ed8
+        : 0x18b6cf;
+    const midColor = sourceKind === 'fan'
+      ? 0xff7832
+      : sourceKind === 'bossGuard'
+        ? bossStyle === 'note' ? 0x4ade80 : 0x60a5fa
+        : 0x7ff7ff;
+    const coreColor = sourceKind === 'fan'
+      ? 0xfff6cf
+      : sourceKind === 'bossGuard'
+        ? bossStyle === 'note' ? 0xf0fdf4 : 0xeff6ff
+        : 0xf2ffff;
     const displayDiameter = visualDiameter * 0.96 + ENEMY_PROJECTILE_GLOW_DISTANCE * 2;
     const shellRadius = (visualDiameter * 0.48 * size) / displayDiameter;
     this.paintCompositePoint(texture.context, size, shellRadius, shellColor, midColor, coreColor);
@@ -2990,6 +3424,7 @@ export class MainScene extends Phaser.Scene {
       for (const obj of group.getChildren()) {
         const bullet = obj as Phaser.GameObjects.Rectangle;
         if (bullet.getData('hitboxMode') !== 'straight') continue;
+        if (group === this.bullets) this.applyEnemyBulletSize(bullet);
         this.positionStraightBulletHitboxes(
           bullet,
           bullet.getData('hitboxLength') as number,
@@ -2998,6 +3433,30 @@ export class MainScene extends Phaser.Scene {
         );
       }
     }
+  }
+
+  /** P Menu 的敌弹尺寸会同时作用到当前存量弹幕的可见图像与全部碰撞采样体。 */
+  private applyEnemyBulletSize(bullet: Phaser.GameObjects.Rectangle): void {
+    const sizeMultiplier = this.tuningEditor.enemyBulletSizeMultiplier;
+    if (bullet.getData('appliedSizeMultiplier') === sizeMultiplier) return;
+
+    const baseVisualDiameter = bullet.getData('baseVisualDiameter') as number;
+    const baseCompositeDiameter = bullet.getData('baseCompositeDiameter') as number;
+    const baseHitboxSize = bullet.getData('baseHitboxSize') as number;
+    const baseHitboxLength = bullet.getData('baseHitboxLength') as number;
+    const hitboxSize = baseHitboxSize * sizeMultiplier;
+    const hitboxLength = baseHitboxLength * sizeMultiplier;
+    const projectileVisual = bullet.getData('projectileVisual') as Phaser.GameObjects.Image | undefined;
+    projectileVisual?.setDisplaySize(baseCompositeDiameter * sizeMultiplier, baseCompositeDiameter * sizeMultiplier);
+    (bullet.body as Phaser.Physics.Arcade.Body).setSize(hitboxSize, hitboxSize, true);
+    for (const hitbox of (bullet.getData('hitboxes') as Phaser.GameObjects.Rectangle[] | undefined) ?? []) {
+      (hitbox.body as Phaser.Physics.Arcade.Body).setSize(hitboxSize, hitboxSize, true);
+    }
+    bullet.setData('visualDiameter', baseVisualDiameter * sizeMultiplier);
+    bullet.setData('hitboxSize', hitboxSize);
+    bullet.setData('hitboxLength', hitboxLength);
+    bullet.setData('trailThickness', hitboxSize);
+    bullet.setData('appliedSizeMultiplier', sizeMultiplier);
   }
 
   private destroyBulletHitboxes(bullet: Phaser.GameObjects.Rectangle): void {
@@ -3351,34 +3810,49 @@ export class MainScene extends Phaser.Scene {
     angle: number,
     speed: number,
     damage: number,
-    sourceKind: EnemyKind
-  ): void {
+    sourceKind: EnemyKind,
+    straightShot = false,
+    visualScale = 1,
+    _despawnBeats = 8,
+    bossStyle: BossProjectileStyle = 'triple'
+  ): Phaser.GameObjects.Rectangle {
+    const speedMultiplier = straightShot ? this.tuningEditor.enemyStraightBulletSpeedMultiplier : 1;
     const fanOrbDiameter = worldSize(9);
-    const displayColor = sourceKind === 'fan' ? FAN_BULLET_COLOR : GUARD_BULLET_COLOR;
-    const visualDiameter = sourceKind === 'fan' ? fanOrbDiameter : ENEMY_BULLET_THICKNESS;
+    const displayColor = sourceKind === 'fan'
+      ? FAN_BULLET_COLOR
+      : sourceKind === 'bossGuard'
+        ? bossStyle === 'note' ? BOSS_NOTE_BULLET_COLOR : BOSS_TRIPLE_BULLET_COLOR
+        : GUARD_BULLET_COLOR;
+    const baseDiameter = sourceKind === 'fan' ? fanOrbDiameter : ENEMY_BULLET_THICKNESS;
+    const visualDiameter = baseDiameter * visualScale;
     const compositeDiameter = visualDiameter * 0.96 + ENEMY_PROJECTILE_GLOW_DISTANCE * 2;
     const bullet = this.add
       .rectangle(x, y, ENEMY_BULLET_THICKNESS, ENEMY_BULLET_THICKNESS, displayColor, 0)
       .setRotation(angle)
       .setDepth(4);
     const projectileVisual = this.add
-      .image(x, y, this.ensureEnemyProjectileTexture(sourceKind, visualDiameter))
+      .image(x, y, this.ensureEnemyProjectileTexture(sourceKind, visualDiameter, bossStyle))
       .setDisplaySize(compositeDiameter, compositeDiameter)
       .setDepth(4)
       .setBlendMode(Phaser.BlendModes.NORMAL);
     this.bullets.add(bullet);
     const body = bullet.body as Phaser.Physics.Arcade.Body;
-    const hitboxSize = sourceKind === 'fan' ? fanOrbDiameter : ENEMY_BULLET_THICKNESS;
-    const hitboxLength = sourceKind === 'fan' ? fanOrbDiameter : ENEMY_BULLET_LENGTH;
+    const hitboxSize = (sourceKind === 'fan' ? fanOrbDiameter : ENEMY_BULLET_THICKNESS) * visualScale;
+    const hitboxLength = (sourceKind === 'fan' ? fanOrbDiameter : ENEMY_BULLET_LENGTH) * visualScale;
     body.setSize(hitboxSize, hitboxSize, true);
-    body.setVelocity(Math.cos(angle) * speed, Math.sin(angle) * speed);
+    body.setVelocity(Math.cos(angle) * speed * speedMultiplier, Math.sin(angle) * speed * speedMultiplier);
     bullet.setData('damage', damage);
     bullet.setData('angle', angle);
-    bullet.setData('baseSpeed', speed);
+    bullet.setData('baseSpeed', speed * speedMultiplier);
+    bullet.setData('straightShot', straightShot);
     bullet.setData('sourceKind', sourceKind);
     bullet.setData('visualColor', displayColor);
-    bullet.setData('despawnBeat', Math.floor(this.conductor.beatFloatAt(this.conductor.now())) + 8);
+    bullet.setData('despawnBeat', Infinity);
     bullet.setData('projectileVisual', projectileVisual);
+    bullet.setData('baseVisualDiameter', visualDiameter);
+    bullet.setData('baseCompositeDiameter', compositeDiameter);
+    bullet.setData('baseHitboxSize', hitboxSize);
+    bullet.setData('baseHitboxLength', hitboxLength);
     bullet.setData('trailColor', displayColor);
     bullet.setData('trailThickness', hitboxSize);
     bullet.setData('bursting', this.tuningEditor.enemyBulletBeatSurgeEnabled);
@@ -3387,7 +3861,14 @@ export class MainScene extends Phaser.Scene {
     bullet.setData('hitboxSize', hitboxSize);
     bullet.setData('hitboxAngle', angle);
     this.createBulletHitboxes(bullet, this.enemyBulletHitboxes, hitboxSize);
-    this.positionStraightBulletHitboxes(bullet, hitboxLength, hitboxSize, angle);
+    this.applyEnemyBulletSize(bullet);
+    this.positionStraightBulletHitboxes(
+      bullet,
+      bullet.getData('hitboxLength') as number,
+      bullet.getData('hitboxSize') as number,
+      angle
+    );
+    return bullet;
   }
 
   /**
@@ -3432,11 +3913,15 @@ export class MainScene extends Phaser.Scene {
 
     for (const obj of this.bullets.getChildren()) {
       const bullet = obj as Phaser.GameObjects.Rectangle;
+      if (bullet.getData('bossSpecialProjectile')) continue;
       const body = bullet.body as Phaser.Physics.Arcade.Body;
       const angle = bullet.getData('angle') as number;
       const sourceKind = bullet.getData('sourceKind') as EnemyKind;
 
-      const baseSpeed = this.getEnemyBulletSpeed(sourceKind);
+      const speedMultiplier = bullet.getData('straightShot')
+        ? this.tuningEditor.enemyStraightBulletSpeedMultiplier
+        : 1;
+      const baseSpeed = this.getEnemyBulletSpeed(sourceKind) * speedMultiplier;
       bullet.setData('baseSpeed', baseSpeed);
       const speed = this.tuningEditor.enemyBulletBeatSurgeEnabled
         ? baseSpeed * normalizedSpeedMultiplier
@@ -3454,7 +3939,8 @@ export class MainScene extends Phaser.Scene {
   ): void {
     const shotAngle = this.quantizeEnemyAttackAngle(angle);
     const attackAngles: number[] = [];
-    if (sourceKind === 'fan' && Math.random() < this.tuningEditor.fanSpiralAttackChance) {
+    const isSpreadAttack = sourceKind === 'fan' && Math.random() < this.tuningEditor.fanSpiralAttackChance;
+    if (isSpreadAttack) {
       const ballsPerArc = 10;
       const arcSpan = Phaser.Math.DegToRad(54);
       for (let arcIndex = 0; arcIndex < 3; arcIndex += 1) {
@@ -3475,8 +3961,159 @@ export class MainScene extends Phaser.Scene {
         attackAngle,
         this.getEnemyBulletSpeed(sourceKind),
         this.tuningEditor.getEnemyProjectileDamage(sourceKind),
-        sourceKind
+        sourceKind,
+        !isSpreadAttack
       );
+    }
+  }
+
+  private updateSpecialEnemyProjectiles(): void {
+    for (const obj of this.bullets.getChildren()) {
+      const sync = obj.getData('syncSpecialProjectile') as (() => void) | undefined;
+      sync?.();
+    }
+  }
+
+  spawnBossTripleShot(x: number, y: number, angle: number): void {
+    const fire = (shotIndex: number): void => {
+      if (this.state !== 'playing') return;
+      const config = this.getBossCombatConfig();
+      const aimedAngle = shotIndex === 0
+        ? angle
+        : Phaser.Math.Angle.Between(x, y, this.player.x, this.player.y);
+      const muzzle = worldSize(72);
+      const bullet = this.spawnBullet(
+        x + Math.cos(aimedAngle) * muzzle,
+        y + Math.sin(aimedAngle) * muzzle,
+        aimedAngle,
+        config.projectileSpeed,
+        config.projectileDamage,
+        'bossGuard',
+        false,
+        3,
+        18,
+        'triple'
+      );
+      bullet.setData('bossSpecialProjectile', true);
+    };
+    fire(0);
+    this.time.delayedCall(180, () => fire(1));
+    this.time.delayedCall(360, () => fire(2));
+  }
+
+  spawnBossCrescentWave(x: number, y: number, angle: number): void {
+    const config = this.getBossCombatConfig();
+    const radius = worldSize(100);
+    const owner = this.add.rectangle(x, y, 8, 8, 0xffffff, 0).setDepth(5);
+    const visual = this.add.graphics({ x, y }).setDepth(5).setRotation(angle);
+    visual.lineStyle(worldSize(25), 0x4c1d95, 0.3);
+    visual.beginPath();
+    visual.arc(0, 0, radius, -1.18, 1.18, false);
+    visual.strokePath();
+    visual.lineStyle(worldSize(9), BOSS_CRESCENT_COLOR, 0.92);
+    visual.beginPath();
+    visual.arc(0, 0, radius, -1.18, 1.18, false);
+    visual.strokePath();
+    visual.lineStyle(worldSize(3), 0xf3e8ff, 0.9);
+    visual.beginPath();
+    visual.arc(0, 0, radius, -1.18, 1.18, false);
+    visual.strokePath();
+    this.bullets.add(owner);
+    const hitboxes: Phaser.GameObjects.Rectangle[] = [];
+    for (let index = 0; index < 7; index++) {
+      const hitbox = this.add.rectangle(x, y, worldSize(30), worldSize(30), 0xffffff, 0);
+      this.enemyBulletHitboxes.add(hitbox);
+      hitbox.setData('ownerBullet', owner);
+      hitboxes.push(hitbox);
+    }
+    owner.setData('damage', config.projectileDamage);
+    owner.setData('sourceKind', 'bossGuard');
+    owner.setData('visualColor', BOSS_CRESCENT_COLOR);
+    owner.setData('projectileVisual', visual);
+    owner.setData('hitboxes', hitboxes);
+    owner.setData('despawnBeat', Infinity);
+    owner.setData('bossSpecialProjectile', true);
+    owner.setData('skipTrail', true);
+    const positionParts = (): void => {
+      visual.setPosition(owner.x, owner.y);
+      hitboxes.forEach((hitbox, index) => {
+        if (!hitbox.active) return;
+        const sampleAngle = angle - 1.18 + (2.36 * index) / (hitboxes.length - 1);
+        const hx = owner.x + Math.cos(sampleAngle) * radius;
+        const hy = owner.y + Math.sin(sampleAngle) * radius;
+        hitbox.setPosition(hx, hy);
+        (hitbox.body as Phaser.Physics.Arcade.Body).reset(hx, hy);
+      });
+    };
+    positionParts();
+    (owner.body as Phaser.Physics.Arcade.Body).setVelocity(
+      Math.cos(angle) * config.crescentSpeed,
+      Math.sin(angle) * config.crescentSpeed
+    );
+    owner.setData('syncSpecialProjectile', positionParts);
+  }
+
+  spawnBossStomp(x: number, y: number): void {
+    const config = this.getBossCombatConfig();
+    const ring = this.add.graphics().setDepth(6);
+    const progress = { value: 0 };
+    let resolved = false;
+    this.tweens.add({
+      targets: progress,
+      value: 1,
+      duration: 460,
+      ease: 'Cubic.easeOut',
+      onUpdate: () => {
+        const radius = worldSize(30) + progress.value * (config.stompRadius - worldSize(30));
+        ring.clear();
+        ring.lineStyle(worldSize(18), 0x7f1d1d, (1 - progress.value) * 0.32);
+        ring.strokeCircle(x, y, radius);
+        ring.lineStyle(worldSize(5), 0xff7a72, 1 - progress.value * 0.75);
+        ring.strokeCircle(x, y, radius);
+        if (!resolved && Phaser.Math.Distance.Between(x, y, this.player.x, this.player.y) <= radius + this.player.body.halfWidth) {
+          resolved = true;
+          const knockbackAngle = Phaser.Math.Angle.Between(x, y, this.player.x, this.player.y);
+          this.player.takeDamage(config.projectileDamage);
+          this.player.applyKnockback(knockbackAngle, config.stompKnockback);
+        }
+      },
+      onComplete: () => ring.destroy()
+    });
+  }
+
+  spawnBossNoteFormation(): void {
+    const config = this.getBossCombatConfig();
+    const points = new Set<string>();
+    const add = (column: number, row: number): void => { points.add(`${column},${row}`); };
+    for (let row = 0; row <= 10; row++) add(8, row);
+    for (let column = 2; column <= 8; column++) add(column, 1);
+    for (let row = 1; row <= 7; row++) add(2, row);
+    for (let dx = -2; dx <= 2; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        if (Math.abs(dx) + Math.abs(dy) <= 2) {
+          add(2 + dx, 8 + dy);
+          add(8 + dx, 11 + dy);
+        }
+      }
+    }
+    const spacing = worldSize(31);
+    const startX = ARENA.x + ARENA.width + worldSize(90);
+    const topY = ARENA.y + ARENA.height / 2 - worldSize(190);
+    for (const encoded of points) {
+      const [column, row] = encoded.split(',').map(Number);
+      const bullet = this.spawnBullet(
+        startX + column * spacing,
+        topY + row * spacing,
+        Math.PI,
+        config.noteFormationSpeed,
+        config.projectileDamage,
+        'bossGuard',
+        false,
+        config.noteFormationBulletSize,
+        64,
+        'note'
+      );
+      bullet.setData('bossSpecialProjectile', true);
     }
   }
 
@@ -3747,7 +4384,9 @@ export class MainScene extends Phaser.Scene {
   private destroyEnemyBullet(bullet: Phaser.GameObjects.Rectangle): void {
     const heldTrail = bullet.getData('heldTrail') as Phaser.GameObjects.Rectangle | undefined;
     if (heldTrail?.active) heldTrail.destroy();
-    const projectileVisual = bullet.getData('projectileVisual') as Phaser.GameObjects.Image | undefined;
+    const projectileVisual = bullet.getData('projectileVisual') as Phaser.GameObjects.GameObject | undefined;
+    this.tweens.killTweensOf(bullet);
+    if (projectileVisual) this.tweens.killTweensOf(projectileVisual);
     if (projectileVisual?.active) projectileVisual.destroy();
     this.destroyBulletHitboxes(bullet);
     if (bullet.active) bullet.destroy();

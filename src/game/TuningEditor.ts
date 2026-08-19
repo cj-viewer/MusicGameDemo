@@ -4,7 +4,75 @@ import { UI_SCALE, VIEW_HEIGHT, VIEW_WIDTH } from './displayConfig';
 import type { AttackJudgement } from './ComboSystem';
 import type { WeaponId } from './weapons';
 
-export type TunableEnemyKind = 'smallGuard' | 'midGuard' | 'fan';
+export type TunableEnemyKind = 'smallGuard' | 'midGuard' | 'fan' | 'bossGuard';
+
+const PERSISTED_TUNING_STORAGE_KEY = 'music-game-demo:tuning-config:v1';
+
+interface PersistedTuningConfig {
+  schemaVersion: 1;
+  player: {
+    moveSpeed: number;
+    manualAimEnabled: boolean;
+    glowstickBulletSpeed: number;
+    glowstickInfiniteRange: boolean;
+    glowstickMaxRange: number;
+    glowstickAttackSpeed: number;
+    glowstickLightAttackSpeed: number;
+    glowstickHeavyAttackSpeed: number;
+    batonSweepSpeed: number;
+    batonAttackSpeed: number;
+    batonLightAttackSpeed: number;
+    batonHeavyAttackSpeed: number;
+    glowstickHeavyLaserEnabled: boolean;
+    batonHeavyCrescentEnabled: boolean;
+    glowstickHeavyChargeDelayMs: number;
+    glowstickHeavyLaserThickness: number;
+    batonHeavyCrescentRange: number;
+    batonLightSweepAngle: number;
+    batonLightSweepRange: number;
+  };
+  enemy: {
+    smallGuardBulletSpeed: number;
+    smallGuardAttackFrequency: number;
+    fanBulletSpeed: number;
+    fanAttackFrequency: number;
+    enemyStraightBulletSpeedMultiplier: number;
+    enemyBulletSizeMultiplier: number;
+    enemyDeathVolume: number;
+    fanSpiralAttackChance: number;
+    enemyBulletBeatSurgeEnabled: boolean;
+  };
+  waveSpawn: {
+    minBatchSize: number;
+    maxBatchSize: number;
+    minIntervalSeconds: number;
+    maxIntervalSeconds: number;
+  };
+  boss: {
+    maxHp: number;
+    sizeMultiplier: number;
+    moveSpeed: number;
+    attackIntervalBeats: number;
+    projectileDamage: number;
+    projectileSpeed: number;
+    crescentSpeed: number;
+    stompRadius: number;
+    stompKnockback: number;
+    noteFormationSpeed: number;
+    noteFormationBulletSize: number;
+    minionCount: number;
+  };
+  comboMeter: {
+    perfectReward: number;
+    goodReward: number;
+    patternCompleteReward: number;
+  };
+  weaponJudgementDamageMultipliers: Record<WeaponId, Record<AttackJudgement, number>>;
+  weaponAttackDamage: Record<WeaponId, { light: number; heavy: number }>;
+  enemyProjectileDamage: { smallGuard: number; fan: number };
+  weaponDropChances: Record<WeaponId, number>;
+  bgm: { tutorialSlot: number; levelSlot: number };
+}
 
 export function passesDropChance(chance: number, roll = Math.random()): boolean {
   const clampedChance = Phaser.Math.Clamp(chance, 0, 1);
@@ -15,6 +83,8 @@ export function passesDropChance(chance: number, roll = Math.random()): boolean 
 
 export class TuningEditor {
   readonly container: Phaser.GameObjects.Container;
+  playerMoveSpeed = 260;
+  manualAimEnabled = false;
   glowstickBulletSpeed = 360;
   glowstickInfiniteRange = true;
   glowstickMaxRange = 164;
@@ -33,11 +103,32 @@ export class TuningEditor {
   batonLightSweepAngle = 180;
   batonLightSweepRange = 111;
   smallGuardBulletSpeed = 144;
-  smallGuardAttackFrequency = 1;
+  smallGuardAttackFrequency = 0.75;
   fanBulletSpeed = 144;
-  fanAttackFrequency = 0.25;
+  fanAttackFrequency = 0.2;
+  enemyStraightBulletSpeedMultiplier = 1.25;
+  enemyBulletSizeMultiplier = 1.2;
   enemyDeathVolume = 1;
   fanSpiralAttackChance = 0.1;
+  waveSpawnMinBatchSize = 1;
+  waveSpawnMaxBatchSize = 4;
+  waveSpawnMinIntervalSeconds = 2;
+  waveSpawnMaxIntervalSeconds = 5;
+  comboPerfectReward = 4;
+  comboGoodReward = 3;
+  comboPatternCompleteReward = 10;
+  bossMaxHp = 1200;
+  bossSizeMultiplier = 3.5;
+  bossMoveSpeed = 28;
+  bossAttackIntervalBeats = 4;
+  bossProjectileDamage = 20;
+  bossProjectileSpeed = 230;
+  bossCrescentSpeed = 105;
+  bossStompRadius = 230;
+  bossStompKnockback = 520;
+  bossNoteFormationSpeed = 105;
+  bossNoteFormationBulletSize = 1;
+  bossMinionCount = 6;
   weaponJudgementDamageMultipliers: Record<WeaponId, Record<AttackJudgement, number>> = {
     glowsticks: { perfect: 1.2, good: 1, poor: 0.5 },
     baton: { perfect: 1.2, good: 1, poor: 0.5 }
@@ -250,6 +341,33 @@ export class TuningEditor {
     return this.weaponDropChances[weaponId];
   }
 
+  /** 把 P Menu 当前全部配置保存到本浏览器；刷新页面后由 loadPersistedConfig 恢复。 */
+  savePersistedConfig(): boolean {
+    try {
+      localStorage.setItem(PERSISTED_TUNING_STORAGE_KEY, JSON.stringify(this.buildPersistedConfig()));
+      return true;
+    } catch (error) {
+      console.warn('[TuningEditor] 无法保存本机调参配置。', error);
+      return false;
+    }
+  }
+
+  /** 在场景创建早期恢复本机配置；无记录、版本不符或数据损坏时保留代码默认值。 */
+  loadPersistedConfig(): boolean {
+    try {
+      const raw = localStorage.getItem(PERSISTED_TUNING_STORAGE_KEY);
+      if (!raw) return false;
+      const saved = JSON.parse(raw) as Partial<PersistedTuningConfig>;
+      if (saved.schemaVersion !== 1) return false;
+      this.applyPersistedConfig(saved);
+      this.refresh();
+      return true;
+    } catch (error) {
+      console.warn('[TuningEditor] 本机调参配置损坏，已沿用代码默认值。', error);
+      return false;
+    }
+  }
+
   /**
    * 用稳定键名记录所有玩家/敌人战斗调参；保留小数原值，便于把 TXT 回传后直接改成默认值。
    * BGM 与纯显示设置不属于战斗参数，因此不写入本文件。
@@ -261,6 +379,8 @@ export class TuningEditor {
       `generatedAt=${generatedAt.toISOString()}`,
       '',
       '[player]',
+      `moveSpeed=${this.playerMoveSpeed}`,
+      `manualAimEnabled=${this.manualAimEnabled}`,
       `glowstickBulletSpeed=${this.glowstickBulletSpeed}`,
       `glowstickInfiniteRange=${this.glowstickInfiniteRange}`,
       `glowstickMaxRange=${this.glowstickMaxRange}`,
@@ -293,16 +413,43 @@ export class TuningEditor {
       `baton.good=${this.weaponJudgementDamageMultipliers.baton.good}`,
       `baton.poor=${this.weaponJudgementDamageMultipliers.baton.poor}`,
       '',
+      '[comboMeter]',
+      `perfectReward=${this.comboPerfectReward}`,
+      `goodReward=${this.comboGoodReward}`,
+      `patternCompleteReward=${this.comboPatternCompleteReward}`,
+      '',
       '[enemy]',
       `smallGuardBulletSpeed=${this.smallGuardBulletSpeed}`,
       `smallGuardAttackFrequency=${this.smallGuardAttackFrequency}`,
       `fanBulletSpeed=${this.fanBulletSpeed}`,
       `fanAttackFrequency=${this.fanAttackFrequency}`,
+      `enemyStraightBulletSpeedMultiplier=${this.enemyStraightBulletSpeedMultiplier}`,
+      `enemyBulletSizeMultiplier=${this.enemyBulletSizeMultiplier}`,
       `smallGuardProjectileDamage=${this.enemyProjectileDamage.smallGuard}`,
       `fanProjectileDamage=${this.enemyProjectileDamage.fan}`,
       `enemyBulletBeatSurgeEnabled=${this.enemyBulletBeatSurgeEnabled}`,
       `enemyDeathVolume=${this.enemyDeathVolume}`,
       `fanSpiralAttackChance=${this.fanSpiralAttackChance}`,
+      '',
+      '[waveSpawn]',
+      `minBatchSize=${this.waveSpawnMinBatchSize}`,
+      `maxBatchSize=${this.waveSpawnMaxBatchSize}`,
+      `minIntervalSeconds=${this.waveSpawnMinIntervalSeconds}`,
+      `maxIntervalSeconds=${this.waveSpawnMaxIntervalSeconds}`,
+      '',
+      '[boss]',
+      `maxHp=${this.bossMaxHp}`,
+      `sizeMultiplier=${this.bossSizeMultiplier}`,
+      `moveSpeed=${this.bossMoveSpeed}`,
+      `attackIntervalBeats=${this.bossAttackIntervalBeats}`,
+      `projectileDamage=${this.bossProjectileDamage}`,
+      `projectileSpeed=${this.bossProjectileSpeed}`,
+      `crescentSpeed=${this.bossCrescentSpeed}`,
+      `stompRadius=${this.bossStompRadius}`,
+      `stompKnockback=${this.bossStompKnockback}`,
+      `noteFormationSpeed=${this.bossNoteFormationSpeed}`,
+      `noteFormationBulletSize=${this.bossNoteFormationBulletSize}`,
+      `minionCount=${this.bossMinionCount}`,
       '',
       '[dropChance]',
       `glowsticks=${this.weaponDropChances.glowsticks}`,
@@ -341,6 +488,214 @@ export class TuningEditor {
     if (slot === 'tutorial') this.tutorialBgmSlot = next;
     else this.levelBgmSlot = next;
     this.refresh();
+  }
+
+  private buildPersistedConfig(): PersistedTuningConfig {
+    return {
+      schemaVersion: 1,
+      player: {
+        moveSpeed: this.playerMoveSpeed,
+        manualAimEnabled: this.manualAimEnabled,
+        glowstickBulletSpeed: this.glowstickBulletSpeed,
+        glowstickInfiniteRange: this.glowstickInfiniteRange,
+        glowstickMaxRange: this.glowstickMaxRange,
+        glowstickAttackSpeed: this.glowstickAttackSpeed,
+        glowstickLightAttackSpeed: this.glowstickLightAttackSpeed,
+        glowstickHeavyAttackSpeed: this.glowstickHeavyAttackSpeed,
+        batonSweepSpeed: this.batonSweepSpeed,
+        batonAttackSpeed: this.batonAttackSpeed,
+        batonLightAttackSpeed: this.batonLightAttackSpeed,
+        batonHeavyAttackSpeed: this.batonHeavyAttackSpeed,
+        glowstickHeavyLaserEnabled: this.glowstickHeavyLaserEnabled,
+        batonHeavyCrescentEnabled: this.batonHeavyCrescentEnabled,
+        glowstickHeavyChargeDelayMs: this.glowstickHeavyChargeDelayMs,
+        glowstickHeavyLaserThickness: this.glowstickHeavyLaserThickness,
+        batonHeavyCrescentRange: this.batonHeavyCrescentRange,
+        batonLightSweepAngle: this.batonLightSweepAngle,
+        batonLightSweepRange: this.batonLightSweepRange
+      },
+      enemy: {
+        smallGuardBulletSpeed: this.smallGuardBulletSpeed,
+        smallGuardAttackFrequency: this.smallGuardAttackFrequency,
+        fanBulletSpeed: this.fanBulletSpeed,
+        fanAttackFrequency: this.fanAttackFrequency,
+        enemyStraightBulletSpeedMultiplier: this.enemyStraightBulletSpeedMultiplier,
+        enemyBulletSizeMultiplier: this.enemyBulletSizeMultiplier,
+        enemyDeathVolume: this.enemyDeathVolume,
+        fanSpiralAttackChance: this.fanSpiralAttackChance,
+        enemyBulletBeatSurgeEnabled: this.enemyBulletBeatSurgeEnabled
+      },
+      waveSpawn: {
+        minBatchSize: this.waveSpawnMinBatchSize,
+        maxBatchSize: this.waveSpawnMaxBatchSize,
+        minIntervalSeconds: this.waveSpawnMinIntervalSeconds,
+        maxIntervalSeconds: this.waveSpawnMaxIntervalSeconds
+      },
+      boss: {
+        maxHp: this.bossMaxHp,
+        sizeMultiplier: this.bossSizeMultiplier,
+        moveSpeed: this.bossMoveSpeed,
+        attackIntervalBeats: this.bossAttackIntervalBeats,
+        projectileDamage: this.bossProjectileDamage,
+        projectileSpeed: this.bossProjectileSpeed,
+        crescentSpeed: this.bossCrescentSpeed,
+        stompRadius: this.bossStompRadius,
+        stompKnockback: this.bossStompKnockback,
+        noteFormationSpeed: this.bossNoteFormationSpeed,
+        noteFormationBulletSize: this.bossNoteFormationBulletSize,
+        minionCount: this.bossMinionCount
+      },
+      comboMeter: {
+        perfectReward: this.comboPerfectReward,
+        goodReward: this.comboGoodReward,
+        patternCompleteReward: this.comboPatternCompleteReward
+      },
+      weaponJudgementDamageMultipliers: structuredClone(this.weaponJudgementDamageMultipliers),
+      weaponAttackDamage: structuredClone(this.weaponAttackDamage),
+      enemyProjectileDamage: { ...this.enemyProjectileDamage },
+      weaponDropChances: { ...this.weaponDropChances },
+      bgm: { tutorialSlot: this.tutorialBgmSlot, levelSlot: this.levelBgmSlot }
+    };
+  }
+
+  private applyPersistedConfig(saved: Partial<PersistedTuningConfig>): void {
+    const numberValue = (value: unknown, fallback: number): number =>
+      typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+    const booleanValue = (value: unknown, fallback: boolean): boolean =>
+      typeof value === 'boolean' ? value : fallback;
+    const player = saved.player;
+    if (player) {
+      this.playerMoveSpeed = numberValue(player.moveSpeed, this.playerMoveSpeed);
+      this.manualAimEnabled = booleanValue(player.manualAimEnabled, this.manualAimEnabled);
+      this.glowstickBulletSpeed = numberValue(player.glowstickBulletSpeed, this.glowstickBulletSpeed);
+      this.glowstickInfiniteRange = booleanValue(player.glowstickInfiniteRange, this.glowstickInfiniteRange);
+      this.glowstickMaxRange = numberValue(player.glowstickMaxRange, this.glowstickMaxRange);
+      this.glowstickAttackSpeed = numberValue(player.glowstickAttackSpeed, this.glowstickAttackSpeed);
+      this.glowstickLightAttackSpeed = numberValue(player.glowstickLightAttackSpeed, this.glowstickLightAttackSpeed);
+      this.glowstickHeavyAttackSpeed = numberValue(player.glowstickHeavyAttackSpeed, this.glowstickHeavyAttackSpeed);
+      this.batonSweepSpeed = numberValue(player.batonSweepSpeed, this.batonSweepSpeed);
+      this.batonAttackSpeed = numberValue(player.batonAttackSpeed, this.batonAttackSpeed);
+      this.batonLightAttackSpeed = numberValue(player.batonLightAttackSpeed, this.batonLightAttackSpeed);
+      this.batonHeavyAttackSpeed = numberValue(player.batonHeavyAttackSpeed, this.batonHeavyAttackSpeed);
+      this.glowstickHeavyLaserEnabled = booleanValue(
+        player.glowstickHeavyLaserEnabled,
+        this.glowstickHeavyLaserEnabled
+      );
+      this.batonHeavyCrescentEnabled = booleanValue(
+        player.batonHeavyCrescentEnabled,
+        this.batonHeavyCrescentEnabled
+      );
+      this.glowstickHeavyChargeDelayMs = numberValue(
+        player.glowstickHeavyChargeDelayMs,
+        this.glowstickHeavyChargeDelayMs
+      );
+      this.glowstickHeavyLaserThickness = numberValue(
+        player.glowstickHeavyLaserThickness,
+        this.glowstickHeavyLaserThickness
+      );
+      this.batonHeavyCrescentRange = numberValue(player.batonHeavyCrescentRange, this.batonHeavyCrescentRange);
+      this.batonLightSweepAngle = numberValue(player.batonLightSweepAngle, this.batonLightSweepAngle);
+      this.batonLightSweepRange = numberValue(player.batonLightSweepRange, this.batonLightSweepRange);
+    }
+    const enemy = saved.enemy;
+    if (enemy) {
+      this.smallGuardBulletSpeed = numberValue(enemy.smallGuardBulletSpeed, this.smallGuardBulletSpeed);
+      this.smallGuardAttackFrequency = numberValue(enemy.smallGuardAttackFrequency, this.smallGuardAttackFrequency);
+      this.fanBulletSpeed = numberValue(enemy.fanBulletSpeed, this.fanBulletSpeed);
+      this.fanAttackFrequency = numberValue(enemy.fanAttackFrequency, this.fanAttackFrequency);
+      this.enemyStraightBulletSpeedMultiplier = numberValue(
+        enemy.enemyStraightBulletSpeedMultiplier,
+        this.enemyStraightBulletSpeedMultiplier
+      );
+      this.enemyBulletSizeMultiplier = numberValue(enemy.enemyBulletSizeMultiplier, this.enemyBulletSizeMultiplier);
+      this.enemyDeathVolume = numberValue(enemy.enemyDeathVolume, this.enemyDeathVolume);
+      this.fanSpiralAttackChance = numberValue(enemy.fanSpiralAttackChance, this.fanSpiralAttackChance);
+      this.enemyBulletBeatSurgeEnabled = booleanValue(
+        enemy.enemyBulletBeatSurgeEnabled,
+        this.enemyBulletBeatSurgeEnabled
+      );
+    }
+    const waveSpawn = saved.waveSpawn;
+    if (waveSpawn) {
+      const minBatchSize = Phaser.Math.Clamp(
+        Math.round(numberValue(waveSpawn.minBatchSize, this.waveSpawnMinBatchSize)), 1, 20
+      );
+      const maxBatchSize = Phaser.Math.Clamp(
+        Math.round(numberValue(waveSpawn.maxBatchSize, this.waveSpawnMaxBatchSize)), 1, 20
+      );
+      this.waveSpawnMinBatchSize = Math.min(minBatchSize, maxBatchSize);
+      this.waveSpawnMaxBatchSize = Math.max(minBatchSize, maxBatchSize);
+      const minInterval = Phaser.Math.Clamp(
+        numberValue(waveSpawn.minIntervalSeconds, this.waveSpawnMinIntervalSeconds), 0.5, 30
+      );
+      const maxInterval = Phaser.Math.Clamp(
+        numberValue(waveSpawn.maxIntervalSeconds, this.waveSpawnMaxIntervalSeconds), 0.5, 30
+      );
+      this.waveSpawnMinIntervalSeconds = Math.min(minInterval, maxInterval);
+      this.waveSpawnMaxIntervalSeconds = Math.max(minInterval, maxInterval);
+    }
+    const boss = saved.boss;
+    if (boss) {
+      this.bossMaxHp = numberValue(boss.maxHp, this.bossMaxHp);
+      this.bossSizeMultiplier = numberValue(boss.sizeMultiplier, this.bossSizeMultiplier);
+      this.bossMoveSpeed = numberValue(boss.moveSpeed, this.bossMoveSpeed);
+      this.bossAttackIntervalBeats = numberValue(boss.attackIntervalBeats, this.bossAttackIntervalBeats);
+      this.bossProjectileDamage = numberValue(boss.projectileDamage, this.bossProjectileDamage);
+      this.bossProjectileSpeed = numberValue(boss.projectileSpeed, this.bossProjectileSpeed);
+      this.bossCrescentSpeed = numberValue(boss.crescentSpeed, this.bossCrescentSpeed);
+      this.bossStompRadius = numberValue(boss.stompRadius, this.bossStompRadius);
+      this.bossStompKnockback = numberValue(boss.stompKnockback, this.bossStompKnockback);
+      this.bossNoteFormationSpeed = numberValue(boss.noteFormationSpeed, this.bossNoteFormationSpeed);
+      this.bossNoteFormationBulletSize = numberValue(
+        boss.noteFormationBulletSize,
+        this.bossNoteFormationBulletSize
+      );
+      this.bossMinionCount = numberValue(boss.minionCount, this.bossMinionCount);
+    }
+    const comboMeter = saved.comboMeter;
+    if (comboMeter) {
+      this.comboPerfectReward = numberValue(comboMeter.perfectReward, this.comboPerfectReward);
+      this.comboGoodReward = numberValue(comboMeter.goodReward, this.comboGoodReward);
+      this.comboPatternCompleteReward = numberValue(
+        comboMeter.patternCompleteReward,
+        this.comboPatternCompleteReward
+      );
+    }
+    for (const weaponId of ['glowsticks', 'baton'] as const) {
+      for (const judgement of ['perfect', 'good', 'poor'] as const) {
+        this.weaponJudgementDamageMultipliers[weaponId][judgement] = numberValue(
+          saved.weaponJudgementDamageMultipliers?.[weaponId]?.[judgement],
+          this.weaponJudgementDamageMultipliers[weaponId][judgement]
+        );
+      }
+      this.weaponAttackDamage[weaponId].light = numberValue(
+        saved.weaponAttackDamage?.[weaponId]?.light,
+        this.weaponAttackDamage[weaponId].light
+      );
+      this.weaponAttackDamage[weaponId].heavy = numberValue(
+        saved.weaponAttackDamage?.[weaponId]?.heavy,
+        this.weaponAttackDamage[weaponId].heavy
+      );
+      this.weaponDropChances[weaponId] = numberValue(
+        saved.weaponDropChances?.[weaponId],
+        this.weaponDropChances[weaponId]
+      );
+    }
+    this.enemyProjectileDamage.smallGuard = numberValue(
+      saved.enemyProjectileDamage?.smallGuard,
+      this.enemyProjectileDamage.smallGuard
+    );
+    this.enemyProjectileDamage.fan = numberValue(saved.enemyProjectileDamage?.fan, this.enemyProjectileDamage.fan);
+    this.tutorialBgmSlot = Phaser.Math.Clamp(
+      Math.round(numberValue(saved.bgm?.tutorialSlot, this.tutorialBgmSlot)),
+      0,
+      this.trackLabels.length - 1
+    );
+    this.levelBgmSlot = Phaser.Math.Clamp(
+      Math.round(numberValue(saved.bgm?.levelSlot, this.levelBgmSlot)),
+      0,
+      this.trackLabels.length - 1
+    );
   }
 
   private refresh(): void {
