@@ -285,6 +285,8 @@ export class MainScene extends Phaser.Scene {
   private fpvToggleText!: Phaser.GameObjects.Text;
   /** ESC 设置打开时，主场景和观察窗都保持在同一帧。 */
   private gamePaused = false;
+  /** 玩家死亡动画播放完毕后，全局冻结到下一次重开。 */
+  private gameOverFrozen = false;
   private cameraLookX = 0;
   private cameraLookY = 0;
   private stageEnvironment!: StageEnvironmentController;
@@ -428,6 +430,8 @@ export class MainScene extends Phaser.Scene {
     this.pickups = [];
     this.state = 'title';
     this.gamePaused = false;
+    this.gameOverFrozen = false;
+    this.time.paused = false;
     this.volumePanelVisible = false;
     this.volumeDragging = null;
     this.waveIdx = -1;
@@ -568,7 +572,7 @@ export class MainScene extends Phaser.Scene {
   }
 
   update(_time: number, delta: number): void {
-    if (this.gamePaused) return;
+    if (this.gamePaused || this.gameOverFrozen) return;
     this.conductor.update();
     this.resolveMissedComboBeat();
     this.hud.update();
@@ -716,6 +720,8 @@ export class MainScene extends Phaser.Scene {
   }
 
   private restartGame(): void {
+    this.gameOverFrozen = false;
+    this.time.paused = false;
     this.scene.stop('FpvMiniScene');
     this.scene.restart();
   }
@@ -1525,6 +1531,7 @@ export class MainScene extends Phaser.Scene {
   }
 
   private setVolumePanelVisible(visible: boolean): void {
+    if (visible && this.gameOverFrozen) return;
     this.volumePanelVisible = visible;
     this.volumeDragging = null;
     const captureToken = ++this.volumePanelCaptureToken;
@@ -1568,6 +1575,7 @@ export class MainScene extends Phaser.Scene {
   }
 
   private setTuningEditorVisible(visible: boolean): void {
+    if (visible && this.gameOverFrozen) return;
     this.tuningEditor.setVisible(visible);
     if (visible) {
       this.refreshCombatControls();
@@ -2588,10 +2596,28 @@ export class MainScene extends Phaser.Scene {
     if (this.state === 'over') return;
     this.state = 'over';
     this.clearAllProjectiles();
-    this.player.enterGameOverIdle();
+    this.player.die();
     for (const enemy of this.enemies) enemy.enterGameOverIdle();
     this.arenaCorrectFeedback.setVisible(false);
     this.showGameOverMessage();
+    this.player.go.once(Phaser.Animations.Events.ANIMATION_COMPLETE, () => {
+      this.freezeGameplayAfterDeath();
+    });
+  }
+
+  /** 死亡动画播完后把时间、物理、补间、动画与音频一并冻结，玩家停在末帧。 */
+  private freezeGameplayAfterDeath(): void {
+    if (this.gameOverFrozen) return;
+    this.gameOverFrozen = true;
+    this.player.go.stop();
+    this.player.go.setAlpha(1);
+    this.conductor.pause();
+    this.sound.pauseAll();
+    this.physics.world.pause();
+    this.tweens.pauseAll();
+    this.anims.pauseAll();
+    this.time.paused = true;
+    this.getFpvMiniScene()?.setPanelPaused(true);
   }
 
   /** 结束画面不遮住场内单位；所有单位原地 Idle，提示保持在屏幕层。 */

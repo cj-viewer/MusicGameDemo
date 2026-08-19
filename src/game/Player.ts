@@ -349,7 +349,9 @@ export class Player {
   /** 战败：两套完整死亡动画随机播放其一，并隐藏手持武器。 */
   die(): void {
     this.dead = true;
+    this.scene.tweens.killTweensOf([this.go, this.weaponSprite, this.attackFx]);
     this.body.setVelocity(0, 0);
+    this.body.enable = false;
     this.actionLockedUntil = Infinity;
     this.setAction(Math.random() < 0.5 ? 'death-1' : 'death-2', true);
     this.go.setAlpha(1);
