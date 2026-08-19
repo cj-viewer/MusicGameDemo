@@ -988,7 +988,8 @@ export class TutorialCharacter extends Enemy {
         this.x + side * worldSize(18),
         this.y - worldSize(8),
         this.aimAngle,
-        this.kind
+        this.kind,
+        true
       );
     });
   }

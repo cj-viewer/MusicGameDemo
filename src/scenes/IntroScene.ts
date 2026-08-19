@@ -3,7 +3,6 @@ import { VIEW_HEIGHT, VIEW_WIDTH, ui } from '../game/displayConfig';
 import { queueCoreAssets, startBackgroundLoad } from '../game/assetManifest';
 
 const INTRO_VIDEO_KEY = 'intro-video';
-const ROCKET_VIDEO_KEY = 'intro-rocket-video';
 const INTRO_TITLE_BACKGROUND_KEY = 'intro-title-background';
 
 export class IntroScene extends Phaser.Scene {
@@ -27,7 +26,6 @@ export class IntroScene extends Phaser.Scene {
     const asset = (file: string): string => `${import.meta.env.BASE_URL}assets/${file}`;
     this.load.image(INTRO_TITLE_BACKGROUND_KEY, asset('images/backgrounds/intro/intro-title-background.png'));
     this.load.video(INTRO_VIDEO_KEY, asset('video/intro.mp4'));
-    this.load.video(ROCKET_VIDEO_KEY, asset('video/intro-rocket.mp4'));
   }
 
   create(): void {
@@ -77,7 +75,7 @@ export class IntroScene extends Phaser.Scene {
       const scale = Math.min(VIEW_WIDTH / width, VIEW_HEIGHT / height);
       this.video?.setDisplaySize(width * scale, height * scale);
     });
-    this.video.on(Phaser.GameObjects.Events.VIDEO_COMPLETE, this.playRocketIntro, this);
+    this.video.on(Phaser.GameObjects.Events.VIDEO_COMPLETE, this.finishIntro, this);
     this.video.on(Phaser.GameObjects.Events.VIDEO_ERROR, this.onVideoError, this);
     this.video.on(Phaser.GameObjects.Events.VIDEO_LOCKED, this.restoreStartButton, this);
     // 片头真正开始播放后，用这段放映时间把 MainScene 的贴图和教学 BGM 预热到缓存里，
@@ -148,19 +146,6 @@ export class IntroScene extends Phaser.Scene {
     this.video.play(false);
   }
 
-  private playRocketIntro(): void {
-    if (this.finished || !this.video) {
-      this.finishIntro();
-      return;
-    }
-    // 复用已经由玩家点击解锁的同一个 HTMLVideoElement。若创建第二个 Video
-    // GameObject，新的有声媒体元素可能再次被浏览器媒体策略拦截。
-    this.video.off(Phaser.GameObjects.Events.VIDEO_COMPLETE, this.playRocketIntro, this);
-    this.video.once(Phaser.GameObjects.Events.VIDEO_COMPLETE, this.finishIntro, this);
-    this.video.setVisible(true).setMute(false).setVolume(1);
-    this.video.changeSource(ROCKET_VIDEO_KEY, true, false);
-  }
-
   private restoreStartButton(): void {
     if (this.finished) return;
     this.started = false;
@@ -184,7 +169,6 @@ export class IntroScene extends Phaser.Scene {
     this.warmupTimer?.remove();
     this.warmupTimer = undefined;
     this.input.keyboard?.off('keydown-SPACE', this.finishIntro, this);
-    this.video?.off(Phaser.GameObjects.Events.VIDEO_COMPLETE, this.playRocketIntro, this);
     this.video?.off(Phaser.GameObjects.Events.VIDEO_COMPLETE, this.finishIntro, this);
     this.video?.off(Phaser.GameObjects.Events.VIDEO_ERROR, this.onVideoError, this);
     this.video?.off(Phaser.GameObjects.Events.VIDEO_LOCKED, this.restoreStartButton, this);

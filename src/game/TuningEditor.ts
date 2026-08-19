@@ -23,6 +23,7 @@ interface PersistedTuningConfig {
     batonAttackSpeed: number;
     batonLightAttackSpeed: number;
     batonHeavyAttackSpeed: number;
+    batonHoldFireFrequency: number;
     glowstickHeavyLaserEnabled: boolean;
     batonHeavyCrescentEnabled: boolean;
     glowstickHeavyChargeDelayMs: number;
@@ -66,12 +67,19 @@ interface PersistedTuningConfig {
     perfectReward: number;
     goodReward: number;
     patternCompleteReward: number;
+    decayPerSecond: number;
   };
   weaponJudgementDamageMultipliers: Record<WeaponId, Record<AttackJudgement, number>>;
   weaponAttackDamage: Record<WeaponId, { light: number; heavy: number }>;
   enemyProjectileDamage: { smallGuard: number; fan: number };
   weaponDropChances: Record<WeaponId, number>;
-  bgm: { tutorialSlot: number; levelSlot: number };
+  bgm: {
+    tutorialSlot: number;
+    levelSlot: number;
+    tutorialRhythmBpm: number;
+    levelRhythmBpm: number;
+    levelBeatAlignmentOffsetMs: number;
+  };
 }
 
 export function passesDropChance(chance: number, roll = Math.random()): boolean {
@@ -95,6 +103,7 @@ export class TuningEditor {
   batonAttackSpeed = 1;
   batonLightAttackSpeed = 1;
   batonHeavyAttackSpeed = 1;
+  batonHoldFireFrequency = 4;
   glowstickHeavyLaserEnabled = true;
   batonHeavyCrescentEnabled = true;
   glowstickHeavyChargeDelayMs = 0;
@@ -117,6 +126,7 @@ export class TuningEditor {
   comboPerfectReward = 4;
   comboGoodReward = 3;
   comboPatternCompleteReward = 10;
+  comboDecayPerSecond = 1;
   bossMaxHp = 1200;
   bossSizeMultiplier = 3.5;
   bossMoveSpeed = 28;
@@ -148,6 +158,9 @@ export class TuningEditor {
   enemyBulletBeatSurgeEnabled = false;
   tutorialBgmSlot = 3;
   levelBgmSlot = 1;
+  tutorialRhythmBpm = 132;
+  levelRhythmBpm = 132;
+  levelBeatAlignmentOffsetMs = 0;
 
   private playerSpeedText: Phaser.GameObjects.Text;
   private playerInfiniteRangeButton: Phaser.GameObjects.Rectangle;
@@ -370,7 +383,7 @@ export class TuningEditor {
 
   /**
    * 用稳定键名记录所有玩家/敌人战斗调参；保留小数原值，便于把 TXT 回传后直接改成默认值。
-   * BGM 与纯显示设置不属于战斗参数，因此不写入本文件。
+   * 正式关节拍对齐会影响判定听感，因此与战斗参数一并导出；纯显示设置仍不写入。
    */
   buildCombatConfigText(generatedAt = new Date()): string {
     const lines = [
@@ -391,6 +404,7 @@ export class TuningEditor {
       `batonAttackSpeed=${this.batonAttackSpeed}`,
       `batonLightAttackSpeed=${this.batonLightAttackSpeed}`,
       `batonHeavyAttackSpeed=${this.batonHeavyAttackSpeed}`,
+      `batonHoldFireFrequency=${this.batonHoldFireFrequency}`,
       `glowstickHeavyLaserEnabled=${this.glowstickHeavyLaserEnabled}`,
       `batonHeavyCrescentEnabled=${this.batonHeavyCrescentEnabled}`,
       `glowstickHeavyChargeDelayMs=${this.glowstickHeavyChargeDelayMs}`,
@@ -417,6 +431,12 @@ export class TuningEditor {
       `perfectReward=${this.comboPerfectReward}`,
       `goodReward=${this.comboGoodReward}`,
       `patternCompleteReward=${this.comboPatternCompleteReward}`,
+      `decayPerSecond=${this.comboDecayPerSecond}`,
+      '',
+      '[bgm]',
+      `tutorialRhythmBpm=${this.tutorialRhythmBpm}`,
+      `levelRhythmBpm=${this.levelRhythmBpm}`,
+      `levelBeatAlignmentOffsetMs=${this.levelBeatAlignmentOffsetMs}`,
       '',
       '[enemy]',
       `smallGuardBulletSpeed=${this.smallGuardBulletSpeed}`,
@@ -506,6 +526,7 @@ export class TuningEditor {
         batonAttackSpeed: this.batonAttackSpeed,
         batonLightAttackSpeed: this.batonLightAttackSpeed,
         batonHeavyAttackSpeed: this.batonHeavyAttackSpeed,
+        batonHoldFireFrequency: this.batonHoldFireFrequency,
         glowstickHeavyLaserEnabled: this.glowstickHeavyLaserEnabled,
         batonHeavyCrescentEnabled: this.batonHeavyCrescentEnabled,
         glowstickHeavyChargeDelayMs: this.glowstickHeavyChargeDelayMs,
@@ -548,13 +569,20 @@ export class TuningEditor {
       comboMeter: {
         perfectReward: this.comboPerfectReward,
         goodReward: this.comboGoodReward,
-        patternCompleteReward: this.comboPatternCompleteReward
+        patternCompleteReward: this.comboPatternCompleteReward,
+        decayPerSecond: this.comboDecayPerSecond
       },
       weaponJudgementDamageMultipliers: structuredClone(this.weaponJudgementDamageMultipliers),
       weaponAttackDamage: structuredClone(this.weaponAttackDamage),
       enemyProjectileDamage: { ...this.enemyProjectileDamage },
       weaponDropChances: { ...this.weaponDropChances },
-      bgm: { tutorialSlot: this.tutorialBgmSlot, levelSlot: this.levelBgmSlot }
+      bgm: {
+        tutorialSlot: this.tutorialBgmSlot,
+        levelSlot: this.levelBgmSlot,
+        tutorialRhythmBpm: this.tutorialRhythmBpm,
+        levelRhythmBpm: this.levelRhythmBpm,
+        levelBeatAlignmentOffsetMs: this.levelBeatAlignmentOffsetMs
+      }
     };
   }
 
@@ -577,6 +605,7 @@ export class TuningEditor {
       this.batonAttackSpeed = numberValue(player.batonAttackSpeed, this.batonAttackSpeed);
       this.batonLightAttackSpeed = numberValue(player.batonLightAttackSpeed, this.batonLightAttackSpeed);
       this.batonHeavyAttackSpeed = numberValue(player.batonHeavyAttackSpeed, this.batonHeavyAttackSpeed);
+      this.batonHoldFireFrequency = numberValue(player.batonHoldFireFrequency, this.batonHoldFireFrequency);
       this.glowstickHeavyLaserEnabled = booleanValue(
         player.glowstickHeavyLaserEnabled,
         this.glowstickHeavyLaserEnabled
@@ -660,6 +689,9 @@ export class TuningEditor {
         comboMeter.patternCompleteReward,
         this.comboPatternCompleteReward
       );
+      this.comboDecayPerSecond = Phaser.Math.Clamp(
+        numberValue(comboMeter.decayPerSecond, this.comboDecayPerSecond), 0, 20
+      );
     }
     for (const weaponId of ['glowsticks', 'baton'] as const) {
       for (const judgement of ['perfect', 'good', 'poor'] as const) {
@@ -695,6 +727,21 @@ export class TuningEditor {
       Math.round(numberValue(saved.bgm?.levelSlot, this.levelBgmSlot)),
       0,
       this.trackLabels.length - 1
+    );
+    this.tutorialRhythmBpm = Phaser.Math.Clamp(
+      numberValue(saved.bgm?.tutorialRhythmBpm, this.tutorialRhythmBpm),
+      40,
+      240
+    );
+    this.levelRhythmBpm = Phaser.Math.Clamp(
+      numberValue(saved.bgm?.levelRhythmBpm, this.levelRhythmBpm),
+      40,
+      240
+    );
+    this.levelBeatAlignmentOffsetMs = Phaser.Math.Clamp(
+      numberValue(saved.bgm?.levelBeatAlignmentOffsetMs, this.levelBeatAlignmentOffsetMs),
+      -500,
+      500
     );
   }
 

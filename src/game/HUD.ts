@@ -9,7 +9,7 @@ const BAR_Y = 668;
 const PANEL_WIDTH = 780;
 /** 正式关 Combo / 武器框严格收进两侧前景物件之间的可见空隙。 */
 const COMBO_PANEL_X = 503;
-const COMBO_PANEL_Y = 662;
+const COMBO_PANEL_Y = 644;
 const COMBO_PANEL_WIDTH = 184;
 const COMBO_PANEL_HEIGHT = 50;
 const COMBO_PANEL_CENTER_X = COMBO_PANEL_X + COMBO_PANEL_WIDTH / 2;
@@ -93,6 +93,8 @@ export class HUD {
   private bossHealthLayer: Phaser.GameObjects.Container;
   private bossHealthFill: Phaser.GameObjects.Rectangle;
   private bossHealthValue: Phaser.GameObjects.Text;
+  private gameplayHudVisible = true;
+  private tutorialComboVisible = false;
 
   constructor(scene: Phaser.Scene, conductor: Conductor) {
     this.scene = scene;
@@ -513,10 +515,24 @@ export class HUD {
     this.measureDividers.clear();
   }
 
-  /** 教学关使用 PSD 自带的底部状态栏；正式关恢复现有动态 HUD。 */
+  /** 教学关只复用正式关的 ComboMeter；正式关显示完整动态 HUD。 */
   setGameplayHudVisible(visible: boolean): void {
-    this.screenLayer.setVisible(visible);
-    this.playerHpLayer.setVisible(visible);
+    this.gameplayHudVisible = visible;
+    this.refreshHudVisibility();
+  }
+
+  setTutorialComboVisible(visible: boolean): void {
+    this.tutorialComboVisible = visible;
+    this.refreshHudVisibility();
+  }
+
+  private refreshHudVisibility(): void {
+    this.screenLayer.setVisible(this.gameplayHudVisible || this.tutorialComboVisible);
+    this.formalStatusLayer.setVisible(this.gameplayHudVisible || this.tutorialComboVisible);
+    this.playerHpLayer.setVisible(this.gameplayHudVisible);
+    this.waveText.setVisible(this.gameplayHudVisible);
+    this.stateText.setVisible(this.gameplayHudVisible);
+    this.messageText.setVisible(this.gameplayHudVisible);
   }
 
   /** 正式关每帧调用：HP 是玩家正式 HUD 中唯一使用世界坐标的组件。 */
@@ -741,6 +757,23 @@ export class HUD {
       scaleY: 1.6,
       yoyo: true,
       duration: 120
+    });
+  }
+
+  flashComboInsufficient(): void {
+    if (!this.formalStatusLayer.visible || !this.screenLayer.visible) return;
+    const target = this.formalStatusLayer;
+    this.scene.tweens.killTweensOf(target);
+    target.setAngle(-1.5);
+    this.scene.tweens.add({
+      targets: target,
+      angle: 0,
+      duration: 180,
+      ease: 'Bounce.easeOut'
+    });
+    this.meterText.setColor('#dc2626');
+    this.scene.time.delayedCall(220, () => {
+      this.meterText.setColor(this.feverMode ? '#ffe39a' : HUD_TEXT_COLOR);
     });
   }
 

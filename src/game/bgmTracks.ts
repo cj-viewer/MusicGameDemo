@@ -1,4 +1,4 @@
-// bgm3.mp3 的实测节拍：对全曲 onset 包络做自相关 + 网格相位搜索得出 BPM，首拍在文件内 0.026s 处。
+// 默认教学 / 正式曲目的节拍重新按全曲 onset 包络与网格相位搜索校准；loopBeats 同步按完整音频时长取整。
 export interface BgmTrack {
   key: string;
   label: string;
@@ -10,9 +10,9 @@ export interface BgmTrack {
 
 export const BGM_TRACKS: readonly BgmTrack[] = [
   { key: 'bgm-1', label: 'bgm1.mp3', sourceBpm: 145, firstBeatOffset: 0.012, loopBeats: 498 },
-  { key: 'bgm-2', label: 'bgm2.mp3', sourceBpm: 176.47, firstBeatOffset: 0.02, loopBeats: 624 },
+  { key: 'bgm-2', label: 'bgm2.mp3', sourceBpm: 174.002, firstBeatOffset: 0.231, loopBeats: 616 },
   { key: 'bgm-3', label: 'bgm3.mp3', sourceBpm: 146.32, firstBeatOffset: 0.026, loopBeats: 616 },
-  { key: 'bgm-0', label: 'bgm0.mp3', sourceBpm: 153.846, firstBeatOffset: 0.09, loopBeats: 438 }
+  { key: 'bgm-0', label: 'bgm0.mp3', sourceBpm: 153.04, firstBeatOffset: 0.245, loopBeats: 436 }
 ];
 
 export const DEFAULT_TUTORIAL_BGM_SLOT = 3;

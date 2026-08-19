@@ -46,7 +46,8 @@ export const GLOWSTICKS: WeaponDef = {
 export const BATON: WeaponDef = {
   id: 'baton',
   name: '警棍',
-  pattern: ['L', 'L', 'H', 'H'],
+  // 四拍语义：轻击、重击按下、重击松开、轻击。
+  pattern: ['L', 'H', 'H', 'L'],
   color: 0xfbbf24
 };
 

@@ -32,7 +32,6 @@ const DODGE_ANIMATION_FOLLOW_THROUGH_MS = PLAYER_DASH_ANIMATION_DURATION_MS - DO
 const DODGE_TRAIL_INTERVAL_MS = 10;
 /** 两倍原始 0.55 会超过 Phaser 的上限，因此取最大可见值。 */
 const DODGE_TRAIL_INITIAL_ALPHA = 1;
-const EMPTY_COMBO_DODGE_INTERVAL_MS = 500;
 /** 闪避踩拍判定窗口：拍点前后各 0.12 秒 */
 const DODGE_BEAT_WINDOW = 0.12;
 const ATTACK_EFFECT_DURATION_MS = 200;
@@ -81,10 +80,10 @@ export class Player {
   private action: PlayerAction = 'idle';
   private actionLockedUntil = 0;
   private weaponAttackUntil = 0;
-  private lastDodgeAt = -Infinity;
   private knockbackUntil = 0;
   private knockbackVelocity = new Phaser.Math.Vector2();
   private dead = false;
+  private scriptedWalk = false;
 
   constructor(scene: MainScene, x: number, y: number) {
     this.scene = scene;
@@ -154,6 +153,8 @@ export class Player {
     // 移动（闪避期间由 tween 控制位移）
     if (!this.isDodging && timeMs < this.knockbackUntil) {
       this.body.setVelocity(this.knockbackVelocity.x, this.knockbackVelocity.y);
+    } else if (!this.isDodging && this.scriptedWalk) {
+      this.body.setVelocity(0, 0);
     } else if (!this.isDodging) {
       const dir = this.moveDir();
       const moveSpeed = this.scene.getPlayerMoveSpeed();
@@ -169,11 +170,12 @@ export class Player {
       );
     }
 
-    this.refreshAimDirection();
+    // 剧情自动行走时保留场景指定朝向，不让鼠标位置或自动锁敌反向覆盖。
+    if (!this.scriptedWalk) this.refreshAimDirection();
 
     // 正式素材默认朝左；锁定方向在右侧时水平翻转。
     this.go.setFlipX(Math.cos(this.aimAngle) >= 0);
-    const moving = this.isDodging || this.body.velocity.length() > 20;
+    const moving = this.isDodging || this.scriptedWalk || this.body.velocity.length() > 20;
     if (this.isDodging) {
       this.setAction('dash');
     } else if (timeMs >= this.actionLockedUntil) {
@@ -292,18 +294,13 @@ export class Player {
     if (!conductor.started) return false;
 
     const dodgeStartedAt = this.scene.time.now;
-    if (
-      this.scene.combo.progress <= 0 &&
-      dodgeStartedAt - this.lastDodgeAt < EMPTY_COMBO_DODGE_INTERVAL_MS
-    ) return false;
-
     const dir = this.moveDir();
     if (dir.lengthSq() === 0) return false;
 
     const t = conductor.now();
     const { offset } = conductor.nearestBeat(t);
     const onBeat = Math.abs(offset) <= DODGE_BEAT_WINDOW;
-    this.scene.consumeDodgeComboMeter(onBeat);
+    if (!this.scene.consumeDodgeComboMeter(onBeat)) return false;
 
     const bounds = this.scene.physics.world.bounds;
     const padX = this.body.halfWidth + 4;
@@ -312,7 +309,6 @@ export class Player {
     const ty = Phaser.Math.Clamp(this.y + dir.y * DODGE_DISTANCE, bounds.top + padY, bounds.bottom - padY);
 
     this.isDodging = true;
-    this.lastDodgeAt = dodgeStartedAt;
     this.actionLockedUntil = dodgeStartedAt + DODGE_DURATION_MS + DODGE_ANIMATION_FOLLOW_THROUGH_MS;
     this.setAction('dash', true);
     this.body.setVelocity(0, 0);
@@ -346,17 +342,26 @@ export class Player {
     return true;
   }
 
-  takeDamage(amount: number): void {
+  takeDamage(amount: number, impactColor = 0xef4444): void {
     const now = this.scene.time.now;
     if (this.isDodging || this.dead || now < this.invulnUntil) return;
     this.hp = Math.max(0, this.hp - amount);
     this.invulnUntil = now + 600;
     this.scene.hud.setHp(this.hp, this.maxHp);
     this.flashHitWarm();
-    this.scene.spawnImpactFx(this.x, this.y, 0xef4444, true);
+    this.scene.spawnImpactFx(this.x, this.y, impactColor, true);
     if (this.hp <= 0) {
       this.scene.onPlayerDied();
     }
+  }
+
+  setScriptedWalk(active: boolean): void {
+    this.scriptedWalk = active;
+    this.body.setVelocity(0, 0);
+  }
+
+  setScriptedPosition(x: number, y: number): void {
+    this.body.reset(x, y);
   }
 
   /** 攻击触发前也刷新一次，保证鼠标按下的同一帧就使用最新指向。 */
@@ -444,6 +449,7 @@ export class Player {
   }
 
   private moveDir(): Phaser.Math.Vector2 {
+    if (!this.scene.isPlayerControlEnabled()) return new Phaser.Math.Vector2();
     const pad = this.scene.input.gamepad?.pad1;
     if (pad) {
       const stick = applyStickDeadzone(pad.leftStick.x, pad.leftStick.y);
