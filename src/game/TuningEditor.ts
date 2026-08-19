@@ -68,6 +68,8 @@ interface PersistedTuningConfig {
     goodReward: number;
     patternCompleteReward: number;
     decayPerSecond: number;
+    dodgeOnBeatCost: number;
+    dodgeOffBeatCost: number;
   };
   weaponJudgementDamageMultipliers: Record<WeaponId, Record<AttackJudgement, number>>;
   weaponAttackDamage: Record<WeaponId, { light: number; heavy: number }>;
@@ -78,6 +80,9 @@ interface PersistedTuningConfig {
     levelSlot: number;
     tutorialRhythmBpm: number;
     levelRhythmBpm: number;
+    /** 歌曲本身的实际播放 BPM，独立于 tutorialRhythmBpm / levelRhythmBpm 的判定节拍。 */
+    tutorialSongBpm: number;
+    levelSongBpm: number;
     levelBeatAlignmentOffsetMs: number;
   };
 }
@@ -127,6 +132,10 @@ export class TuningEditor {
   comboGoodReward = 3;
   comboPatternCompleteReward = 10;
   comboDecayPerSecond = 1;
+  /** 踩拍闪避消耗的 ComboMeter 百分比（0-100）。 */
+  dodgeOnBeatCost = 10;
+  /** 错拍闪避消耗的 ComboMeter 百分比（0-100）。 */
+  dodgeOffBeatCost = 20;
   bossMaxHp = 1200;
   bossSizeMultiplier = 3.5;
   bossMoveSpeed = 28;
@@ -160,6 +169,9 @@ export class TuningEditor {
   levelBgmSlot = 1;
   tutorialRhythmBpm = 132;
   levelRhythmBpm = 132;
+  /** 歌曲本身的实际播放 BPM；只影响 BGM 播放速度，不影响判定节拍。 */
+  tutorialSongBpm = 132;
+  levelSongBpm = 132;
   levelBeatAlignmentOffsetMs = 0;
 
   private playerSpeedText: Phaser.GameObjects.Text;
@@ -432,10 +444,14 @@ export class TuningEditor {
       `goodReward=${this.comboGoodReward}`,
       `patternCompleteReward=${this.comboPatternCompleteReward}`,
       `decayPerSecond=${this.comboDecayPerSecond}`,
+      `dodgeOnBeatCost=${this.dodgeOnBeatCost}`,
+      `dodgeOffBeatCost=${this.dodgeOffBeatCost}`,
       '',
       '[bgm]',
       `tutorialRhythmBpm=${this.tutorialRhythmBpm}`,
       `levelRhythmBpm=${this.levelRhythmBpm}`,
+      `tutorialSongBpm=${this.tutorialSongBpm}`,
+      `levelSongBpm=${this.levelSongBpm}`,
       `levelBeatAlignmentOffsetMs=${this.levelBeatAlignmentOffsetMs}`,
       '',
       '[enemy]',
@@ -570,7 +586,9 @@ export class TuningEditor {
         perfectReward: this.comboPerfectReward,
         goodReward: this.comboGoodReward,
         patternCompleteReward: this.comboPatternCompleteReward,
-        decayPerSecond: this.comboDecayPerSecond
+        decayPerSecond: this.comboDecayPerSecond,
+        dodgeOnBeatCost: this.dodgeOnBeatCost,
+        dodgeOffBeatCost: this.dodgeOffBeatCost
       },
       weaponJudgementDamageMultipliers: structuredClone(this.weaponJudgementDamageMultipliers),
       weaponAttackDamage: structuredClone(this.weaponAttackDamage),
@@ -581,6 +599,8 @@ export class TuningEditor {
         levelSlot: this.levelBgmSlot,
         tutorialRhythmBpm: this.tutorialRhythmBpm,
         levelRhythmBpm: this.levelRhythmBpm,
+        tutorialSongBpm: this.tutorialSongBpm,
+        levelSongBpm: this.levelSongBpm,
         levelBeatAlignmentOffsetMs: this.levelBeatAlignmentOffsetMs
       }
     };
@@ -692,6 +712,12 @@ export class TuningEditor {
       this.comboDecayPerSecond = Phaser.Math.Clamp(
         numberValue(comboMeter.decayPerSecond, this.comboDecayPerSecond), 0, 20
       );
+      this.dodgeOnBeatCost = Phaser.Math.Clamp(
+        numberValue(comboMeter.dodgeOnBeatCost, this.dodgeOnBeatCost), 0, 100
+      );
+      this.dodgeOffBeatCost = Phaser.Math.Clamp(
+        numberValue(comboMeter.dodgeOffBeatCost, this.dodgeOffBeatCost), 0, 100
+      );
     }
     for (const weaponId of ['glowsticks', 'baton'] as const) {
       for (const judgement of ['perfect', 'good', 'poor'] as const) {
@@ -735,6 +761,16 @@ export class TuningEditor {
     );
     this.levelRhythmBpm = Phaser.Math.Clamp(
       numberValue(saved.bgm?.levelRhythmBpm, this.levelRhythmBpm),
+      40,
+      240
+    );
+    this.tutorialSongBpm = Phaser.Math.Clamp(
+      numberValue(saved.bgm?.tutorialSongBpm, this.tutorialSongBpm),
+      40,
+      240
+    );
+    this.levelSongBpm = Phaser.Math.Clamp(
+      numberValue(saved.bgm?.levelSongBpm, this.levelSongBpm),
       40,
       240
     );

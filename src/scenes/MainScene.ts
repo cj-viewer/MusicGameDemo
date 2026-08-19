@@ -58,7 +58,7 @@ import {
 const BPM = 132;
 
 /** BGM 通道归一显示为 100%；基础混音为上一版四分之一后的两倍。 */
-const BGM_VOLUME = 0.125;
+const BGM_VOLUME = 0.2;
 
 const DEFAULT_MASTER_VOLUME = 1;
 const MAX_MASTER_VOLUME = 2;
@@ -212,7 +212,7 @@ const TUTORIAL_ENERGY_DIALOGUE_LINES = [
   '下面的能量会随着时间而流逝。',
   '按对节拍会增加能量。',
   '闪避会消耗能量。',
-  '能量会给你的攻击带来加成。',
+  '能量会给我的攻击带来加成。',
   '能量满了会触发大招。',
   '准备好了，去现场吧！'
 ] as const;
@@ -263,7 +263,11 @@ type CombatSettingKey =
   | 'comboDecayPerSecond'
   | 'tutorialRhythmBpm'
   | 'levelRhythmBpm'
+  | 'tutorialSongBpm'
+  | 'levelSongBpm'
   | 'levelBeatAlignmentOffsetMs'
+  | 'dodgeOnBeatCost'
+  | 'dodgeOffBeatCost'
   | 'smallGuardDamage'
   | 'fanDamage'
   | 'glowstickDropChance'
@@ -284,6 +288,14 @@ type CombatSettingKey =
   | 'bossNoteFormationSpeed'
   | 'bossNoteFormationBulletSize'
   | 'bossMinionCount';
+
+type BpmSettingKey = 'tutorialRhythmBpm' | 'levelRhythmBpm' | 'tutorialSongBpm' | 'levelSongBpm';
+const BPM_SETTING_KEYS: readonly BpmSettingKey[] = [
+  'tutorialRhythmBpm',
+  'levelRhythmBpm',
+  'tutorialSongBpm',
+  'levelSongBpm'
+];
 
 interface VolumeSliderVisual {
   fill: Phaser.GameObjects.Rectangle;
@@ -320,6 +332,8 @@ export class MainScene extends Phaser.Scene {
   private pendingBgmSwitch?: { track: BgmTrack; playNow: boolean };
   private levelBgmAlignmentDirty = false;
   private rhythmBpmDirty = false;
+  /** 歌曲本身 BPM（只影响播放速度）修改后，关闭 P Menu 时需要重新对齐播放。 */
+  private songBpmDirty = false;
   private tuningEditor!: TuningEditor;
   private masterVolume = DEFAULT_MASTER_VOLUME;
   private bgmChannelVolume = DEFAULT_BGM_CHANNEL_VOLUME;
@@ -341,7 +355,7 @@ export class MainScene extends Phaser.Scene {
   private manualAimToggleText!: Phaser.GameObjects.Text;
   private volumePanelVisible = false;
   private volumeDragging: VolumeControlChannel | null = null;
-  private fpvWindowEnabled = true;
+  private fpvWindowEnabled = false;
   private fpvToggleButton!: Phaser.GameObjects.Rectangle;
   private fpvToggleText!: Phaser.GameObjects.Text;
   /** ESC 设置打开时，主场景和观察窗都保持在同一帧。 */
@@ -965,6 +979,12 @@ export class MainScene extends Phaser.Scene {
     });
     this.input.keyboard!.on('keyup-ENTER', () => this.endBatonHeavyHold(true));
 
+    // 调试：V 键一键通关，跳过所有波次直接进入胜利画面
+    this.input.keyboard!.on('keydown-V', () => {
+      if (this.gamePaused || this.state === 'tutorialOutro') return;
+      if (this.state === 'title' || this.state === 'over' || this.state === 'victory') return;
+      this.finishVictory();
+    });
   }
 
   private restartGame(): void {
@@ -1342,7 +1362,7 @@ export class MainScene extends Phaser.Scene {
    * 若倒数时间足够则用 delay 等到那一刻播放，否则直接以 seek 跳过已经过去的部分。
    */
   private playBgmAlignedToBeat(firstBeat: number): void {
-    const playbackRate = this.currentRhythmBpm() / this.currentBgmTrack.sourceBpm;
+    const playbackRate = this.currentSongBpm() / this.currentBgmTrack.sourceBpm;
     const formalLevel = this.isFormalLevelState();
     const alignmentOffset = formalLevel ? this.tuningEditor.levelBeatAlignmentOffsetMs / 1000 : 0;
     const effectiveFirstBeatOffset = Math.max(0, this.currentBgmTrack.firstBeatOffset + alignmentOffset);
@@ -1362,6 +1382,7 @@ export class MainScene extends Phaser.Scene {
 
   private switchBgmTrack(track: BgmTrack, playNow = true): void {
     const rhythmBpm = this.currentRhythmBpm();
+    const songBpm = this.currentSongBpm();
     if (this.currentBgmTrack.key === track.key && this.bgm) {
       this.conductor.retune(rhythmBpm);
       return;
@@ -1381,7 +1402,7 @@ export class MainScene extends Phaser.Scene {
     this.bgm = this.sound.add(track.key, {
       loop: false,
       volume: BGM_VOLUME * this.bgmChannelVolume,
-      rate: rhythmBpm / track.sourceBpm
+      rate: songBpm / track.sourceBpm
     }) as Phaser.Sound.WebAudioSound | Phaser.Sound.HTML5AudioSound;
     this.bgm.on(Phaser.Sound.Events.COMPLETE, this.onBgmComplete, this);
     if (playNow && this.conductor.started) {
@@ -1641,17 +1662,18 @@ export class MainScene extends Phaser.Scene {
       target.push(this.add.text(690, y, label, {
         fontFamily: 'Arial', fontSize: '16px', color: '#cbd5e1'
       }).setOrigin(0, 0.5));
-      const initialValue = key === 'tutorialRhythmBpm' || key === 'levelRhythmBpm'
-        ? `${this.tuningEditor[key].toFixed(2)} BPM`
+      const isBpmKey = BPM_SETTING_KEYS.includes(key as BpmSettingKey);
+      const initialValue = isBpmKey
+        ? `${this.tuningEditor[key as BpmSettingKey].toFixed(2)} BPM`
         : '';
       const valueText = this.add.text(1030, y, initialValue, {
         fontFamily: 'Arial', fontSize: '15px', color: '#67e8f9'
       }).setOrigin(0.5);
-      if (key === 'tutorialRhythmBpm' || key === 'levelRhythmBpm') {
+      if (isBpmKey) {
         valueText.setInteractive({ useHandCursor: true });
         valueText.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
           pointer.event.stopPropagation();
-          this.promptForRhythmBpm(key);
+          this.promptForBpmSetting(key as BpmSettingKey);
         });
         valueText.on('pointerover', () => valueText.setColor('#ffffff'));
         valueText.on('pointerout', () => valueText.setColor('#67e8f9'));
@@ -1691,19 +1713,53 @@ export class MainScene extends Phaser.Scene {
       addCombatRow(playerDamagePageObjects, key, 158 + index * 44, label, step);
     });
 
+    const COMBO_METER_ROW_H = 40;
+    const COMBO_METER_HEADER_H = 26;
+    let comboMeterY = 145;
+
     const comboMeterRows: Array<[CombatSettingKey, string, number]> = [
       ['comboPerfectReward', 'PERFECT 单拍量表', 1],
       ['comboGoodReward', 'GOOD 单拍量表', 1],
       ['comboPatternCompleteReward', '完整四段 Pattern 奖励', 1],
       ['comboDecayPerSecond', '量表每秒衰减', 0.1],
-      ['tutorialRhythmBpm', '教学关节奏 BPM', 0.1],
-      ['levelRhythmBpm', '第一关节奏 BPM', 0.1],
-      ['levelBeatAlignmentOffsetMs', '正式关节拍对齐偏移', 5]
+      ['dodgeOnBeatCost', '踩拍闪避消耗 %', 1],
+      ['dodgeOffBeatCost', '错拍闪避消耗 %', 1]
     ];
-    comboMeterRows.forEach(([key, label, step], index) => {
-      addCombatRow(comboMeterPageObjects, key, 145 + index * 50, label, step);
+    comboMeterRows.forEach(([key, label, step]) => {
+      addCombatRow(comboMeterPageObjects, key, comboMeterY, label, step);
+      comboMeterY += COMBO_METER_ROW_H;
     });
-    comboMeterPageObjects.push(this.add.text(690, 515, '点击 BPM 数值可直接输入（40–240）；关闭 P Menu 后立即重新对齐。', {
+
+    // BPM 拆成两类：判定节奏只影响拍点判定窗口，歌曲本身只影响 BGM 实际播放速度，二者互不影响。
+    comboMeterPageObjects.push(this.add.text(690, comboMeterY, '判定节奏（只影响拍点判定，不改变音乐播放速度）', {
+      fontFamily: 'Arial', fontSize: '14px', fontStyle: 'bold', color: '#fbbf24'
+    }).setOrigin(0, 0.5));
+    comboMeterY += COMBO_METER_HEADER_H;
+    const rhythmBpmRows: Array<[CombatSettingKey, string, number]> = [
+      ['tutorialRhythmBpm', '教学关判定节奏 BPM', 0.5],
+      ['levelRhythmBpm', '第一关判定节奏 BPM', 0.5]
+    ];
+    rhythmBpmRows.forEach(([key, label, step]) => {
+      addCombatRow(comboMeterPageObjects, key, comboMeterY, label, step);
+      comboMeterY += COMBO_METER_ROW_H;
+    });
+
+    comboMeterPageObjects.push(this.add.text(690, comboMeterY, '歌曲本身（只改变 BGM 播放速度，不影响判定拍点）', {
+      fontFamily: 'Arial', fontSize: '14px', fontStyle: 'bold', color: '#67e8f9'
+    }).setOrigin(0, 0.5));
+    comboMeterY += COMBO_METER_HEADER_H;
+    const songBpmRows: Array<[CombatSettingKey, string, number]> = [
+      ['tutorialSongBpm', '教学关歌曲播放 BPM', 0.5],
+      ['levelSongBpm', '第一关歌曲播放 BPM', 0.5]
+    ];
+    songBpmRows.forEach(([key, label, step]) => {
+      addCombatRow(comboMeterPageObjects, key, comboMeterY, label, step);
+      comboMeterY += COMBO_METER_ROW_H;
+    });
+
+    addCombatRow(comboMeterPageObjects, 'levelBeatAlignmentOffsetMs', comboMeterY, '正式关节拍对齐偏移', 5);
+    comboMeterY += COMBO_METER_ROW_H;
+    comboMeterPageObjects.push(this.add.text(690, comboMeterY, '点击 BPM 数值可直接输入（40–240）；关闭 P Menu 后立即重新对齐。', {
       fontFamily: 'Arial', fontSize: '14px', color: '#94a3b8'
     }).setOrigin(0, 0.5));
 
@@ -2031,8 +2087,9 @@ export class MainScene extends Phaser.Scene {
         : BGM_TRACKS[this.tuningEditor.tutorialBgmSlot];
       this.switchBgmTrack(selected);
       const formalLevel = this.isFormalLevelState();
-      if (this.rhythmBpmDirty || (this.levelBgmAlignmentDirty && formalLevel)) {
+      if (this.rhythmBpmDirty || this.songBpmDirty || (this.levelBgmAlignmentDirty && formalLevel)) {
         this.rhythmBpmDirty = false;
+        this.songBpmDirty = false;
         this.levelBgmAlignmentDirty = false;
         this.bgm.stop();
         this.playBgmAlignedToBeat(this.bgmFirstBeat);
@@ -2053,6 +2110,13 @@ export class MainScene extends Phaser.Scene {
     return this.isFormalLevelState()
       ? this.tuningEditor.levelRhythmBpm
       : this.tuningEditor.tutorialRhythmBpm;
+  }
+
+  /** 歌曲本身实际播放的 BPM，只决定 BGM 播放速度，和判定节拍（currentRhythmBpm）互不影响。 */
+  private currentSongBpm(): number {
+    return this.isFormalLevelState()
+      ? this.tuningEditor.levelSongBpm
+      : this.tuningEditor.tutorialSongBpm;
   }
   private getFpvMiniScene(): FpvMiniScene | undefined {
     return this.scene.isActive('FpvMiniScene') ? (this.scene.get('FpvMiniScene') as FpvMiniScene) : undefined;
@@ -2316,6 +2380,21 @@ export class MainScene extends Phaser.Scene {
         );
         this.rhythmBpmDirty = true;
         break;
+      case 'tutorialSongBpm':
+      case 'levelSongBpm':
+        this.tuningEditor[key] = Phaser.Math.Clamp(
+          Math.round((this.tuningEditor[key] + delta) * 10) / 10,
+          40,
+          240
+        );
+        this.songBpmDirty = true;
+        break;
+      case 'dodgeOnBeatCost':
+        this.tuningEditor.dodgeOnBeatCost = Phaser.Math.Clamp(this.tuningEditor.dodgeOnBeatCost + delta, 0, 100);
+        break;
+      case 'dodgeOffBeatCost':
+        this.tuningEditor.dodgeOffBeatCost = Phaser.Math.Clamp(this.tuningEditor.dodgeOffBeatCost + delta, 0, 100);
+        break;
       case 'levelBeatAlignmentOffsetMs':
         this.tuningEditor.levelBeatAlignmentOffsetMs = Phaser.Math.Clamp(
           Math.round(this.tuningEditor.levelBeatAlignmentOffsetMs + delta),
@@ -2404,14 +2483,20 @@ export class MainScene extends Phaser.Scene {
     this.refreshCombatControls();
   }
 
-  private promptForRhythmBpm(key: 'tutorialRhythmBpm' | 'levelRhythmBpm'): void {
-    const label = key === 'tutorialRhythmBpm' ? '教学关节奏 BPM' : '第一关节奏 BPM';
-    const input = window.prompt(`${label}\n请输入 40–240 之间的数值（支持小数）：`, `${this.tuningEditor[key]}`);
+  private promptForBpmSetting(key: BpmSettingKey): void {
+    const labels: Record<BpmSettingKey, string> = {
+      tutorialRhythmBpm: '教学关判定节奏 BPM',
+      levelRhythmBpm: '第一关判定节奏 BPM',
+      tutorialSongBpm: '教学关歌曲播放 BPM',
+      levelSongBpm: '第一关歌曲播放 BPM'
+    };
+    const input = window.prompt(`${labels[key]}\n请输入 40–240 之间的数值（支持小数）：`, `${this.tuningEditor[key]}`);
     if (input === null) return;
     const parsed = Number(input.trim());
     if (!Number.isFinite(parsed)) return;
     this.tuningEditor[key] = Phaser.Math.Clamp(Math.round(parsed * 100) / 100, 40, 240);
-    this.rhythmBpmDirty = true;
+    if (key === 'tutorialSongBpm' || key === 'levelSongBpm') this.songBpmDirty = true;
+    else this.rhythmBpmDirty = true;
     this.refreshCombatControls();
   }
 
@@ -2455,7 +2540,11 @@ export class MainScene extends Phaser.Scene {
       comboDecayPerSecond: `${this.tuningEditor.comboDecayPerSecond.toFixed(1)} 点/秒`,
       tutorialRhythmBpm: `${this.tuningEditor.tutorialRhythmBpm.toFixed(2)} BPM`,
       levelRhythmBpm: `${this.tuningEditor.levelRhythmBpm.toFixed(2)} BPM`,
+      tutorialSongBpm: `${this.tuningEditor.tutorialSongBpm.toFixed(2)} BPM`,
+      levelSongBpm: `${this.tuningEditor.levelSongBpm.toFixed(2)} BPM`,
       levelBeatAlignmentOffsetMs: `${this.tuningEditor.levelBeatAlignmentOffsetMs >= 0 ? '+' : ''}${Math.round(this.tuningEditor.levelBeatAlignmentOffsetMs)} ms`,
+      dodgeOnBeatCost: `${Math.round(this.tuningEditor.dodgeOnBeatCost)}%`,
+      dodgeOffBeatCost: `${Math.round(this.tuningEditor.dodgeOffBeatCost)}%`,
       smallGuardDamage: `${Math.round(this.tuningEditor.enemyProjectileDamage.smallGuard)} 点`,
       fanDamage: `${Math.round(this.tuningEditor.enemyProjectileDamage.fan)} 点`,
       glowstickDropChance: percent(this.tuningEditor.weaponDropChances.glowsticks),
@@ -3674,7 +3763,7 @@ export class MainScene extends Phaser.Scene {
     const camera = this.cameras.main;
     const view = camera.worldView;
     const message = this.add
-      .text(view.centerX, view.bottom - 72, '你怒闯演唱会失败。\n按R再试一次。', {
+      .text(view.centerX, view.bottom - 72, '我怒闯演唱会失败。\n按R再试一次。', {
         fontFamily: 'Arial',
         fontSize: '24px',
         color: '#e5e7eb',
@@ -5538,9 +5627,9 @@ export class MainScene extends Phaser.Scene {
     return Math.expm1(exponent * clampedProgress) / Math.expm1(exponent);
   }
 
-  /** 踩拍闪避扣半级，错拍闪避扣一级；Fever 中等比例缩短剩余持续时间。 */
+  /** 踩拍/错拍闪避消耗的百分比在 P Menu 里可调；Fever 中等比例缩短剩余持续时间。 */
   consumeDodgeComboMeter(onBeat: boolean): boolean {
-    const cost = onBeat ? 10 : 20;
+    const cost = onBeat ? this.tuningEditor.dodgeOnBeatCost : this.tuningEditor.dodgeOffBeatCost;
     if (!this.combo.canSpendProgress(cost)) {
       this.hud.flashComboInsufficient();
       return false;
