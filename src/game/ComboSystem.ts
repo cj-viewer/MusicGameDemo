@@ -46,10 +46,6 @@ export type InputResult =
     }
   | { type: 'ignored'; reason: 'consumed' | 'notStarted' };
 
-/** Fever Time 持续拍数（4 小节） */
-export const FEVER_DURATION_BEATS = 16;
-export const FEVER_ACTIVE_GAIN_SCALE = 0.5;
-
 export interface ComboEnergyRewards {
   perfect: number;
   good: number;
@@ -78,8 +74,8 @@ export class ComboSystem {
   private comboStep = 0;
   /** 正在等待的绝对拍号；用于在该拍判定窗结束后结算漏拍。 */
   private expectedBeat = -1;
-  /** Fever Time 持续到该整数拍，-1 表示未激活 */
-  private feverUntilBeat = -1;
+  /** Fever 只覆盖清屏动画；由 MainScene 在清屏完成回调中显式结束。 */
+  private feverEnabled = false;
   /** 教学以玩家真实输入时间估算的设备延迟；正值表示输入到达程序时偏晚。 */
   private inputLatencyOffset = 0;
   private energyRewards: ComboEnergyRewards = {
@@ -123,29 +119,17 @@ export class ComboSystem {
   }
 
   feverActive(): boolean {
-    return this.conductor.beatFloatAt(this.conductor.now()) < this.feverUntilBeat;
+    return this.feverEnabled;
   }
 
-  /** Fever 剩余比例 0~1，用于 HUD 倒计时环 */
-  feverRemainRatio(): number {
-    if (!this.feverActive()) return 0;
-    const bf = this.conductor.beatFloatAt(this.conductor.now());
-    return clamp((this.feverUntilBeat - bf) / FEVER_DURATION_BEATS, 0, 1);
-  }
-
-  /** 按浮点拍位置精确结束 Fever，避免小数拍回充被量化成整拍。 */
-  updateFever(): boolean {
-    if (this.feverUntilBeat <= 0) return false;
-    if (this.conductor.beatFloatAt(this.conductor.now()) < this.feverUntilBeat) return false;
-    this.feverUntilBeat = -1;
-    this.progress = 0;
-    return true;
-  }
-
-  /** Meter 满时进入 Fever Time；结束后 Meter 清零重新积累 */
+  /** Meter 满时进入清屏 Fever；Meter 立刻清零。 */
   startFever(): void {
-    const bf = this.conductor.beatFloatAt(this.conductor.now());
-    this.feverUntilBeat = Math.floor(Math.max(bf, 0)) + FEVER_DURATION_BEATS;
+    this.feverEnabled = true;
+    this.progress = 0;
+  }
+
+  endFever(): void {
+    this.feverEnabled = false;
     this.progress = 0;
   }
 
@@ -289,54 +273,28 @@ export class ComboSystem {
     this.progress = Math.min(100, this.progress + Math.max(0, amount));
   }
 
-  /** 普通状态按点数衰减；Fever 使用自己的拍数倒计时，不重复扣除。 */
+  /** 普通状态按点数衰减；清屏 Fever 期间 Meter 保持为 0。 */
   decayProgress(amount: number): void {
     if (this.feverActive()) return;
     this.progress = Math.max(0, this.progress - Math.max(0, amount));
   }
 
-  /** 普通状态读取当前点数；Fever 状态把剩余持续时间换算为 0–100 点可用能量。 */
+  /** Meter 清零后的清屏 Fever 不再提供可消费能量。 */
   canSpendProgress(amount: number): boolean {
     const required = Math.max(0, amount);
     if (required <= 0) return true;
-    const available = this.feverActive() ? this.feverRemainRatio() * 100 : this.progress;
-    return available + 1e-6 >= required;
+    return this.progress + 1e-6 >= required;
   }
 
-  /**
-   * 直接消耗 ComboMeter 点数。普通状态最低扣到 0；Fever 状态按总能量比例缩短持续拍数。
-   * 返回 true 表示本次消耗使 Fever 立即结束。
-   */
-  spendProgress(amount: number): boolean {
+  /** 直接消耗 ComboMeter 点数，最低扣到 0。 */
+  spendProgress(amount: number): void {
     const clampedAmount = Math.max(0, amount);
-    if (!this.feverActive()) {
-      this.progress = Math.max(0, this.progress - clampedAmount);
-      return false;
-    }
-
-    const beatFloat = Math.max(0, this.conductor.beatFloatAt(this.conductor.now()));
-    this.feverUntilBeat -= (clampedAmount / 100) * FEVER_DURATION_BEATS;
-    if (this.feverUntilBeat > beatFloat) return false;
-
-    this.feverUntilBeat = -1;
-    this.progress = 0;
-    return true;
+    this.progress = Math.max(0, this.progress - clampedAmount);
   }
 
   private addCorrectInputProgress(amount: number): void {
     if (!this.progressGainEnabled) return;
-    if (!this.feverActive()) {
-      this.addProgress(amount);
-      return;
-    }
-
-    const gainedEnergy = amount * FEVER_ACTIVE_GAIN_SCALE;
-    const extensionBeats = (gainedEnergy / 100) * FEVER_DURATION_BEATS;
-    const beatFloat = Math.max(0, this.conductor.beatFloatAt(this.conductor.now()));
-    this.feverUntilBeat = Math.min(
-      beatFloat + FEVER_DURATION_BEATS,
-      this.feverUntilBeat + extensionBeats
-    );
+    if (!this.feverActive()) this.addProgress(amount);
   }
 
   /** 切换武器中止旧连招；攻击始终由玩家输入触发。 */

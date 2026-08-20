@@ -118,7 +118,7 @@ export class TuningEditor {
   glowstickHeavyLaserThickness = 56;
   batonHeavyCrescentRange = 504;
   batonLightSweepAngle = 180;
-  batonLightSweepRange = 301;
+  batonLightSweepRange = 300;
   smallGuardBulletSpeed = 184;
   smallGuardAttackFrequency = 0.8;
   fanBulletSpeed = 144;
@@ -126,11 +126,11 @@ export class TuningEditor {
   enemyStraightBulletSpeedMultiplier = 1.25;
   /** 旧存档的统一敌弹倍率；只作为分敌人尺寸字段缺失时的迁移基准。 */
   enemyBulletSizeMultiplier = 1.5;
-  smallGuardBulletSizeMultiplier = 1.5;
+  smallGuardBulletSizeMultiplier = 2;
   fanBulletSizeMultiplier = 1.5;
-  bossBulletSizeMultiplier = 1.5;
+  bossBulletSizeMultiplier = 2;
   enemyDeathVolume = 1;
-  fanSpiralAttackChance = 0.1;
+  fanSpiralAttackChance = 0.3;
   waveSpawnMinBatchSize = 2;
   waveSpawnMaxBatchSize = 5;
   waveSpawnMinIntervalSeconds = 2;
@@ -148,12 +148,12 @@ export class TuningEditor {
   bossMoveSpeed = 28;
   bossAttackIntervalBeats = 4;
   bossProjectileDamage = 20;
-  bossProjectileSpeed = 230;
-  bossCrescentSpeed = 105;
+  bossProjectileSpeed = 280;
+  bossCrescentSpeed = 240;
   bossStompRadius = 230;
   bossStompKnockback = 520;
-  bossNoteFormationSpeed = 105;
-  bossNoteFormationBulletSize = 1.1;
+  bossNoteFormationSpeed = 300;
+  bossNoteFormationBulletSize = 1.3;
   bossMinionCount = 6;
   weaponJudgementDamageMultipliers: Record<WeaponId, Record<AttackJudgement, number>> = {
     glowsticks: { perfect: 1.2, good: 1, poor: 0.5 },
