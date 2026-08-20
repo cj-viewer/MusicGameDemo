@@ -21,12 +21,17 @@ export const GUARD_BODY_SOURCE_BOUNDS = {
 } as const;
 
 export const GUARD_ATTACK_EFFECT_FRAMES: Record<GuardAttackEffect, readonly number[]> = {
-  'attack-light': [1, 2, 3, 4, 5, 6, 7, 8],
-  'attack-hard': [1, 2, 3, 4, 5, 6]
+  'attack-light': [1, 2, 3, 4, 5],
+  'attack-hard': [1, 2, 3, 4, 5, 6, 7]
 };
 
 export const GUARD_ATTACK_DURATION_MS = 500;
 export const GUARD_ATTACK_EFFECT_SCALE = GUARD_SPRITE_SCALE;
+/**
+ * 攻击特效按 256px 同画布对位。项目方提供的重击第 6 帧实际为
+ * 255x255，因此逐帧按真实纹理尺寸补偿，避免该帧视觉上缩小 1px。
+ */
+const GUARD_ATTACK_EFFECT_SOURCE_SIZE = 256;
 
 const attackEffectTimers = new WeakMap<Phaser.GameObjects.Sprite, Phaser.Time.TimerEvent>();
 const characterAnimationKey: Record<GuardAction, string> = {
@@ -98,10 +103,16 @@ export function playGuardAttackEffect(
   const frameDuration = GUARD_ATTACK_DURATION_MS / frames.length;
   let frameIndex = 0;
 
-  sprite
-    .setVisible(true)
-    .setScale(GUARD_ATTACK_EFFECT_SCALE)
-    .setTexture(guardAttackEffectTextureKey(effect, frames[frameIndex]));
+  const setFrame = (frame: number): void => {
+    sprite.setTexture(guardAttackEffectTextureKey(effect, frame));
+    sprite.setScale(
+      GUARD_ATTACK_EFFECT_SCALE * (GUARD_ATTACK_EFFECT_SOURCE_SIZE / sprite.frame.realWidth),
+      GUARD_ATTACK_EFFECT_SCALE * (GUARD_ATTACK_EFFECT_SOURCE_SIZE / sprite.frame.realHeight)
+    );
+  };
+
+  sprite.setVisible(true);
+  setFrame(frames[frameIndex]);
 
   const advanceFrame = (): void => {
     if (!sprite.active) {
@@ -114,7 +125,7 @@ export function playGuardAttackEffect(
       attackEffectTimers.delete(sprite);
       return;
     }
-    sprite.setTexture(guardAttackEffectTextureKey(effect, frames[frameIndex]));
+    setFrame(frames[frameIndex]);
     attackEffectTimers.set(sprite, sprite.scene.time.delayedCall(frameDuration, advanceFrame));
   };
 

@@ -9,7 +9,7 @@ const BAR_Y = 668;
 const PANEL_WIDTH = 780;
 /** 正式关 Combo / 武器框严格收进两侧前景物件之间的可见空隙。 */
 const COMBO_PANEL_X = 503;
-const COMBO_PANEL_Y = 662;
+const COMBO_PANEL_Y = 644;
 const COMBO_PANEL_WIDTH = 184;
 const COMBO_PANEL_HEIGHT = 50;
 const COMBO_PANEL_CENTER_X = COMBO_PANEL_X + COMBO_PANEL_WIDTH / 2;
@@ -32,6 +32,7 @@ const PLAYER_HP_BAR_WIDTH = 128;
 const PLAYER_HP_OFFSET_Y = 80;
 const HUD_FRAME_COLOR = 0xfffdf1;
 const HUD_GLASS_COLOR = 0xf2f0e8;
+const COMBO_METER_PROGRESS_COLOR = 0xf97316;
 const HUD_TEXT_COLOR = '#fffdf1';
 const HUD_MUTED_TEXT_COLOR = '#e3eee8';
 const HUD_FONT = '"Arial Narrow", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif';
@@ -89,6 +90,11 @@ export class HUD {
   private screenLayer: Phaser.GameObjects.Container;
   private formalStatusLayer: Phaser.GameObjects.Container;
   private playerHpLayer: Phaser.GameObjects.Container;
+  private bossHealthLayer: Phaser.GameObjects.Container;
+  private bossHealthFill: Phaser.GameObjects.Rectangle;
+  private bossHealthValue: Phaser.GameObjects.Text;
+  private gameplayHudVisible = true;
+  private tutorialComboVisible = false;
 
   constructor(scene: Phaser.Scene, conductor: Conductor) {
     this.scene = scene;
@@ -156,7 +162,7 @@ export class HUD {
       .setDepth(10);
 
     this.feverText = scene.add
-      .text(METER_X, COMBO_LABEL_Y, 'ComboMeter', {
+      .text(METER_X, COMBO_LABEL_Y, '', {
         fontFamily: HUD_FONT,
         fontSize: '15px',
         color: HUD_TEXT_COLOR,
@@ -166,7 +172,7 @@ export class HUD {
       })
       .setOrigin(0.5)
       .setDepth(11)
-      .setVisible(true);
+      .setVisible(false);
 
     this.meterGfx = scene.add.graphics().setDepth(10);
     this.meterBeatRing = scene.add
@@ -175,9 +181,10 @@ export class HUD {
       .setFillStyle(0, 0)
       .setDepth(10);
     this.meterText = scene.add
-      .text(METER_X, METER_Y, '0', {
+      .text(METER_X, METER_Y, '0%', {
         fontFamily: HUD_FONT,
-        fontSize: '20px',
+        fontSize: '11px',
+        fontStyle: 'bold',
         color: HUD_TEXT_COLOR,
         resolution: 2
       })
@@ -293,6 +300,32 @@ export class HUD {
       this.stateText,
       this.messageText
     ]);
+
+    const bossBarWidth = 760;
+    const bossBarY = 610;
+    const bossBackdrop = scene.add
+      .rectangle(640, bossBarY, bossBarWidth + 12, 24, 0x09090b, 0.9)
+      .setStrokeStyle(1, 0xd6d3d1, 0.7);
+    this.bossHealthFill = scene.add
+      .rectangle(640 - bossBarWidth / 2, bossBarY, bossBarWidth, 14, 0x991b1b, 1)
+      .setOrigin(0, 0.5);
+    const bossName = scene.add.text(640 - bossBarWidth / 2, bossBarY - 26, '警卫长', {
+      fontFamily: HUD_FONT,
+      fontSize: '18px',
+      fontStyle: 'bold',
+      color: '#fff7ed',
+      resolution: 2
+    }).setOrigin(0, 0.5);
+    this.bossHealthValue = scene.add.text(640 + bossBarWidth / 2, bossBarY - 26, '', {
+      fontFamily: HUD_FONT,
+      fontSize: '13px',
+      color: '#fecaca',
+      resolution: 2
+    }).setOrigin(1, 0.5);
+    this.bossHealthLayer = scene.add
+      .container(0, 0, [bossBackdrop, this.bossHealthFill, bossName, this.bossHealthValue])
+      .setVisible(false);
+    this.screenLayer.add(this.bossHealthLayer);
 
     this.playerHpLayer = scene.add
       .container(0, 0, [playerHpChrome, this.hpLabel, this.hpBarBg, this.hpBar, this.hpText])
@@ -481,10 +514,24 @@ export class HUD {
     this.measureDividers.clear();
   }
 
-  /** 教学关使用 PSD 自带的底部状态栏；正式关恢复现有动态 HUD。 */
+  /** 教学关只复用正式关的 ComboMeter；正式关显示完整动态 HUD。 */
   setGameplayHudVisible(visible: boolean): void {
-    this.screenLayer.setVisible(visible);
-    this.playerHpLayer.setVisible(visible);
+    this.gameplayHudVisible = visible;
+    this.refreshHudVisibility();
+  }
+
+  setTutorialComboVisible(visible: boolean): void {
+    this.tutorialComboVisible = visible;
+    this.refreshHudVisibility();
+  }
+
+  private refreshHudVisibility(): void {
+    this.screenLayer.setVisible(this.gameplayHudVisible || this.tutorialComboVisible);
+    this.formalStatusLayer.setVisible(this.gameplayHudVisible || this.tutorialComboVisible);
+    this.playerHpLayer.setVisible(this.gameplayHudVisible);
+    this.waveText.setVisible(this.gameplayHudVisible);
+    this.stateText.setVisible(this.gameplayHudVisible);
+    this.messageText.setVisible(this.gameplayHudVisible);
   }
 
   /** 正式关每帧调用：HP 是玩家正式 HUD 中唯一使用世界坐标的组件。 */
@@ -679,12 +726,12 @@ export class HUD {
     this.meterGfx.lineStyle(2, HUD_FRAME_COLOR, 0.28);
     this.meterGfx.strokeCircle(METER_X, METER_Y, METER_RADIUS);
     if (ratio > 0) {
-      this.meterGfx.lineStyle(4, 0xffd68a, 0.95);
+      this.meterGfx.lineStyle(4, COMBO_METER_PROGRESS_COLOR, 0.95);
       this.meterGfx.beginPath();
       this.meterGfx.arc(METER_X, METER_Y, METER_RADIUS, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio, false);
       this.meterGfx.strokePath();
     }
-    this.meterText.setText('F');
+    this.meterText.setText(`${Math.round(Phaser.Math.Clamp(ratio, 0, 1) * 100)}%`);
   }
 
   setCombo(progress: number, level: number): void {
@@ -694,12 +741,12 @@ export class HUD {
     this.meterGfx.strokeCircle(METER_X, METER_Y, METER_RADIUS);
     const toNext = level >= 5 ? 1 : (progress - level * 20) / 20;
     if (toNext > 0) {
-      this.meterGfx.lineStyle(3, level >= 5 ? 0xffd68a : 0xd8f3ed, 0.95);
+      this.meterGfx.lineStyle(3, COMBO_METER_PROGRESS_COLOR, 0.95);
       this.meterGfx.beginPath();
       this.meterGfx.arc(METER_X, METER_Y, METER_RADIUS, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * toNext, false);
       this.meterGfx.strokePath();
     }
-    this.meterText.setText(level > 0 ? `${level}` : '');
+    this.meterText.setText(`${Math.round(Phaser.Math.Clamp(progress, 0, 100))}%`);
   }
 
   pulseCombo(): void {
@@ -709,6 +756,23 @@ export class HUD {
       scaleY: 1.6,
       yoyo: true,
       duration: 120
+    });
+  }
+
+  flashComboInsufficient(): void {
+    if (!this.formalStatusLayer.visible || !this.screenLayer.visible) return;
+    const target = this.formalStatusLayer;
+    this.scene.tweens.killTweensOf(target);
+    target.setAngle(-1.5);
+    this.scene.tweens.add({
+      targets: target,
+      angle: 0,
+      duration: 180,
+      ease: 'Bounce.easeOut'
+    });
+    this.meterText.setColor('#dc2626');
+    this.scene.time.delayedCall(220, () => {
+      this.meterText.setColor(this.feverMode ? '#ffe39a' : HUD_TEXT_COLOR);
     });
   }
 
@@ -727,6 +791,16 @@ export class HUD {
 
   setWave(text: string): void {
     this.waveText.setText(text);
+  }
+
+  setBossHealth(hp: number, maxHp: number): void {
+    const safeMax = Math.max(1, maxHp);
+    this.bossHealthFill.scaleX = Phaser.Math.Clamp(hp / safeMax, 0, 1);
+    this.bossHealthValue.setText(`${Math.ceil(Math.max(0, hp))} / ${Math.ceil(safeMax)}`);
+  }
+
+  setBossHealthVisible(visible: boolean): void {
+    this.bossHealthLayer.setVisible(visible);
   }
 
   /** 胜利后让场景底层标记继续跟拍呼吸，但不改变其底层 depth。 */

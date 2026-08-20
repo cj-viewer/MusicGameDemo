@@ -1,6 +1,7 @@
-import Phaser from 'phaser';
 import type { Conductor } from '../core/Conductor';
 import type { BeatKey } from './weapons';
+
+const clamp = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
 
 /** Perfect：校准后距离拍点不超过 0.1 秒。 */
 export const PERFECT_INPUT_WINDOW = 0.1;
@@ -10,6 +11,7 @@ export const INPUT_EARLY_WINDOW = 0.2;
 export const INPUT_LATE_WINDOW = 0.2;
 
 export type AttackJudgement = 'perfect' | 'good' | 'poor';
+export type AttackInputPhase = 'press' | 'release';
 
 /** `offset` 为相对最近拍点的秒数：负值代表提前，正值代表滞后。 */
 export function isWithinAttackInputWindow(offset: number): boolean {
@@ -46,8 +48,13 @@ export type InputResult =
 
 /** Fever Time 持续拍数（4 小节） */
 export const FEVER_DURATION_BEATS = 16;
-export const FEVER_ENERGY_MULTIPLIER = 3;
 export const FEVER_ACTIVE_GAIN_SCALE = 0.5;
+
+export interface ComboEnergyRewards {
+  perfect: number;
+  good: number;
+  patternComplete: number;
+}
 
 const LEVEL_DAMAGE_BONUS = [0, 0.1, 0.15, 0.2, 0.25, 0.3];
 
@@ -75,6 +82,12 @@ export class ComboSystem {
   private feverUntilBeat = -1;
   /** 教学以玩家真实输入时间估算的设备延迟；正值表示输入到达程序时偏晚。 */
   private inputLatencyOffset = 0;
+  private energyRewards: ComboEnergyRewards = {
+    perfect: 4,
+    good: 3,
+    patternComplete: 10
+  };
+  private progressGainEnabled = true;
 
   private conductor: Conductor;
 
@@ -117,7 +130,7 @@ export class ComboSystem {
   feverRemainRatio(): number {
     if (!this.feverActive()) return 0;
     const bf = this.conductor.beatFloatAt(this.conductor.now());
-    return Phaser.Math.Clamp((this.feverUntilBeat - bf) / FEVER_DURATION_BEATS, 0, 1);
+    return clamp((this.feverUntilBeat - bf) / FEVER_DURATION_BEATS, 0, 1);
   }
 
   /** 按浮点拍位置精确结束 Fever，避免小数拍回充被量化成整拍。 */
@@ -139,19 +152,50 @@ export class ComboSystem {
    * 校准值只平移判定时钟，不修改音频节拍本身。限制在 120ms 内，避免一次异常输入扩大窗口。
    */
   setInputLatencyOffset(seconds: number): void {
-    this.inputLatencyOffset = Phaser.Math.Clamp(seconds, -0.12, 0.12);
+    this.inputLatencyOffset = clamp(seconds, -0.12, 0.12);
   }
 
   getInputLatencyOffset(): number {
     return this.inputLatencyOffset;
   }
 
-  handleInput(btn: BeatKey, t: number): InputResult {
+  /** 警棍长按 Pattern 的第四拍必须由重击松开事件完成。 */
+  get expectsHeavyRelease(): boolean {
+    return this.comboActive && this.isBatonHoldPattern() && this.comboStep === 3;
+  }
+
+  setEnergyRewards(rewards: ComboEnergyRewards): void {
+    this.energyRewards = {
+      perfect: Math.max(0, rewards.perfect),
+      good: Math.max(0, rewards.good),
+      patternComplete: Math.max(0, rewards.patternComplete)
+    };
+  }
+
+  /** 过场 / 倒计时仍允许攻击判定，但可临时冻结由正确输入产生的量表收益。 */
+  setProgressGainEnabled(enabled: boolean): void {
+    this.progressGainEnabled = enabled;
+  }
+
+  handleInput(btn: BeatKey, t: number, phase: AttackInputPhase = 'press'): InputResult {
     if (!this.conductor.started) return { type: 'ignored', reason: 'notStarted' };
     const rawNearest = this.conductor.nearestBeat(t);
     const judgedTime = t - this.inputLatencyOffset;
     const { n, offset } = this.conductor.nearestBeat(judgedTime);
     if (n >= 0 && n === this.consumedBeat) {
+      // 第三拍刚按下后立刻松开，不能被“本拍已消费”静默吞掉；它应立即打断长按连招。
+      if (phase === 'release' && this.expectsHeavyRelease) {
+        const beatIdx = this.comboStep;
+        this.resetActiveCombo();
+        return {
+          type: 'wrong',
+          beatIdx,
+          timingOffset: offset,
+          judgement: 'poor',
+          reason: 'offBeat',
+          comboFailed: true
+        };
+      }
       return { type: 'ignored', reason: 'consumed' };
     }
 
@@ -170,13 +214,19 @@ export class ComboSystem {
       };
     }
 
-    const startsCombo = !this.comboActive && btn === 'L';
-    const matchesExpectedInput = this.comboActive && btn === this.pattern[this.comboStep];
+    const startsCombo = !this.comboActive && btn === 'L' && phase === 'press';
+    const expectedPhase: AttackInputPhase = this.expectsHeavyRelease ? 'release' : 'press';
+    const matchesExpectedInput = this.comboActive
+      && btn === this.pattern[this.comboStep]
+      && phase === expectedPhase;
     if (startsCombo || matchesExpectedInput) {
       const beatIdx = this.comboActive ? this.comboStep : 0;
       const completesCombo = this.comboActive && this.comboStep === this.pattern.length - 1;
       this.consumedBeat = n;
-      this.addCorrectInputProgress(2);
+      this.addCorrectInputProgress(this.energyRewards[timingJudgement]);
+      if (completesCombo) {
+        this.addCorrectInputProgress(this.energyRewards.patternComplete);
+      }
 
       if (!this.comboActive) {
         this.comboActive = true;
@@ -233,9 +283,23 @@ export class ComboSystem {
     };
   }
 
-  /** 所有 Fever 能量来源统一按当前获取倍率结算。 */
+  /** 直接增加 ComboMeter 点数；F 调试键使用此入口充满量表。 */
   addProgress(amount: number): void {
-    this.progress = Math.min(100, this.progress + amount * FEVER_ENERGY_MULTIPLIER);
+    this.progress = Math.min(100, this.progress + Math.max(0, amount));
+  }
+
+  /** 普通状态按点数衰减；Fever 使用自己的拍数倒计时，不重复扣除。 */
+  decayProgress(amount: number): void {
+    if (this.feverActive()) return;
+    this.progress = Math.max(0, this.progress - Math.max(0, amount));
+  }
+
+  /** 普通状态读取当前点数；Fever 状态把剩余持续时间换算为 0–100 点可用能量。 */
+  canSpendProgress(amount: number): boolean {
+    const required = Math.max(0, amount);
+    if (required <= 0) return true;
+    const available = this.feverActive() ? this.feverRemainRatio() * 100 : this.progress;
+    return available + 1e-6 >= required;
   }
 
   /**
@@ -259,12 +323,13 @@ export class ComboSystem {
   }
 
   private addCorrectInputProgress(amount: number): void {
+    if (!this.progressGainEnabled) return;
     if (!this.feverActive()) {
       this.addProgress(amount);
       return;
     }
 
-    const gainedEnergy = amount * FEVER_ENERGY_MULTIPLIER * FEVER_ACTIVE_GAIN_SCALE;
+    const gainedEnergy = amount * FEVER_ACTIVE_GAIN_SCALE;
     const extensionBeats = (gainedEnergy / 100) * FEVER_DURATION_BEATS;
     const beatFloat = Math.max(0, this.conductor.beatFloatAt(this.conductor.now()));
     this.feverUntilBeat = Math.min(
@@ -283,5 +348,12 @@ export class ComboSystem {
     this.comboActive = false;
     this.comboStep = 0;
     this.expectedBeat = -1;
+  }
+
+  private isBatonHoldPattern(): boolean {
+    return this.pattern[0] === 'L'
+      && this.pattern[1] === 'L'
+      && this.pattern[2] === 'H'
+      && this.pattern[3] === 'H';
   }
 }

@@ -1,11 +1,17 @@
 import Phaser from 'phaser';
 
 const CUE_SCHEDULE_AHEAD = 0.22;
-/** 去除前段低能量/静音后，仍保留在响度峰值前的短起声。 */
-const LIGHT_CALL_START = 0.105;
-const HEAVY_CALL_START = 0.11;
-const HEAVY_CUE_FADE_START = 0.33;
-const HEAVY_CUE_FADE_END = 0.36;
+/**
+ * "嘿"声采样的 seek 起点：统一取实测响度峰值前 30ms，去掉前置静音和慢起声，
+ * 让听感重音尽量贴近输入时刻。峰值由 scripts/measure_audio_timing.py 实测：
+ * light 峰值 0.133s、heavy 峰值 0.187s（heavy 起声爬升长达 115ms，旧值 0.11
+ * 会让重音晚于输入约 77ms）。
+ */
+const LIGHT_CALL_START = 0.103;
+const HEAVY_CALL_START = 0.157;
+/** 重声淡出对应文件内 0.44~0.47s（seek 后的播放时间轴 = 文件时间 - HEAVY_CALL_START）。 */
+const HEAVY_CUE_FADE_START = 0.283;
+const HEAVY_CUE_FADE_END = 0.313;
 /** 复用旧荧光棒轻攻击的方波下行音色。 */
 const DRUM_GAIN = 0.36;
 const DRUM_DURATION = 0.09;

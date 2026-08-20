@@ -23,7 +23,6 @@ import {
 } from './EmissiveFx';
 
 export const PLAYER_RADIUS = worldSize(16);
-const MOVE_SPEED = 260;
 const MOVE_ACCELERATION = 1050;
 const MOVE_DECELERATION = 720;
 const DODGE_DISTANCE = 160;
@@ -33,7 +32,6 @@ const DODGE_ANIMATION_FOLLOW_THROUGH_MS = PLAYER_DASH_ANIMATION_DURATION_MS - DO
 const DODGE_TRAIL_INTERVAL_MS = 10;
 /** 两倍原始 0.55 会超过 Phaser 的上限，因此取最大可见值。 */
 const DODGE_TRAIL_INITIAL_ALPHA = 1;
-const EMPTY_COMBO_DODGE_INTERVAL_MS = 500;
 /** 闪避踩拍判定窗口：拍点前后各 0.12 秒 */
 const DODGE_BEAT_WINDOW = 0.12;
 const ATTACK_EFFECT_DURATION_MS = 200;
@@ -44,6 +42,8 @@ const HARD_ATTACK_EFFECT_ALPHA = 0.86;
 const HARD_ATTACK_EFFECT_SCALE = 1.18;
 const LIGHT_ATTACK_EMISSIVE_COLOR = 0xfff36b;
 const HARD_ATTACK_EMISSIVE_COLOR = 0xf28cff;
+const CHARACTER_SHADOW_ALPHA = 0.45;
+const CHARACTER_SHADOW_DEPTH_OFFSET = 0.004;
 /** 角色脚底锚定的 Y 轴上弹：轻拍 +5%、重拍 +10%，横轴和镜像不参与缩放。 */
 const CHARACTER_BEAT_PULSE_LIGHT_SCALE_Y = 1.05;
 const CHARACTER_BEAT_PULSE_HEAVY_SCALE_Y = 1.1;
@@ -71,6 +71,8 @@ export class Player {
   private attackFx: Phaser.GameObjects.Sprite;
   private attackBloom: EmissiveBloomHandle;
   private weaponSprite: Phaser.GameObjects.Image;
+  private shadowSprite: Phaser.GameObjects.Image;
+  private aimArrow: Phaser.GameObjects.Triangle;
   private keys: Record<'W' | 'A' | 'S' | 'D', Phaser.Input.Keyboard.Key>;
   private invulnUntil = 0;
   private lastTrailAt = 0;
@@ -78,8 +80,10 @@ export class Player {
   private action: PlayerAction = 'idle';
   private actionLockedUntil = 0;
   private weaponAttackUntil = 0;
-  private lastDodgeAt = -Infinity;
+  private knockbackUntil = 0;
+  private knockbackVelocity = new Phaser.Math.Vector2();
   private dead = false;
+  private scriptedWalk = false;
 
   constructor(scene: MainScene, x: number, y: number) {
     this.scene = scene;
@@ -114,6 +118,15 @@ export class Player {
       }
     );
     this.attackFx.on(Phaser.Animations.Events.ANIMATION_COMPLETE, () => this.attackFx.setVisible(false));
+    this.shadowSprite = scene.add
+      .image(x, y, 'player-shadow')
+      .setScale(PLAYER_SPRITE_SCALE)
+      .setAlpha(CHARACTER_SHADOW_ALPHA);
+    this.aimArrow = scene.add
+      .triangle(x, y, -10, -7, -10, 7, 12, 0, 0xfde68a, 0.92)
+      .setStrokeStyle(2, 0xffffff, 0.95)
+      .setVisible(false);
+    scene.textures.get('player-shadow').setFilter(Phaser.Textures.FilterMode.NEAREST);
     this.weaponSprite = scene.add
       .image(x, y, 'player-weapon-glowsticks')
       .setOrigin(LIGHT_STICK_ORIGIN.x, LIGHT_STICK_ORIGIN.y)
@@ -138,22 +151,31 @@ export class Player {
     if (this.dead) return;
 
     // 移动（闪避期间由 tween 控制位移）
-    if (!this.isDodging) {
+    if (!this.isDodging && timeMs < this.knockbackUntil) {
+      this.body.setVelocity(this.knockbackVelocity.x, this.knockbackVelocity.y);
+    } else if (!this.isDodging && this.scriptedWalk) {
+      this.body.setVelocity(0, 0);
+    } else if (!this.isDodging) {
       const dir = this.moveDir();
+      const moveSpeed = this.scene.getPlayerMoveSpeed();
+      const targetVelocity = dir.clone().scale(moveSpeed);
+      if (dir.lengthSq() > 0 && this.body.velocity.dot(targetVelocity) < 0) {
+        this.body.setVelocity(0, 0);
+      }
       const acceleration = dir.lengthSq() > 0 ? MOVE_ACCELERATION : MOVE_DECELERATION;
       const maxChange = acceleration * Math.min(dtMs, 50) / 1000;
       this.body.setVelocity(
-        this.moveTowards(this.body.velocity.x, dir.x * MOVE_SPEED, maxChange),
-        this.moveTowards(this.body.velocity.y, dir.y * MOVE_SPEED, maxChange)
+        this.moveTowards(this.body.velocity.x, targetVelocity.x, maxChange),
+        this.moveTowards(this.body.velocity.y, targetVelocity.y, maxChange)
       );
     }
 
-    // 自动瞄准：移动方向前方扇区内的目标享受两倍距离权重。
-    this.updateAutoAim();
+    // 剧情自动行走时保留场景指定朝向，不让鼠标位置或自动锁敌反向覆盖。
+    if (!this.scriptedWalk) this.refreshAimDirection();
 
     // 正式素材默认朝左；锁定方向在右侧时水平翻转。
     this.go.setFlipX(Math.cos(this.aimAngle) >= 0);
-    const moving = this.isDodging || this.body.velocity.length() > 20;
+    const moving = this.isDodging || this.scriptedWalk || this.body.velocity.length() > 20;
     if (this.isDodging) {
       this.setAction('dash');
     } else if (timeMs >= this.actionLockedUntil) {
@@ -161,6 +183,21 @@ export class Player {
     }
 
     const playerDepth = worldDepth(this.y + this.body.halfHeight);
+    const shadowY = this.y + (this.go.height * (this.go.scaleY - PLAYER_SPRITE_SCALE)) / 2;
+    this.shadowSprite
+      .setPosition(this.x, shadowY)
+      .setDepth(playerDepth - CHARACTER_SHADOW_DEPTH_OFFSET);
+    const manualAimEnabled = this.scene.isManualAimEnabled();
+    const arrowAnchorY = this.y + this.body.halfHeight;
+    const arrowOffset = worldSize(28);
+    this.aimArrow
+      .setVisible(manualAimEnabled)
+      .setPosition(
+        this.x + Math.cos(this.aimAngle) * arrowOffset,
+        arrowAnchorY + Math.sin(this.aimAngle) * arrowOffset
+      )
+      .setRotation(this.aimAngle)
+      .setDepth(playerDepth - 0.003);
     this.go.setDepth(playerDepth);
     this.weaponSprite.setDepth(playerDepth + 0.002);
     if (this.attackFx.visible) {
@@ -257,18 +294,19 @@ export class Player {
     if (!conductor.started) return false;
 
     const dodgeStartedAt = this.scene.time.now;
-    if (
-      this.scene.combo.progress <= 0 &&
-      dodgeStartedAt - this.lastDodgeAt < EMPTY_COMBO_DODGE_INTERVAL_MS
-    ) return false;
-
-    const dir = this.moveDir();
-    if (dir.lengthSq() === 0) return false;
+    let dir = this.moveDir();
+    if (dir.lengthSq() === 0) {
+      // 没有 WASD / 左摇杆输入时，按当前瞄准方向吸附到八方向后反向闪避。
+      // 这样 Shift 单键仍可稳定触发后撤，且方向与键盘八向移动一致。
+      this.refreshAimDirection();
+      const octant = Math.round(this.aimAngle / (Math.PI / 4)) * (Math.PI / 4);
+      dir = new Phaser.Math.Vector2().setToPolar(octant + Math.PI, 1);
+    }
 
     const t = conductor.now();
     const { offset } = conductor.nearestBeat(t);
     const onBeat = Math.abs(offset) <= DODGE_BEAT_WINDOW;
-    this.scene.consumeDodgeComboMeter(onBeat);
+    if (!this.scene.consumeDodgeComboMeter(onBeat)) return false;
 
     const bounds = this.scene.physics.world.bounds;
     const padX = this.body.halfWidth + 4;
@@ -277,7 +315,6 @@ export class Player {
     const ty = Phaser.Math.Clamp(this.y + dir.y * DODGE_DISTANCE, bounds.top + padY, bounds.bottom - padY);
 
     this.isDodging = true;
-    this.lastDodgeAt = dodgeStartedAt;
     this.actionLockedUntil = dodgeStartedAt + DODGE_DURATION_MS + DODGE_ANIMATION_FOLLOW_THROUGH_MS;
     this.setAction('dash', true);
     this.body.setVelocity(0, 0);
@@ -311,17 +348,40 @@ export class Player {
     return true;
   }
 
-  takeDamage(amount: number): void {
+  takeDamage(amount: number, impactColor = 0xef4444): void {
     const now = this.scene.time.now;
     if (this.isDodging || this.dead || now < this.invulnUntil) return;
     this.hp = Math.max(0, this.hp - amount);
     this.invulnUntil = now + 600;
     this.scene.hud.setHp(this.hp, this.maxHp);
     this.flashHitWarm();
-    this.scene.spawnImpactFx(this.x, this.y, 0xef4444, true);
+    this.scene.spawnImpactFx(this.x, this.y, impactColor, true);
     if (this.hp <= 0) {
       this.scene.onPlayerDied();
     }
+  }
+
+  setScriptedWalk(active: boolean): void {
+    this.scriptedWalk = active;
+    this.body.setVelocity(0, 0);
+  }
+
+  setScriptedPosition(x: number, y: number): void {
+    this.body.reset(x, y);
+  }
+
+  /** 攻击触发前也刷新一次，保证鼠标按下的同一帧就使用最新指向。 */
+  refreshAimDirection(): void {
+    if (this.scene.isManualAimEnabled()) this.updateManualAim();
+    else this.updateAutoAim();
+  }
+
+  /** Boss 践踏等强制位移；闪避期间保持原有无敌与位移控制。 */
+  applyKnockback(angle: number, speed: number, durationMs = 260): void {
+    if (this.dead || this.isDodging || speed <= 0) return;
+    this.knockbackVelocity.setToPolar(angle, speed);
+    this.knockbackUntil = this.scene.time.now + durationMs;
+    this.body.setVelocity(this.knockbackVelocity.x, this.knockbackVelocity.y);
   }
 
   /** Fever Time 的正确输入恢复生命，不超过最大生命。 */
@@ -337,11 +397,15 @@ export class Player {
   /** 战败：两套完整死亡动画随机播放其一，并隐藏手持武器。 */
   die(): void {
     this.dead = true;
+    this.scene.tweens.killTweensOf([this.go, this.weaponSprite, this.attackFx]);
     this.body.setVelocity(0, 0);
+    this.body.enable = false;
     this.actionLockedUntil = Infinity;
     this.setAction(Math.random() < 0.5 ? 'death-1' : 'death-2', true);
     this.go.setAlpha(1);
     this.attackFx.setVisible(false);
+    this.shadowSprite.setVisible(false);
+    this.aimArrow.setVisible(false);
     this.weaponSprite.setVisible(false);
   }
 
@@ -357,6 +421,7 @@ export class Player {
     playPlayerAnimation(this.go, 'idle', true);
     this.go.setAlpha(1);
     this.attackFx.setVisible(false);
+    this.shadowSprite.setVisible(true);
     this.weaponSprite.setVisible(true).setRotation(0);
     this.updateWeaponVisual();
   }
@@ -390,6 +455,7 @@ export class Player {
   }
 
   private moveDir(): Phaser.Math.Vector2 {
+    if (!this.scene.isPlayerControlEnabled()) return new Phaser.Math.Vector2();
     const pad = this.scene.input.gamepad?.pad1;
     if (pad) {
       const stick = applyStickDeadzone(pad.leftStick.x, pad.leftStick.y);
@@ -406,6 +472,16 @@ export class Player {
     const movement = this.moveDir();
     if (movement.lengthSq() > 0) this.lastMoveAngle = Math.atan2(movement.y, movement.x);
     this.aimAngle = this.scene.getAutoAimAngle(this.lastMoveAngle);
+    this.rawAimAngle = this.aimAngle;
+  }
+
+  private updateManualAim(): void {
+    const pointer = this.scene.input.activePointer;
+    pointer.updateWorldPoint(this.scene.cameras.main);
+    const dx = pointer.worldX - this.x;
+    const dy = pointer.worldY - (this.y + this.body.halfHeight);
+    if (dx * dx + dy * dy < 1) return;
+    this.aimAngle = Math.atan2(dy, dx);
     this.rawAimAngle = this.aimAngle;
   }
 

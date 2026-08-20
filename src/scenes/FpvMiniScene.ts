@@ -33,7 +33,7 @@ interface Projected {
 }
 
 export class FpvMiniScene extends Phaser.Scene {
-  private enabled = true;
+  private enabled = false;
   private enemyBillboards = new Map<Enemy, Phaser.GameObjects.Image>();
   private freeEnemySprites: Phaser.GameObjects.Image[] = [];
   private bulletBillboards = new Map<Phaser.GameObjects.GameObject, Phaser.GameObjects.Rectangle>();

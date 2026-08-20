@@ -6,8 +6,8 @@ export type FanAttackEffect = 'attack-light' | 'attack-hard';
 
 export const FAN_CHARACTER_FRAME_COUNT = 8;
 export const FAN_ATTACK_EFFECT_FRAMES: Record<FanAttackEffect, readonly number[]> = {
-  'attack-light': [2, 3, 4, 5, 6],
-  'attack-hard': [2, 3, 4, 5, 6, 7]
+  'attack-light': [1, 2, 3, 4, 5],
+  'attack-hard': [1, 2, 3, 4, 5, 6]
 };
 
 /**

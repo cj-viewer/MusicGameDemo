@@ -104,8 +104,8 @@ export function createStageEnvironments(scene: Phaser.Scene): StageEnvironmentCo
     const flower = scene.add
       .container(prop.x, prop.y - prop.displayOriginY * prop.scaleY)
       .setDepth(prop.depth + 0.02)
-      .setScale(0.72)
-      .setAlpha(0.58)
+      .setScale(0.78)
+      .setAlpha(0.78)
       .setVisible(false);
     flower.add(scene.add.circle(0, 0, 3, 0xfbbf24, 0.9).setBlendMode(Phaser.BlendModes.ADD));
     for (let index = 0; index < 6; index++) {
@@ -119,6 +119,14 @@ export function createStageEnvironments(scene: Phaser.Scene): StageEnvironmentCo
     }
     return flower;
   });
+  const propBeatFlowerGlows = new Map<Phaser.GameObjects.Container, Phaser.Filters.Glow>();
+  propBeatFlowers.forEach((flower) => {
+    flower.enableFilters();
+    const glow = flower.filters?.internal.addGlow(0xfff1ad, 1.35, 0.08, 1, false, 2, 16);
+    if (!glow) return;
+    glow.setPaddingOverride(null);
+    propBeatFlowerGlows.set(flower, glow);
+  });
 
   const resetPinkStageProps = (): void => {
     pinkStageProps.forEach((prop) => {
@@ -129,7 +137,9 @@ export function createStageEnvironments(scene: Phaser.Scene): StageEnvironmentCo
     });
     propBeatFlowers.forEach((flower) => {
       scene.tweens.killTweensOf(flower);
-      flower.setScale(0.72).setAlpha(0.58);
+      flower.setScale(0.78).setAlpha(0.78);
+      const glow = propBeatFlowerGlows.get(flower);
+      if (glow) glow.outerStrength = 1.35;
     });
   };
 
@@ -173,15 +183,20 @@ export function createStageEnvironments(scene: Phaser.Scene): StageEnvironmentCo
         });
         const flower = propBeatFlowers[index];
         scene.tweens.killTweensOf(flower);
-        flower.setScale(0.72).setAlpha(heavy ? 0.92 : 0.58);
+        flower.setScale(0.78).setAlpha(heavy ? 1 : 0.94);
+        const glow = propBeatFlowerGlows.get(flower);
+        if (glow) glow.outerStrength = heavy ? 4.8 : 2.8;
         scene.tweens.add({
           targets: flower,
-          scale: heavy ? 1.38 : 0.9,
-          alpha: heavy ? 1 : 0.72,
+          scale: heavy ? 1.7 : 1.15,
+          alpha: heavy ? 1 : 0.94,
           duration: heavy ? 150 : 95,
           ease: 'Quad.easeOut',
           yoyo: true,
-          onComplete: () => flower.setScale(0.72).setAlpha(0.58)
+          onComplete: () => {
+            flower.setScale(0.78).setAlpha(0.78);
+            if (glow) glow.outerStrength = 1.35;
+          }
         });
       });
     }

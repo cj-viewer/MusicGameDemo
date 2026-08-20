@@ -29,7 +29,7 @@ const config: Phaser.Types.Core.GameConfig = {
   input: {
     gamepad: true
   },
-  // IntroScene 负责标题页与两段片头；片头结束后进入 MainScene 教学，FPV 仍由 MainScene 启动。
+  // IntroScene 负责标题页与开场片头；MainScene 负责教学、教学结束过场与正式关，FPV 仍由 MainScene 启动。
   scene: [IntroScene, MainScene, FpvMiniScene]
 };
 

@@ -46,6 +46,7 @@ export const GLOWSTICKS: WeaponDef = {
 export const BATON: WeaponDef = {
   id: 'baton',
   name: '警棍',
+  // 四拍语义：轻击、轻击、重击按下、重击松开（第三拍按住到第四拍松开）。
   pattern: ['L', 'L', 'H', 'H'],
   color: 0xfbbf24
 };
@@ -63,9 +64,9 @@ const ATTACK_TABLE: Record<WeaponId, [AttackSpec, AttackSpec, AttackSpec, Attack
   ],
   baton: [
     { kind: 'arc', radius: 85, halfArcDeg: 50, damage: 12, color: LIGHT_COLOR },
+    { kind: 'arc', radius: 85, halfArcDeg: 50, damage: 12, color: LIGHT_COLOR },
     { kind: 'charge', color: 0xffffff },
-    { kind: 'dash', distance: 130, damage: 8, color: HEAVY_COLOR },
-    { kind: 'arc', radius: 95, halfArcDeg: 60, damage: 26, color: HEAVY_COLOR }
+    { kind: 'dash', distance: 130, damage: 8, color: HEAVY_COLOR }
   ]
 };
 

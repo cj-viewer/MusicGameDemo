@@ -18,16 +18,23 @@ import {
 } from './guardAnimation';
 import { BGM_TRACKS, DEFAULT_TUTORIAL_BGM_SLOT, bgmAssetPath, type BgmTrack } from './bgmTracks';
 import { preloadStageEnvironments } from './PinkStageEnvironment';
+import {
+  TUTORIAL_CHARACTER_ATTACK_EFFECT_FRAMES,
+  TUTORIAL_CHARACTER_FRAME_COUNTS,
+  tutorialCharacterAssetPath,
+  tutorialCharacterAttackEffectAssetPath,
+  tutorialCharacterAttackEffectTextureKey,
+  tutorialCharacterTextureKey
+} from './tutorialCharacterAnimation';
 
 const asset = (file: string): string => `${import.meta.env.BASE_URL}assets/${file}`;
 export const TUTORIAL_PATTERN_PANEL_KEY = 'tutorial-pattern-panel';
-export const TUTORIAL_PROGRESS_PANEL_KEY = 'tutorial-progress-panel';
-export const TUTORIAL_BOTTOM_STATUS_KEY = 'tutorial-bottom-status';
 export const TUTORIAL_BOTTOM_ROCKS_KEY = 'tutorial-bottom-rocks';
 export const TUTORIAL_CONTROL_LIGHT_KEY = 'tutorial-control-light-attack';
 export const TUTORIAL_CONTROL_HEAVY_KEY = 'tutorial-control-heavy-attack';
 export const TUTORIAL_CONTROL_SETTINGS_KEY = 'tutorial-control-settings';
 export const TUTORIAL_CONTROL_DASH_KEY = 'tutorial-control-dash';
+export const POST_TUTORIAL_VIDEO_KEY = 'post-tutorial-video';
 
 /**
  * 进入教学关之前必须就绪的资源：全部贴图、打击音效、以及教学关默认使用的那一首 BGM。
@@ -39,14 +46,6 @@ export function queueCoreAssets(scene: Phaser.Scene): void {
   scene.load.image(
     TUTORIAL_PATTERN_PANEL_KEY,
     asset('images/ui/tutorial/tutorial-pattern-panel.png')
-  );
-  scene.load.image(
-    TUTORIAL_PROGRESS_PANEL_KEY,
-    asset('images/ui/tutorial/tutorial-progress-panel.png')
-  );
-  scene.load.image(
-    TUTORIAL_BOTTOM_STATUS_KEY,
-    asset('images/ui/tutorial/tutorial-bottom-status.png')
   );
   scene.load.image(
     TUTORIAL_BOTTOM_ROCKS_KEY,
@@ -69,6 +68,13 @@ export function queueCoreAssets(scene: Phaser.Scene): void {
     asset('images/ui/tutorial/tutorial-control-dash.png')
   );
   scene.load.image('guard', asset('images/characters/guard.png'));
+  scene.load.image('player-shadow', asset('images/characters/player/player_shadow.png'));
+  scene.load.image('npc-fan-shadow', asset('images/characters/npc/npc_fan01/npc_fan01_shadow.png'));
+  scene.load.image('npc-guard-shadow', asset('images/characters/npc/npc_guard01/npc_guard01_shadow.png'));
+  scene.load.image(
+    'tutorial-character-shadow',
+    asset('images/characters/npc/npc_tutorial01/npc_tutorial01_shadow.png')
+  );
   for (const action of ['idle', 'run'] as const) {
     for (let frame = 1; frame <= GUARD_CHARACTER_FRAME_COUNT; frame++) {
       scene.load.image(
@@ -90,6 +96,22 @@ export function queueCoreAssets(scene: Phaser.Scene): void {
       scene.load.image(
         fanAttackEffectTextureKey(effect, frame),
         asset(fanAttackEffectAssetPath(effect, frame))
+      );
+    }
+  }
+  for (const action of ['idle', 'run', 'roll'] as const) {
+    for (let frame = 1; frame <= TUTORIAL_CHARACTER_FRAME_COUNTS[action]; frame++) {
+      scene.load.image(
+        tutorialCharacterTextureKey(action, frame),
+        asset(tutorialCharacterAssetPath(action, frame))
+      );
+    }
+  }
+  for (const effect of ['attack-light', 'attack-hard'] as const) {
+    for (const frame of TUTORIAL_CHARACTER_ATTACK_EFFECT_FRAMES[effect]) {
+      scene.load.image(
+        tutorialCharacterAttackEffectTextureKey(effect, frame),
+        asset(tutorialCharacterAttackEffectAssetPath(effect, frame))
       );
     }
   }
@@ -119,7 +141,7 @@ export function queueCoreAssets(scene: Phaser.Scene): void {
 }
 
 /**
- * 教学关用不到的 BGM。它们合计几十 MB，放在开场/教学阶段后台慢慢下，
+ * 教学关用不到的 BGM 与教学结束过场。放在开场/教学阶段后台下载，
  * 不再阻塞 MainScene 的 preload。
  */
 export function queueDeferredBgm(scene: Phaser.Scene): void {
@@ -127,6 +149,12 @@ export function queueDeferredBgm(scene: Phaser.Scene): void {
     if (slot === DEFAULT_TUTORIAL_BGM_SLOT) continue;
     queueBgmTrack(scene, BGM_TRACKS[slot]);
   }
+  queuePostTutorialVideo(scene);
+}
+
+export function queuePostTutorialVideo(scene: Phaser.Scene): void {
+  if (scene.cache.video.exists(POST_TUTORIAL_VIDEO_KEY)) return;
+  scene.load.video(POST_TUTORIAL_VIDEO_KEY, asset('video/tutorial-complete.mp4'));
 }
 
 /** 单独排队某一首 BGM（用于把玩家当前需要的曲目提到前面）。 */
