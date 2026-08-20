@@ -294,8 +294,14 @@ export class Player {
     if (!conductor.started) return false;
 
     const dodgeStartedAt = this.scene.time.now;
-    const dir = this.moveDir();
-    if (dir.lengthSq() === 0) return false;
+    let dir = this.moveDir();
+    if (dir.lengthSq() === 0) {
+      // 没有 WASD / 左摇杆输入时，按当前瞄准方向吸附到八方向后反向闪避。
+      // 这样 Shift 单键仍可稳定触发后撤，且方向与键盘八向移动一致。
+      this.refreshAimDirection();
+      const octant = Math.round(this.aimAngle / (Math.PI / 4)) * (Math.PI / 4);
+      dir = new Phaser.Math.Vector2().setToPolar(octant + Math.PI, 1);
+    }
 
     const t = conductor.now();
     const { offset } = conductor.nearestBeat(t);
