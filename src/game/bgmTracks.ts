@@ -1,4 +1,7 @@
-// 默认教学 / 正式曲目的节拍重新按全曲 onset 包络与网格相位搜索校准；loopBeats 同步按完整音频时长取整。
+// 节拍基准由 scripts/measure_audio_timing.py 实测并做八段相位平整性交叉验证：
+// 固定候选 BPM 把全曲分八段分别估相位，只有相位不随时间漂移的 BPM 才是真值
+// （bgm0=153.057、bgm2=174.002 八段相位平整；旧值在同一检验下明显摆动）。
+// sourceBpm 的相对误差会随播放逐拍累积成鼓点-音乐漂移，改动前必须重跑脚本。
 export interface BgmTrack {
   key: string;
   label: string;
@@ -9,10 +12,10 @@ export interface BgmTrack {
 }
 
 export const BGM_TRACKS: readonly BgmTrack[] = [
-  { key: 'bgm-1', label: 'bgm1.mp3', sourceBpm: 145, firstBeatOffset: 0.012, loopBeats: 498 },
-  { key: 'bgm-2', label: 'bgm2.mp3', sourceBpm: 174.002, firstBeatOffset: 0.231, loopBeats: 616 },
-  { key: 'bgm-3', label: 'bgm3.mp3', sourceBpm: 146.32, firstBeatOffset: 0.026, loopBeats: 616 },
-  { key: 'bgm-0', label: 'bgm0.mp3', sourceBpm: 153.04, firstBeatOffset: 0.245, loopBeats: 436 }
+  { key: 'bgm-1', label: 'bgm1.mp3', sourceBpm: 145, firstBeatOffset: 0.0, loopBeats: 498 },
+  { key: 'bgm-2', label: 'bgm2.mp3', sourceBpm: 174.002, firstBeatOffset: 0.19, loopBeats: 616 },
+  { key: 'bgm-3', label: 'bgm3.mp3', sourceBpm: 146.32, firstBeatOffset: 0.02, loopBeats: 616 },
+  { key: 'bgm-0', label: 'bgm0.mp3', sourceBpm: 153.057, firstBeatOffset: 0.0, loopBeats: 436 }
 ];
 
 export const DEFAULT_TUTORIAL_BGM_SLOT = 3;
