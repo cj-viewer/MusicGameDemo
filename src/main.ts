@@ -2,6 +2,8 @@ import Phaser from 'phaser';
 import { IntroScene } from './scenes/IntroScene';
 import { MainScene } from './scenes/MainScene';
 import { FpvMiniScene } from './scenes/FpvMiniScene';
+import { MultiplayerLobbyScene } from './scenes/MultiplayerLobbyScene';
+import { MultiplayerScene } from './scenes/MultiplayerScene';
 import { VIEW_HEIGHT, VIEW_WIDTH } from './game/displayConfig';
 
 const config: Phaser.Types.Core.GameConfig = {
@@ -30,7 +32,7 @@ const config: Phaser.Types.Core.GameConfig = {
     gamepad: true
   },
   // IntroScene 负责标题页与开场片头；MainScene 负责教学、教学结束过场与正式关，FPV 仍由 MainScene 启动。
-  scene: [IntroScene, MainScene, FpvMiniScene]
+  scene: [IntroScene, MainScene, FpvMiniScene, MultiplayerLobbyScene, MultiplayerScene]
 };
 
 const physicalScreenWidth = window.screen.width * window.devicePixelRatio;

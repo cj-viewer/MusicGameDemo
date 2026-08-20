@@ -46,7 +46,7 @@ export class IntroScene extends Phaser.Scene {
     this.menuBackground = backdrop;
 
     const buttonX = ui(1060);
-    const buttonY = ui(230);
+    const buttonY = ui(205);
     this.startButton = this.add
       .rectangle(buttonX, buttonY, ui(220), ui(60), 0x7a244e, 0.44)
       .setStrokeStyle(ui(2), 0xffffff, 0.92)
@@ -55,7 +55,7 @@ export class IntroScene extends Phaser.Scene {
       .rectangle(buttonX, buttonY, ui(206), ui(46), 0xfff8ec, 0.04)
       .setStrokeStyle(ui(1), 0xfff5dc, 0.72);
     this.startButtonText = this.add
-      .text(buttonX, buttonY, '开 始', {
+      .text(buttonX, buttonY, '单 人 模 式', {
         fontFamily: '"Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif',
         fontSize: `${ui(26)}px`,
         fontStyle: 'bold',
@@ -89,7 +89,24 @@ export class IntroScene extends Phaser.Scene {
       this.startButton?.setFillStyle(0x7a244e, 0.44).setStrokeStyle(ui(2), 0xffffff, 0.92)
     );
     this.startButton.on('pointerdown', this.playIntro, this);
-    this.input.keyboard?.once('keydown-SPACE', this.finishIntro, this);
+
+    const multiplayerY = ui(285);
+    const multiplayerButton = this.add
+      .rectangle(buttonX, multiplayerY, ui(220), ui(60), 0x164e63, 0.58)
+      .setStrokeStyle(ui(2), 0x67e8f9, 0.95)
+      .setInteractive({ useHandCursor: true });
+    const multiplayerInner = this.add
+      .rectangle(buttonX, multiplayerY, ui(206), ui(46), 0xffffff, 0.035)
+      .setStrokeStyle(ui(1), 0xa5f3fc, 0.7);
+    const multiplayerText = this.add.text(buttonX, multiplayerY, '多 人 联 机', {
+      fontFamily: '"Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif',
+      fontSize: ui(24) + 'px', fontStyle: 'bold', color: '#ecfeff', letterSpacing: ui(4), resolution: 2
+    }).setOrigin(0.5);
+    this.menuContent.add([multiplayerButton, multiplayerInner, multiplayerText]);
+    multiplayerButton
+      .on('pointerover', () => multiplayerButton.setFillStyle(0x0e7490, 0.82))
+      .on('pointerout', () => multiplayerButton.setFillStyle(0x164e63, 0.58))
+      .on('pointerdown', () => this.scene.start('MultiplayerLobbyScene'));
 
     this.skipText = this.add
       .text(VIEW_WIDTH - ui(20), VIEW_HEIGHT - ui(20), '空格跳过', {
@@ -139,6 +156,7 @@ export class IntroScene extends Phaser.Scene {
   private playIntro(): void {
     if (!this.video || this.started || this.finished) return;
     this.started = true;
+    this.input.keyboard?.once('keydown-SPACE', this.finishIntro, this);
     this.startButton?.disableInteractive();
     this.startUi?.setVisible(false);
     this.video.setVisible(true).setMute(false).setVolume(1);

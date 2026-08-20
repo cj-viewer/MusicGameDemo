@@ -838,7 +838,7 @@ export class MainScene extends Phaser.Scene {
 
   private setupInput(): void {
     this.input.mouse?.disableContextMenu();
-    this.input.keyboard!.addCapture(Phaser.Input.Keyboard.KeyCodes.ESC);
+    this.input.keyboard!.addCapture(Phaser.Input.Keyboard.KeyCodes.ESC);
 
     window.removeEventListener('keydown', this.handleGlobalEscape, true);
     window.addEventListener('keydown', this.handleGlobalEscape, true);
@@ -4277,10 +4277,7 @@ export class MainScene extends Phaser.Scene {
         feedbackOrigin.y,
         heavy,
         spec.color,
-        weapon.id === 'baton',
-        // 警棍本身每帧都在更新弧线扫击；不额外缩放主相机，
-        // 避免移动中的连续挥击让镜头产生“被拉住”的顿挫感。
-        weapon.id !== 'baton'
+        weapon.id === 'baton'
       );
     }
     const useGlowstickLaser = heavy
@@ -4347,15 +4344,14 @@ export class MainScene extends Phaser.Scene {
 
   /**
    * 踩拍攻击的强调反馈：警棍保留局部冲击环，荧光棒只强化实际线性亮芯；
-   * 两者继续保留音符与相机微推拉，避免荧光棒尖端附近出现错位的圆形叠层。
+   * 两者继续保留音符，但不再推动主镜头，避免整幅背景产生地震感。
    */
   private spawnOnBeatAttackFx(
     x: number,
     y: number,
     heavy: boolean,
     color: number,
-    showRadialBurst: boolean,
-    useCameraPunch = true
+    showRadialBurst: boolean
   ): void {
     if (showRadialBurst) {
       const outer = this.add.circle(x, y, 16).setStrokeStyle(heavy ? 5 : 4, color, 0.95).setDepth(6);
@@ -4402,20 +4398,7 @@ export class MainScene extends Phaser.Scene {
       });
     }
 
-    // 相机微推拉只用于非警棍攻击。警棍扫击自身已经持续重绘，
-    // 叠加镜头缩放会让跟随移动看起来发生短促回拉。
-    if (useCameraPunch) {
-      const cam = this.cameras.main;
-      this.tweens.killTweensOf(cam);
-      cam.setZoom(MAIN_CAMERA_BASE_ZOOM);
-      this.tweens.add({
-        targets: cam,
-        zoom: MAIN_CAMERA_BASE_ZOOM * (heavy ? 1.01875 : 1.00375),
-        duration: 60,
-        yoyo: true,
-        ease: 'Quad.easeOut'
-      });
-    }
+    // 保持主镜头只做平滑跟随，避免踩拍反馈带动底图和静态环境层。
   }
 
   /**
@@ -5182,7 +5165,6 @@ export class MainScene extends Phaser.Scene {
         onComplete: () => spark.destroy()
       });
     }
-    this.cameras.main.shake(strong ? 130 : 45, strong ? 0.005 : 0.0015);
     if (strong) this.cameras.main.flash(90, 255, 40, 40, false);
   }
 
@@ -5482,7 +5464,6 @@ export class MainScene extends Phaser.Scene {
       });
     });
 
-    this.cameras.main.shake(heavy ? 115 : 90, heavy ? 0.0028 : 0.0021);
   }
 
   /** 正确输入时，不同武器按 ComboMeter 使用各自的弹幕层数上限。 */
@@ -5738,7 +5719,6 @@ export class MainScene extends Phaser.Scene {
     this.triggerFeverScreenClear();
     this.hud.setFever(true);
     this.hud.feverBurst();
-    this.cameras.main.shake(200, 0.005);
     this.feverBorder.setAlpha(0.9);
   }
 

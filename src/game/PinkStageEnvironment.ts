@@ -32,6 +32,12 @@ const HEAVY_PULSE_SCALE_X = 1.006;
 const HEAVY_PULSE_SCALE_Y = 1.022;
 const HEAVY_PULSE_DURATION_MS = 110;
 
+// 只让场景标注确认过的独立前景物件随拍回弹；底图与其余分层物件保持静止。
+const RHYTHM_PULSE_PROP_IDS = new Set<number>([
+  5, 9, 17, 18, 19, 22, 25,
+  26, 27, 28, 29, 30, 31, 32, 33, 34, 36
+]);
+
 function propTextureKey(id: number): string {
   return `pink-stage-prop-${String(id).padStart(2, '0')}`;
 }
@@ -77,10 +83,11 @@ export function createStageEnvironments(scene: Phaser.Scene): StageEnvironmentCo
     scene.add
       .image(
         (prop.x + prop.width / 2) * scaleX,
-        (prop.y + prop.height) * scaleY,
+        (prop.y + prop.visibleBottom) * scaleY,
         propTextureKey(prop.id)
       )
-      .setOrigin(0.5, 1)
+      // 以真实 Alpha 可见底边为缩放锚点；透明安全边不再把主体脚底向上拉出接缝。
+      .setOrigin(0.5, prop.visibleBottom / prop.height)
       .setDisplaySize(prop.width * scaleX, prop.height * scaleY)
       // 保留物件间的 TopDown 底边排序，但它们全部属于背景层，不遮挡角色。
       .setDepth(stagePropDepth((prop.y + prop.height) * scaleY))
@@ -89,10 +96,13 @@ export function createStageEnvironments(scene: Phaser.Scene): StageEnvironmentCo
   const propBaseScales = new Map<Phaser.GameObjects.Image, PropBaseScale>(
     pinkStageProps.map((prop) => [prop, { scaleX: prop.scaleX, scaleY: prop.scaleY }])
   );
-  // 将原重拍粒子花压缩成装饰性线状花，固定挂在每个正式场景物件的顶端。
-  const propBeatFlowers = pinkStageProps.map((prop) => {
+  const pulsingPinkStageProps = PINK_STAGE_PROPS.flatMap((prop, index) =>
+    RHYTHM_PULSE_PROP_IDS.has(prop.id) ? [pinkStageProps[index]] : []
+  );
+  // 粒子花只挂在允许回弹的前景物件上，避免未框区域仍有同步缩放。
+  const propBeatFlowers = pulsingPinkStageProps.map((prop) => {
     const flower = scene.add
-      .container(prop.x, prop.y - prop.displayHeight)
+      .container(prop.x, prop.y - prop.displayOriginY * prop.scaleY)
       .setDepth(prop.depth + 0.02)
       .setScale(0.78)
       .setAlpha(0.78)
@@ -146,6 +156,7 @@ export function createStageEnvironments(scene: Phaser.Scene): StageEnvironmentCo
       setPinkStageVisible(false);
     },
     showSecondLevel: () => {
+      resetPinkStageProps();
       tutorialBackground.setVisible(false);
       setPinkStageVisible(true);
     },
@@ -156,7 +167,7 @@ export function createStageEnvironments(scene: Phaser.Scene): StageEnvironmentCo
       const pulseScaleY = heavy ? HEAVY_PULSE_SCALE_Y : LIGHT_PULSE_SCALE_Y;
       const duration = heavy ? HEAVY_PULSE_DURATION_MS : LIGHT_PULSE_DURATION_MS;
 
-      pinkStageProps.forEach((prop, index) => {
+      pulsingPinkStageProps.forEach((prop, index) => {
         const baseScale = propBaseScales.get(prop);
         if (!baseScale) return;
         scene.tweens.killTweensOf(prop);

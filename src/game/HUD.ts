@@ -14,8 +14,8 @@ const COMBO_PANEL_WIDTH = 184;
 const COMBO_PANEL_HEIGHT = 50;
 const COMBO_PANEL_CENTER_X = COMBO_PANEL_X + COMBO_PANEL_WIDTH / 2;
 const COMBO_PANEL_CENTER_Y = COMBO_PANEL_Y + COMBO_PANEL_HEIGHT / 2;
-/** 正式关底部 Combo / 武器组放大为当前尺寸的两倍。 */
-const COMBO_PANEL_SCALE = 1.44;
+/** 正式关底部 Combo / 武器组保持已确认的紧凑尺寸。 */
+const COMBO_PANEL_SCALE = 0.72;
 const METER_X = COMBO_PANEL_X + 46;
 const METER_Y = COMBO_PANEL_CENTER_Y + 5;
 const METER_RADIUS = 18;
@@ -480,7 +480,6 @@ export class HUD {
   /** 错误输入只提供瞬时反馈，不再锁定本小节。 */
   flashError(): void {
     if (this.beatGuideVisible) this.centerMark.setStrokeStyle(3, 0xef4444, 0.9);
-    this.scene.cameras.main.shake(100, 0.003);
     if (this.beatGuideVisible) {
       this.scene.time.delayedCall(180, () => this.centerMark.setStrokeStyle(3, 0xffffff, 0.9));
     }
