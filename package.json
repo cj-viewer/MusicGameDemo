@@ -5,11 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "multiplayer:server": "node server/multiplayer-server.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
-    "phaser": "^4.2.1"
+    "phaser": "^4.2.1",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "typescript": "^5.7.0",

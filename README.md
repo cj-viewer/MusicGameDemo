@@ -28,6 +28,15 @@ npm run dev -- --host 127.0.0.1 --port 3000
 | `npm run build` | TypeScript 检查并构建到 `dist/` |
 | `npm run preview` | 本地预览生产构建 |
 
+## 双人联机
+
+标题页可选择“单人模式”继续原有剧情 / 波次流程，或选择“多人联机”进入房间大厅。联机需要同时运行网页服务器与 WebSocket 服务器：
+
+    npm run multiplayer:server
+    # 另开终端
+    npm run dev
+
+房主创建 5 位房间码并固定使用警棍；第二位玩家输入房间码加入并固定使用荧光棒。双方均为真人、各有独立 100 HP 血条，不生成 AI。移动支持方向键 / WASD，Z/J 轻击、X/K 重击；攻击需落在 132 BPM 拍点前后 190ms 内。房间服务器负责命中、伤害和胜负判定。部署到 HTTPS 页面时，需用 VITE_MULTIPLAYER_WS_URL=wss://你的服务器地址 指向单独部署的 WebSocket 服务；GitHub Pages 本身只托管静态网页。
 ## 操作
 
 | 输入 | 行为 |
