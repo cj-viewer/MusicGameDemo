@@ -111,9 +111,6 @@ const PLAYER_BULLET_LENGTH = worldSize(38);
 const ENEMY_BULLET_LENGTH = worldSize(36 * 0.75);
 const BULLET_THICKNESS = worldSize(10);
 const ENEMY_BULLET_THICKNESS = BULLET_THICKNESS * 0.75;
-const DEFAULT_PLAYER_BULLET_SPEED = 360;
-/** 敌方弹幕基础速度由旧版 180 px/s 下调为 0.8 倍。 */
-const DEFAULT_ENEMY_BULLET_SPEED = 180 * 0.8;
 /** 每拍前 0.2 秒以归一化 easeInExpo 重分配位移，总行程仍为基础速度 × 0.2 秒。 */
 const ENEMY_BULLET_BEAT_SURGE_WINDOW = 0.2;
 const PLAYER_BULLET_COLOR = 0xef4444;
@@ -211,10 +208,11 @@ const FIRST_LEVEL_DIALOGUE_LINES = [
 const TUTORIAL_ENERGY_DIALOGUE_LINES = [
   '下面的能量会随着时间而流逝。',
   '按对节拍会增加能量。',
-  '闪避会消耗能量。',
+  '闪避会消耗少量能量，但是错拍闪避会消耗大量能量。',
   '能量会给我的攻击带来加成。',
   '能量满了会触发大招。',
-  '准备好了，去现场吧！'
+  '准备好了，去现场吧！',
+  '对了，可以试试看捡起别人掉落的武器哦。'
 ] as const;
 const TUTORIAL_INTRO_START_X = ARENA.x + worldSize(28);
 const TUTORIAL_INTRO_TARGET_X = VIEW_WIDTH * 0.38;
@@ -650,8 +648,6 @@ export class MainScene extends Phaser.Scene {
     this.hud.setHp(this.player.hp, this.player.maxHp);
     this.hud.setVictoryVisible(false);
     this.tuningEditor = new TuningEditor(this, BGM_TRACKS.map((track) => track.label));
-    this.tuningEditor.playerBulletSpeed = DEFAULT_PLAYER_BULLET_SPEED;
-    this.tuningEditor.enemyBulletSpeed = DEFAULT_ENEMY_BULLET_SPEED;
     this.tuningEditor.tutorialBgmSlot = DEFAULT_TUTORIAL_BGM_SLOT;
     this.tuningEditor.levelBgmSlot = DEFAULT_LEVEL_BGM_SLOT;
     this.tuningEditor.loadPersistedConfig();
@@ -963,8 +959,8 @@ export class MainScene extends Phaser.Scene {
       if (!event.repeat && !this.volumePanelVisible) this.setTuningEditorVisible(!this.tuningEditor.visible);
     });
 
-    // 调试：B 键切换判定框显示
-    this.input.keyboard!.on('keydown-B', () => {
+    // 调试：H 键切换判定框显示（原来绑在 B 上，B 让给一键跳 Boss）
+    this.input.keyboard!.on('keydown-H', () => {
       if (this.gamePaused || this.state === 'tutorialOutro') return;
       this.debugHitboxes = !this.debugHitboxes;
     });
@@ -985,6 +981,48 @@ export class MainScene extends Phaser.Scene {
       if (this.state === 'title' || this.state === 'over' || this.state === 'victory') return;
       this.finishVictory();
     });
+
+    // 调试：B 键一键跳到 Boss 波，跳过教学与前面所有波次
+    this.input.keyboard!.on('keydown-B', () => {
+      if (this.gamePaused || this.state === 'tutorialOutro') return;
+      if (this.state === 'title' || this.state === 'over' || this.state === 'victory') return;
+      this.debugJumpToBoss();
+    });
+  }
+
+  /** 调试：清空当前敌人/掉落/弹幕，确保处于正式关卡演出状态，然后直接开 Boss 波。 */
+  private debugJumpToBoss(): void {
+    this.destroyTutorialOutro();
+    this.tutorialDialogue?.destroy();
+    this.tutorialDialogue = undefined;
+    this.destroyTutorialControlGuide();
+    this.confirmUi?.destroy();
+    this.confirmUi = undefined;
+    this.player.setScriptedWalk(false);
+    this.endBatonHeavyHold(false);
+    this.clearAllProjectiles();
+
+    for (const enemy of this.enemies) enemy.destroy();
+    this.enemies = [];
+    for (const pickup of this.pickups) pickup.go.destroy();
+    this.pickups = [];
+    this.waveSpawnTimer?.remove();
+    this.waveAdvanceTimer?.remove();
+    this.waveSpawnTimer = undefined;
+    this.waveAdvanceTimer = undefined;
+    this.pendingWaveSpawns = [];
+
+    this.buildPatternPanel(false);
+    this.hud.setBeatGuideVisible(false);
+    this.hud.setGameplayHudVisible(true);
+    this.hud.setTutorialComboVisible(false);
+    this.stageEnvironment.showSecondLevel();
+
+    if (!this.conductor.started) this.conductor.start();
+    const levelTrack = BGM_TRACKS[this.tuningEditor.levelBgmSlot];
+    this.switchBgmTrack(levelTrack, true);
+
+    this.startWave(BOSS_WAVE_INDEX);
   }
 
   private restartGame(): void {
@@ -2978,17 +3016,19 @@ export class MainScene extends Phaser.Scene {
         this.patternIcons.push(icon);
       });
       if (this.player.weapon.id === 'baton') {
-        const pressMark = this.add.text(-36, FORMAL_PATTERN_ICON_Y, '↓', {
+        // 长按段现在是第 3→4 拍（xs[2]→xs[3]），按下/松开箭头和长按条都要跟着挪到最后两格。
+        const pressMark = this.add.text(xs[2], FORMAL_PATTERN_ICON_Y, '↓', {
           fontFamily: 'Arial', fontSize: '13px', fontStyle: 'bold', color: '#1f2937'
         }).setOrigin(0.5);
-        const releaseMark = this.add.text(36, FORMAL_PATTERN_ICON_Y, '↑', {
+        const releaseMark = this.add.text(xs[3], FORMAL_PATTERN_ICON_Y, '↑', {
           fontFamily: 'Arial', fontSize: '13px', fontStyle: 'bold', color: '#1f2937'
         }).setOrigin(0.5);
-        this.batonHoldTrack = this.add.rectangle(0, FORMAL_PATTERN_ICON_Y + 30, 72, 6, 0x475569, 0.9);
-        this.batonHoldFill = this.add.rectangle(-36, FORMAL_PATTERN_ICON_Y + 30, 1, 6, FORMAL_PATTERN_HEAVY_COLOR, 1)
+        const holdCenterX = (xs[2] + xs[3]) / 2;
+        this.batonHoldTrack = this.add.rectangle(holdCenterX, FORMAL_PATTERN_ICON_Y + 30, 72, 6, 0x475569, 0.9);
+        this.batonHoldFill = this.add.rectangle(xs[2], FORMAL_PATTERN_ICON_Y + 30, 1, 6, FORMAL_PATTERN_HEAVY_COLOR, 1)
           .setOrigin(0, 0.5)
           .setVisible(false);
-        this.batonHoldLabel = this.add.text(0, FORMAL_PATTERN_ICON_Y + 43, '第2拍按下 · 第3拍松开', {
+        this.batonHoldLabel = this.add.text(holdCenterX, FORMAL_PATTERN_ICON_Y + 43, '第3拍按下 · 第4拍松开', {
           fontFamily: 'Arial', fontSize: '10px', fontStyle: 'bold', color: '#f8fafc'
         }).setOrigin(0.5);
         ui.add([pressMark, releaseMark, this.batonHoldTrack, this.batonHoldFill, this.batonHoldLabel]);

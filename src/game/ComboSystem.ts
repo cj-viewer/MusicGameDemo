@@ -159,9 +159,9 @@ export class ComboSystem {
     return this.inputLatencyOffset;
   }
 
-  /** 警棍长按 Pattern 的第三拍必须由重击松开事件完成。 */
+  /** 警棍长按 Pattern 的第四拍必须由重击松开事件完成。 */
   get expectsHeavyRelease(): boolean {
-    return this.comboActive && this.isBatonHoldPattern() && this.comboStep === 2;
+    return this.comboActive && this.isBatonHoldPattern() && this.comboStep === 3;
   }
 
   setEnergyRewards(rewards: ComboEnergyRewards): void {
@@ -183,7 +183,7 @@ export class ComboSystem {
     const judgedTime = t - this.inputLatencyOffset;
     const { n, offset } = this.conductor.nearestBeat(judgedTime);
     if (n >= 0 && n === this.consumedBeat) {
-      // 第二拍刚按下后立刻松开，不能被“本拍已消费”静默吞掉；它应立即打断长按连招。
+      // 第三拍刚按下后立刻松开，不能被“本拍已消费”静默吞掉；它应立即打断长按连招。
       if (phase === 'release' && this.expectsHeavyRelease) {
         const beatIdx = this.comboStep;
         this.resetActiveCombo();
@@ -352,8 +352,8 @@ export class ComboSystem {
 
   private isBatonHoldPattern(): boolean {
     return this.pattern[0] === 'L'
-      && this.pattern[1] === 'H'
+      && this.pattern[1] === 'L'
       && this.pattern[2] === 'H'
-      && this.pattern[3] === 'L';
+      && this.pattern[3] === 'H';
   }
 }

@@ -96,9 +96,9 @@ export function passesDropChance(chance: number, roll = Math.random()): boolean 
 
 export class TuningEditor {
   readonly container: Phaser.GameObjects.Container;
-  playerMoveSpeed = 260;
+  playerMoveSpeed = 320;
   manualAimEnabled = false;
-  glowstickBulletSpeed = 360;
+  glowstickBulletSpeed = 520;
   glowstickInfiniteRange = true;
   glowstickMaxRange = 164;
   glowstickAttackSpeed = 1;
@@ -108,36 +108,36 @@ export class TuningEditor {
   batonAttackSpeed = 1;
   batonLightAttackSpeed = 1;
   batonHeavyAttackSpeed = 1;
-  batonHoldFireFrequency = 4;
+  batonHoldFireFrequency = 7;
   glowstickHeavyLaserEnabled = true;
   batonHeavyCrescentEnabled = true;
   glowstickHeavyChargeDelayMs = 0;
   glowstickHeavyLaserThickness = 56;
-  batonHeavyCrescentRange = 424;
+  batonHeavyCrescentRange = 504;
   batonLightSweepAngle = 180;
-  batonLightSweepRange = 111;
-  smallGuardBulletSpeed = 144;
-  smallGuardAttackFrequency = 0.75;
+  batonLightSweepRange = 301;
+  smallGuardBulletSpeed = 184;
+  smallGuardAttackFrequency = 0.8;
   fanBulletSpeed = 144;
   fanAttackFrequency = 0.2;
   enemyStraightBulletSpeedMultiplier = 1.25;
-  enemyBulletSizeMultiplier = 1.2;
+  enemyBulletSizeMultiplier = 1.5;
   enemyDeathVolume = 1;
   fanSpiralAttackChance = 0.1;
-  waveSpawnMinBatchSize = 1;
-  waveSpawnMaxBatchSize = 4;
+  waveSpawnMinBatchSize = 2;
+  waveSpawnMaxBatchSize = 5;
   waveSpawnMinIntervalSeconds = 2;
-  waveSpawnMaxIntervalSeconds = 5;
+  waveSpawnMaxIntervalSeconds = 4;
   comboPerfectReward = 4;
   comboGoodReward = 3;
   comboPatternCompleteReward = 10;
   comboDecayPerSecond = 1;
   /** 踩拍闪避消耗的 ComboMeter 百分比（0-100）。 */
-  dodgeOnBeatCost = 10;
-  /** 错拍闪避消耗的 ComboMeter 百分比（0-100）。 */
+  dodgeOnBeatCost = 5;
+  /** 错拍闪避消耗的 ComboMeter 百分比（0-100）；错拍仍能触发闪避，只是代价更高。 */
   dodgeOffBeatCost = 20;
   bossMaxHp = 1200;
-  bossSizeMultiplier = 3.5;
+  bossSizeMultiplier = 4;
   bossMoveSpeed = 28;
   bossAttackIntervalBeats = 4;
   bossProjectileDamage = 20;
@@ -146,7 +146,7 @@ export class TuningEditor {
   bossStompRadius = 230;
   bossStompKnockback = 520;
   bossNoteFormationSpeed = 105;
-  bossNoteFormationBulletSize = 1;
+  bossNoteFormationBulletSize = 1.1;
   bossMinionCount = 6;
   weaponJudgementDamageMultipliers: Record<WeaponId, Record<AttackJudgement, number>> = {
     glowsticks: { perfect: 1.2, good: 1, poor: 0.5 },
@@ -154,11 +154,11 @@ export class TuningEditor {
   };
   weaponAttackDamage: Record<WeaponId, { light: number; heavy: number }> = {
     glowsticks: { light: 10, heavy: 18 },
-    baton: { light: 12, heavy: 26 }
+    baton: { light: 12, heavy: 20 }
   };
   enemyProjectileDamage = {
     smallGuard: 12,
-    fan: 12
+    fan: 8
   };
   weaponDropChances: Record<WeaponId, number> = {
     glowsticks: 1,
