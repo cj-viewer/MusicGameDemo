@@ -166,7 +166,7 @@ export class TuningEditor {
   };
   enemyBulletBeatSurgeEnabled = false;
   tutorialBgmSlot = 3;
-  levelBgmSlot = 1;
+  levelBgmSlot = 0;
   tutorialRhythmBpm = 132;
   levelRhythmBpm = 132;
   /** 歌曲本身的实际播放 BPM；只影响 BGM 播放速度，不影响判定节拍。 */

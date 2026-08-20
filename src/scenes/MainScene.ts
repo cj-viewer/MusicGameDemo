@@ -838,8 +838,7 @@ export class MainScene extends Phaser.Scene {
 
   private setupInput(): void {
     this.input.mouse?.disableContextMenu();
-    this.input.keyboard!.addCapture(Phaser.Input.Keyboard.KeyCodes.ESC);
-    this.input.keyboard!.addCapture(Phaser.Input.Keyboard.KeyCodes.C);
+    this.input.keyboard!.addCapture(Phaser.Input.Keyboard.KeyCodes.ESC);
 
     window.removeEventListener('keydown', this.handleGlobalEscape, true);
     window.addEventListener('keydown', this.handleGlobalEscape, true);
@@ -892,12 +891,6 @@ export class MainScene extends Phaser.Scene {
           event.preventDefault();
           this.finishTutorialOutro();
         }
-        return;
-      }
-
-      if (event.code === 'KeyC') {
-        event.preventDefault();
-        this.triggerFeverScreenClear();
         return;
       }
 
@@ -974,55 +967,8 @@ export class MainScene extends Phaser.Scene {
       }
     });
     this.input.keyboard!.on('keyup-ENTER', () => this.endBatonHeavyHold(true));
-
-    // 调试：V 键一键通关，跳过所有波次直接进入胜利画面
-    this.input.keyboard!.on('keydown-V', () => {
-      if (this.gamePaused || this.state === 'tutorialOutro') return;
-      if (this.state === 'title' || this.state === 'over' || this.state === 'victory') return;
-      this.finishVictory();
-    });
-
-    // 调试：B 键一键跳到 Boss 波，跳过教学与前面所有波次
-    this.input.keyboard!.on('keydown-B', () => {
-      if (this.gamePaused || this.state === 'tutorialOutro') return;
-      if (this.state === 'title' || this.state === 'over' || this.state === 'victory') return;
-      this.debugJumpToBoss();
-    });
-  }
-
-  /** 调试：清空当前敌人/掉落/弹幕，确保处于正式关卡演出状态，然后直接开 Boss 波。 */
-  private debugJumpToBoss(): void {
-    this.destroyTutorialOutro();
-    this.tutorialDialogue?.destroy();
-    this.tutorialDialogue = undefined;
-    this.destroyTutorialControlGuide();
-    this.confirmUi?.destroy();
-    this.confirmUi = undefined;
-    this.player.setScriptedWalk(false);
-    this.endBatonHeavyHold(false);
-    this.clearAllProjectiles();
-
-    for (const enemy of this.enemies) enemy.destroy();
-    this.enemies = [];
-    for (const pickup of this.pickups) pickup.go.destroy();
-    this.pickups = [];
-    this.waveSpawnTimer?.remove();
-    this.waveAdvanceTimer?.remove();
-    this.waveSpawnTimer = undefined;
-    this.waveAdvanceTimer = undefined;
-    this.pendingWaveSpawns = [];
-
-    this.buildPatternPanel(false);
-    this.hud.setBeatGuideVisible(false);
-    this.hud.setGameplayHudVisible(true);
-    this.hud.setTutorialComboVisible(false);
-    this.stageEnvironment.showSecondLevel();
-
-    if (!this.conductor.started) this.conductor.start();
-    const levelTrack = BGM_TRACKS[this.tuningEditor.levelBgmSlot];
-    this.switchBgmTrack(levelTrack, true);
-
-    this.startWave(BOSS_WAVE_INDEX);
+    // 调试键 B（跳 Boss）/ C（清弹）/ V（一键通关）已在正式版关闭；
+    // debugJumpToBoss / triggerFeverScreenClear / finishVictory 仍由正常玩法路径调用。
   }
 
   private restartGame(): void {
