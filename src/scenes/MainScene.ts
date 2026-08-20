@@ -188,6 +188,7 @@ type GameState =
   | 'tutorialOutro'
   | 'levelIntroWalk'
   | 'levelDialogue'
+  | 'waveWeaponDialogue'
   | 'playing'
   | 'intermission'
   | 'victory'
@@ -204,6 +205,11 @@ const TUTORIAL_DIALOGUE_LINES = [
 const FIRST_LEVEL_DIALOGUE_LINES = [
   '打败这些保安和围堵的粉丝。',
   '我就可以去内场见DJ Princess了！'
+] as const;
+const WAVE_THREE_WEAPON_DIALOGUE_LINES = [
+  '拾起新的武器吧。',
+  '新的武器会带来新的节奏型。',
+  '你可以用鼠标滚轮切换武器。'
 ] as const;
 const TUTORIAL_ENERGY_DIALOGUE_LINES = [
   '下面的能量会随着时间而流逝。',
@@ -239,7 +245,9 @@ type CombatSettingKey =
   | 'fanBulletSpeed'
   | 'fanAttackFrequency'
   | 'enemyStraightBulletSpeedMultiplier'
-  | 'enemyBulletSizeMultiplier'
+  | 'smallGuardBulletSizeMultiplier'
+  | 'fanBulletSizeMultiplier'
+  | 'bossBulletSizeMultiplier'
   | 'glowstickHeavyChargeDelayMs'
   | 'glowstickHeavyLaserThickness'
   | 'batonHeavyCrescentRange'
@@ -360,6 +368,7 @@ export class MainScene extends Phaser.Scene {
   private gamePaused = false;
   /** 玩家死亡动画播放完毕后，全局冻结到下一次重开。 */
   private gameOverFrozen = false;
+  private replayFromFirstLevel = false;
   private cameraLookX = 0;
   private cameraLookY = 0;
   private stageEnvironment!: StageEnvironmentController;
@@ -374,6 +383,7 @@ export class MainScene extends Phaser.Scene {
       || this.state === 'tutorialEnergyDialogue'
       || this.state === 'levelIntroWalk'
       || this.state === 'levelDialogue'
+      || this.state === 'waveWeaponDialogue'
       || this.state === 'tutorialOutro'
     ) return;
     const openingSettings = this.tuningEditor.visible || !this.volumePanelVisible;
@@ -396,6 +406,7 @@ export class MainScene extends Phaser.Scene {
   private activeSpecialAttackFx = new Set<Phaser.GameObjects.Graphics>();
   private activeSpecialAttackTimers = new Map<Phaser.GameObjects.Graphics, Phaser.Time.TimerEvent>();
   private pickups: Pickup[] = [];
+  private unlockedWeapons = new Set<WeaponId>([GLOWSTICKS.id]);
   private state: GameState = 'title';
   private waveIdx = -1;
   private displayedWaveNumber = 0;
@@ -474,6 +485,10 @@ export class MainScene extends Phaser.Scene {
     super('MainScene');
   }
 
+  init(data: { replayFromFirstLevel?: boolean } = {}): void {
+    this.replayFromFirstLevel = data.replayFromFirstLevel === true;
+  }
+
   preload(): void {
     // 正式关卡的 BGM 不在这里排队：它们由 create() 后台补下，教学关不必等。
     // IntroScene 已在片头播放期间预热过同一批 key，这里通常只剩少量缓存未命中的文件。
@@ -519,6 +534,10 @@ export class MainScene extends Phaser.Scene {
   }
 
   create(): void {
+    // 失败 / 胜利会冻结全局动画与物理；Scene restart 不会自动恢复这些全局管理器。
+    this.anims.resumeAll();
+    this.physics.world.resume();
+    this.tweens.resumeAll();
     // 重开局（R 键）会在同一个 Scene 实例上重新执行 create()，先停掉旧的 bgm 避免叠放
     for (const track of BGM_TRACKS) this.sound.stopByKey(track.key);
     // 教学关只需要教学 BGM；其余曲目在这里挂后台下载，等玩家打完教学早就就绪了。
@@ -539,6 +558,7 @@ export class MainScene extends Phaser.Scene {
     this.volumeDragging = null;
     this.waveIdx = -1;
     this.displayedWaveNumber = 0;
+    this.unlockedWeapons = new Set<WeaponId>([GLOWSTICKS.id]);
     this.pendingWaveSpawns = [];
     this.waveSpawnTimer = undefined;
     this.waveAdvanceTimer = undefined;
@@ -667,7 +687,7 @@ export class MainScene extends Phaser.Scene {
       const hitbox = hitboxGO as Phaser.GameObjects.Rectangle;
       const bullet = hitbox.getData('ownerBullet') as Phaser.GameObjects.Rectangle | undefined;
       if (!bullet?.active) return;
-      this.player.takeDamage(bullet.getData('damage') as number);
+      this.player.takeDamage(this.state === 'tutorial' ? 0 : bullet.getData('damage') as number);
       this.destroyEnemyBullet(bullet);
     });
     this.physics.add.overlap(this.playerBulletHitboxes, this.enemyGroup, (hitboxGO, enemyGO) => {
@@ -692,8 +712,9 @@ export class MainScene extends Phaser.Scene {
     // 独立 Scene 只投影主场景数据，不参与主场景的控制、物理或判定。
     if (this.scene.isActive('FpvMiniScene')) this.scene.stop('FpvMiniScene');
     this.scene.launch('FpvMiniScene');
-    // 直接进入教学，不再用全屏标题遮罩等待点击。
-    this.startGame();
+    // 首次进入走教学；R Replay 直接从第一关入场开始。
+    if (this.replayFromFirstLevel) this.beginFirstLevel();
+    else this.startGame();
   }
 
   update(_time: number, delta: number): void {
@@ -730,6 +751,7 @@ export class MainScene extends Phaser.Scene {
       this.state === 'tutorialDialogue'
       || this.state === 'tutorialEnergyDialogue'
       || this.state === 'levelDialogue'
+      || this.state === 'waveWeaponDialogue'
     ) this.updateTutorialDialoguePosition();
     this.hud.updatePlayerHpPosition(this.player.x, this.player.y);
     for (const enemy of this.enemies) enemy.update(delta);
@@ -742,9 +764,6 @@ export class MainScene extends Phaser.Scene {
     this.checkPickups();
     this.drawDebugHitboxes();
 
-    if (this.combo.feverActive()) {
-      this.hud.setFeverCountdown(this.combo.feverRemainRatio());
-    }
   }
 
   /** 供右上角观察窗读取的只读状态；它不拥有任何主玩法状态。 */
@@ -850,6 +869,7 @@ export class MainScene extends Phaser.Scene {
         this.state === 'tutorialDialogue'
         || this.state === 'tutorialEnergyDialogue'
         || this.state === 'levelDialogue'
+        || this.state === 'waveWeaponDialogue'
       ) {
         if (btn === 'L') this.advanceTutorialDialogue();
         return;
@@ -876,6 +896,25 @@ export class MainScene extends Phaser.Scene {
     this.input.on('pointerup', (pointer: Phaser.Input.Pointer) => {
       if (pointer.button === 2) this.endBatonHeavyHold(true);
     });
+    this.input.on(
+      'wheel',
+      (
+        _pointer: Phaser.Input.Pointer,
+        _gameObjects: Phaser.GameObjects.GameObject[],
+        _deltaX: number,
+        deltaY: number
+      ) => {
+        if (
+          deltaY === 0
+          || this.gamePaused
+          || this.gameOverFrozen
+          || this.volumePanelVisible
+          || this.tuningEditor.visible
+          || (this.state !== 'playing' && this.state !== 'intermission')
+        ) return;
+        this.switchUnlockedWeapon(deltaY > 0 ? 1 : -1);
+      }
+    );
 
     this.input.keyboard!.on('keydown', (event: KeyboardEvent) => {
       if (
@@ -907,6 +946,7 @@ export class MainScene extends Phaser.Scene {
           this.state === 'tutorialDialogue'
           || this.state === 'tutorialEnergyDialogue'
           || this.state === 'levelDialogue'
+          || this.state === 'waveWeaponDialogue'
         ) {
           if (event.code === 'Quote') this.advanceTutorialDialogue();
           return;
@@ -947,6 +987,7 @@ export class MainScene extends Phaser.Scene {
         || this.state === 'tutorialEnergyDialogue'
         || this.state === 'levelIntroWalk'
         || this.state === 'levelDialogue'
+        || this.state === 'waveWeaponDialogue'
         || this.state === 'tutorialOutro'
       ) return;
       if (!event.repeat && !this.volumePanelVisible) this.setTuningEditorVisible(!this.tuningEditor.visible);
@@ -975,7 +1016,7 @@ export class MainScene extends Phaser.Scene {
     this.gameOverFrozen = false;
     this.time.paused = false;
     this.scene.stop('FpvMiniScene');
-    this.scene.restart();
+    this.scene.restart({ replayFromFirstLevel: true });
   }
 
   private cleanupForRestart(): void {
@@ -1016,6 +1057,7 @@ export class MainScene extends Phaser.Scene {
       || this.state === 'tutorialEnergyDialogue'
       || this.state === 'levelIntroWalk'
       || this.state === 'levelDialogue'
+      || this.state === 'waveWeaponDialogue'
     ) {
       const damping = 1 - Math.exp(-Math.max(0, deltaMs) / MAIN_CAMERA_LOOK_DAMPING_MS);
       this.cameraLookX = Phaser.Math.Linear(this.cameraLookX, 0, damping);
@@ -1068,7 +1110,8 @@ export class MainScene extends Phaser.Scene {
     this.player.refreshAimDirection();
     if (this.state === 'tutorial' && phase === 'press') this.recordTutorialCalibrationCandidate(btn);
     const result = this.combo.handleInput(btn, this.conductor.now(), phase);
-    const attackPerformed = result.type === 'correct' || result.type === 'wrong';
+    const attackPerformed = result.type === 'correct'
+      || (result.type === 'wrong' && btn === 'L' && phase === 'press');
     if (this.player.weapon.id === 'baton' && btn === 'H' && phase === 'press') {
       this.batonHoldAttackOnBeat = result.type === 'correct';
       this.batonHoldAttackJudgement = result.type === 'correct' ? result.judgement : 'poor';
@@ -1093,11 +1136,20 @@ export class MainScene extends Phaser.Scene {
     } else if (result.type === 'wrong') {
       this.showAttackJudgement(result.judgement, result.timingOffset, result.reason);
       this.breakRhythmCombo();
-      if (phase === 'press') this.performWeaponAttack(result.beatIdx, false, btn, result.judgement);
+      // 右键重击只有正确踩中当前 Pattern 的目标拍才会生效；错拍只保留错误反馈。
+      if (phase === 'press' && btn === 'L') {
+        this.performWeaponAttack(result.beatIdx, false, btn, result.judgement);
+      }
       this.player.errorFlash();
       this.hud.flashError();
       if (result.comboFailed && this.state !== 'tutorial') this.flashAndHideFormalComboPattern();
       if (phase === 'release') this.showBatonHoldReleaseFeedback(false, 'poor');
+    } else if (btn === 'H' && phase === 'press') {
+      const timingOffset = this.conductor.nearestBeat(this.conductor.now()).offset;
+      this.showAttackJudgement('poor', timingOffset, 'offBeat');
+      this.breakRhythmCombo();
+      this.player.errorFlash();
+      this.hud.flashError();
     }
 
     return attackPerformed;
@@ -1107,6 +1159,10 @@ export class MainScene extends Phaser.Scene {
     if (this.batonHeavyHeld) return false;
     this.batonHeavyHeld = true;
     const handled = this.handleAttackInput('H', undefined, 'press');
+    if (!this.batonHoldAttackOnBeat) {
+      this.batonHeavyHeld = false;
+      return handled;
+    }
     this.scheduleNextBatonHoldShot();
     return handled;
   }
@@ -1132,6 +1188,8 @@ export class MainScene extends Phaser.Scene {
       this.batonHoldFireTimer = undefined;
       if (
         !this.batonHeavyHeld
+        || !this.batonHoldAttackOnBeat
+        || !this.combo.expectsHeavyRelease
         || this.player.weapon.id !== 'baton'
         || this.state === 'over'
         || this.state === 'title'
@@ -1150,6 +1208,7 @@ export class MainScene extends Phaser.Scene {
     this.showAttackJudgement(result.judgement, result.timingOffset, result.reason);
     if (result.beatIdx === 2 && this.player.weapon.id === 'baton') {
       this.showBatonHoldReleaseFeedback(false, 'poor');
+      this.endBatonHeavyHold(false);
     }
     this.breakRhythmCombo();
     this.player.errorFlash();
@@ -1749,7 +1808,8 @@ export class MainScene extends Phaser.Scene {
 
     const enemyRows: Array<[CombatSettingKey, string, number]> = [
       ['enemyStraightBulletSpeedMultiplier', '敌人直射弹速倍率', 0.05],
-      ['enemyBulletSizeMultiplier', '敌弹视觉 / 碰撞尺寸', 0.05],
+      ['smallGuardBulletSizeMultiplier', '保安单弹视觉 / 碰撞尺寸', 0.05],
+      ['fanBulletSizeMultiplier', '粉丝单弹视觉 / 碰撞尺寸', 0.05],
       ['smallGuardDamage', '保安弹幕伤害', 1],
       ['fanDamage', '粉丝弹幕伤害', 1],
       ['glowstickDropChance', '荧光棒掉落概率', 0.05],
@@ -1770,6 +1830,7 @@ export class MainScene extends Phaser.Scene {
       ['bossAttackIntervalBeats', '攻击间隔（拍）', 1],
       ['bossProjectileDamage', '攻击伤害', 1],
       ['bossProjectileSpeed', '大弹丸速度', 10],
+      ['bossBulletSizeMultiplier', '单弹视觉 / 碰撞尺寸', 0.05],
       ['bossCrescentSpeed', '半月波速度', 5],
       ['bossStompRadius', '践踏半径', 10],
       ['bossStompKnockback', '践踏击退', 20],
@@ -2084,6 +2145,7 @@ export class MainScene extends Phaser.Scene {
   private isFormalLevelState(): boolean {
     return this.state === 'levelIntroWalk'
       || this.state === 'levelDialogue'
+      || this.state === 'waveWeaponDialogue'
       || this.state === 'playing'
       || this.state === 'intermission'
       || this.state === 'victory'
@@ -2146,7 +2208,7 @@ export class MainScene extends Phaser.Scene {
   }
 
   private applyAudioCategoryVolumes(): void {
-    this.conductor?.setSfxVolume(this.audioChannelVolumes.rhythm);
+    this.conductor?.setSfxVolume(this.shouldMuteRhythm() ? 0 : this.audioChannelVolumes.rhythm);
   }
 
   private adjustCombatSetting(key: CombatSettingKey, delta: number): void {
@@ -2162,7 +2224,7 @@ export class MainScene extends Phaser.Scene {
         this.tuningEditor.glowstickBulletSpeed = Phaser.Math.Clamp(
           this.tuningEditor.glowstickBulletSpeed + delta,
           100,
-          800
+          1600
         );
         break;
       case 'glowstickLightAttackSpeed':
@@ -2194,12 +2256,10 @@ export class MainScene extends Phaser.Scene {
           3
         );
         break;
-      case 'enemyBulletSizeMultiplier':
-        this.tuningEditor.enemyBulletSizeMultiplier = Phaser.Math.Clamp(
-          this.tuningEditor.enemyBulletSizeMultiplier + delta,
-          0.5,
-          3
-        );
+      case 'smallGuardBulletSizeMultiplier':
+      case 'fanBulletSizeMultiplier':
+      case 'bossBulletSizeMultiplier':
+        this.tuningEditor[key] = Phaser.Math.Clamp(this.tuningEditor[key] + delta, 0.5, 3);
         break;
       case 'waveSpawnMinBatchSize':
         this.tuningEditor.waveSpawnMinBatchSize = Phaser.Math.Clamp(
@@ -2500,7 +2560,9 @@ export class MainScene extends Phaser.Scene {
       fanBulletSpeed: `${Math.round(this.tuningEditor.fanBulletSpeed)} px/s`,
       fanAttackFrequency: `${this.tuningEditor.fanAttackFrequency.toFixed(2)} 次/拍`,
       enemyStraightBulletSpeedMultiplier: percent(this.tuningEditor.enemyStraightBulletSpeedMultiplier),
-      enemyBulletSizeMultiplier: percent(this.tuningEditor.enemyBulletSizeMultiplier),
+      smallGuardBulletSizeMultiplier: percent(this.tuningEditor.smallGuardBulletSizeMultiplier),
+      fanBulletSizeMultiplier: percent(this.tuningEditor.fanBulletSizeMultiplier),
+      bossBulletSizeMultiplier: percent(this.tuningEditor.bossBulletSizeMultiplier),
       glowstickHeavyChargeDelayMs: `${Math.round(this.tuningEditor.glowstickHeavyChargeDelayMs)} ms`,
       glowstickHeavyLaserThickness: `${Math.round(this.tuningEditor.glowstickHeavyLaserThickness)} px`,
       batonHeavyCrescentRange: `${Math.round(this.tuningEditor.batonHeavyCrescentRange)} px`,
@@ -2660,9 +2722,10 @@ export class MainScene extends Phaser.Scene {
 
   private startPlayerDialogue(
     lines: readonly string[],
-    dialogueState: 'tutorialDialogue' | 'tutorialEnergyDialogue' | 'levelDialogue'
+    dialogueState: 'tutorialDialogue' | 'tutorialEnergyDialogue' | 'levelDialogue' | 'waveWeaponDialogue'
   ): void {
     this.state = dialogueState;
+    this.conductor?.setSfxVolume(0);
     this.activeDialogueLines = lines;
     this.tutorialDialogueIndex = 0;
     this.tutorialDialogueTransitioning = false;
@@ -2740,7 +2803,8 @@ export class MainScene extends Phaser.Scene {
     if (
       (this.state !== 'tutorialDialogue'
         && this.state !== 'tutorialEnergyDialogue'
-        && this.state !== 'levelDialogue')
+        && this.state !== 'levelDialogue'
+        && this.state !== 'waveWeaponDialogue')
       || this.tutorialDialogueTransitioning
     ) return;
     const dialogueState = this.state;
@@ -2773,7 +2837,8 @@ export class MainScene extends Phaser.Scene {
         this.destroyTutorialDialogue();
         if (dialogueState === 'tutorialDialogue') this.startTutorial();
         else if (dialogueState === 'tutorialEnergyDialogue') this.finishTutorial();
-        else this.startFirstLevelCountdown();
+        else if (dialogueState === 'levelDialogue') this.startFirstLevelCountdown();
+        else this.startWave(2);
       }
     });
   }
@@ -2788,6 +2853,20 @@ export class MainScene extends Phaser.Scene {
     this.tutorialDialogueText = undefined;
     this.tutorialDialogueIndex = 0;
     this.tutorialDialogueTransitioning = false;
+    this.applyAudioCategoryVolumes();
+  }
+
+  private isDialogueState(state: GameState = this.state): boolean {
+    return state === 'tutorialDialogue'
+      || state === 'tutorialEnergyDialogue'
+      || state === 'levelDialogue'
+      || state === 'waveWeaponDialogue';
+  }
+
+  private shouldMuteRhythm(state: GameState = this.state): boolean {
+    return state === 'tutorialIntroWalk'
+      || state === 'levelIntroWalk'
+      || this.isDialogueState(state);
   }
 
   /** 开场教学：四项操作提示同时出现；3 次有效节拍输入加 1 次成功闪避后讲解能量。 */
@@ -3370,7 +3449,7 @@ export class MainScene extends Phaser.Scene {
     this.stageEnvironment.showSecondLevel();
     this.state = 'levelIntroWalk';
     const levelTrack = BGM_TRACKS[this.tuningEditor.levelBgmSlot];
-    this.conductor.setSfxVolume(this.audioChannelVolumes.rhythm);
+    this.applyAudioCategoryVolumes();
     this.conductor.start();
     if (this.cache.audio.exists(levelTrack.key)) {
       this.switchBgmTrack(levelTrack, false);
@@ -3409,7 +3488,9 @@ export class MainScene extends Phaser.Scene {
   /** 第一关对白结束后进行真实 5 秒倒计时；攻击可用，但正确输入不增加 ComboMeter。 */
   private startFirstLevelCountdown(): void {
     this.player.setScriptedWalk(false);
+    this.player.heal(this.player.maxHp);
     this.state = 'intermission';
+    this.applyAudioCategoryVolumes();
     this.hud.setGameplayHudVisible(true);
     this.countdownTimer?.remove();
     this.countdownRemaining = 5;
@@ -3482,6 +3563,7 @@ export class MainScene extends Phaser.Scene {
     this.waveIdx = idx;
     this.displayedWaveNumber++;
     this.state = 'playing';
+    this.applyAudioCategoryVolumes();
     this.hud.setWave(`Wave ${this.displayedWaveNumber}`);
     this.flashMessage(idx === BOSS_WAVE_INDEX ? 'BOSS：警卫长' : `WAVE ${this.displayedWaveNumber}`);
     this.pendingWaveSpawns = this.buildWaveSpawnQueue(idx);
@@ -3638,8 +3720,20 @@ export class MainScene extends Phaser.Scene {
     this.waveAdvanceTimer = this.time.delayedCall(2000, () => {
       this.waveAdvanceTimer = undefined;
       if (this.state === 'over') return;
-      this.startWave(this.waveIdx + 1);
+      if (this.waveIdx === 1) this.startWaveThreeWeaponDialogue();
+      else this.startWave(this.waveIdx + 1);
     });
+  }
+
+  /** Wave 2 清空后固定展示中央警棍；对白关闭前不建立 Wave 3 生成队列。 */
+  private startWaveThreeWeaponDialogue(): void {
+    if (
+      !this.unlockedWeapons.has(BATON.id)
+      && !this.pickups.some((pickup) => pickup.weapon.id === BATON.id)
+    ) {
+      this.spawnPickup(ARENA.x + ARENA.width / 2, ARENA.y + ARENA.height / 2, BATON);
+    }
+    this.startPlayerDialogue(WAVE_THREE_WEAPON_DIALOGUE_LINES, 'waveWeaponDialogue');
   }
 
   /** Boss 波清空后停在胜利画面；不再启动循环波次，所有单位和时钟保持冻结。 */
@@ -3676,11 +3770,11 @@ export class MainScene extends Phaser.Scene {
   onEnemyKilled(enemy: Enemy): void {
     this.enemies = this.enemies.filter((e) => e !== enemy);
 
-    // 保安掉警棍，粉丝掉荧光棒；玩家已持有或场上已有时不重复生成。
-    const drop = enemy.kind === 'smallGuard' ? BATON : enemy.kind === 'fan' ? GLOWSTICKS : undefined;
+    // 警棍固定在 Wave 3 前展示，不再由普通保安随机提前掉落。
+    const drop = enemy.kind === 'fan' ? GLOWSTICKS : undefined;
     if (
       drop
-      && this.player.weapon.id !== drop.id
+      && !this.unlockedWeapons.has(drop.id)
       && !this.pickups.some((pickup) => pickup.weapon.id === drop.id)
       && passesDropChance(this.tuningEditor.getWeaponDropChance(drop.id))
     ) {
@@ -4157,7 +4251,8 @@ export class MainScene extends Phaser.Scene {
 
   /** P Menu 的敌弹尺寸会同时作用到当前存量弹幕的可见图像与全部碰撞采样体。 */
   private applyEnemyBulletSize(bullet: Phaser.GameObjects.Rectangle): void {
-    const sizeMultiplier = this.tuningEditor.enemyBulletSizeMultiplier;
+    const sourceKind = bullet.getData('sourceKind') as EnemyKind;
+    const sizeMultiplier = this.tuningEditor.getEnemyBulletSizeMultiplier(sourceKind);
     if (bullet.getData('appliedSizeMultiplier') === sizeMultiplier) return;
 
     const baseVisualDiameter = bullet.getData('baseVisualDiameter') as number;
@@ -4206,6 +4301,7 @@ export class MainScene extends Phaser.Scene {
       && this.state !== 'tutorialDialogue'
       && this.state !== 'levelIntroWalk'
       && this.state !== 'levelDialogue'
+      && this.state !== 'waveWeaponDialogue'
     ) {
       this.player.onBeat(false);
     }
@@ -4302,6 +4398,8 @@ export class MainScene extends Phaser.Scene {
         tunedDamage,
         onBeat
       );
+    } else if (weapon.id === 'baton' && !heavy) {
+      this.spawnBatonParry(tunedDamage, onBeat);
     } else for (const attackAngle of attackAngles) {
       if (weapon.id === 'baton') {
         this.spawnBatonSweep(
@@ -4915,6 +5013,137 @@ export class MainScene extends Phaser.Scene {
       this.createBulletHitboxes(bullet, this.playerBulletHitboxes, BULLET_THICKNESS);
       this.positionStraightBulletHitboxes(bullet, bulletLength, BULLET_THICKNESS, shotAngle);
     }
+  }
+
+  /**
+   * 警棍轻击不再直接伤敌：保持原手持警棍与挥击动画，用连续圆弧波扫过玩家周围。
+   * 波前碰到敌弹时，按“玩家实时位置 → 子弹实时位置”的角度把弹丸归属改为玩家。
+   */
+  private spawnBatonParry(damage: number, onBeat: boolean): void {
+    const maxRadius = this.tuningEditor.batonLightSweepRange * (onBeat ? 1 : 0.5);
+    const duration = onBeat ? 190 : 140;
+    const reflected = { count: 0 };
+    const progress = { value: 0 };
+    const gfx = this.add.graphics().setDepth(6).setBlendMode(Phaser.BlendModes.ADD);
+
+    this.tweens.add({
+      targets: progress,
+      value: 1,
+      duration,
+      ease: 'Quad.easeOut',
+      onUpdate: () => {
+        const centerX = this.player.x;
+        const centerY = this.player.y;
+        const radius = Math.max(worldSize(18), maxRadius * progress.value);
+        gfx.clear();
+        gfx.lineStyle(worldSize(10), BATON_BULLET_COLOR, (1 - progress.value) * 0.16);
+        gfx.strokeCircle(centerX, centerY, radius);
+        gfx.lineStyle(worldSize(3), 0xf3e8ff, (1 - progress.value) * 0.86);
+        gfx.strokeCircle(centerX, centerY, radius);
+
+        for (const obj of this.bullets.getChildren().slice()) {
+          const bullet = obj as Phaser.GameObjects.Rectangle;
+          if (!bullet.active) continue;
+          const visualDiameter = (bullet.getData('visualDiameter') as number | undefined) ?? worldSize(12);
+          if (
+            Phaser.Math.Distance.Between(centerX, centerY, bullet.x, bullet.y)
+            > radius + visualDiameter * 0.5
+          ) continue;
+          const reflectionAngle = Phaser.Math.Distance.Between(centerX, centerY, bullet.x, bullet.y) < 0.001
+            ? this.player.aimAngle
+            : Phaser.Math.Angle.Between(centerX, centerY, bullet.x, bullet.y);
+          this.reflectEnemyBullet(bullet, reflectionAngle, damage);
+          reflected.count++;
+        }
+      },
+      onComplete: () => {
+        gfx.destroy();
+        if (reflected.count > 1) this.flashMessage(`弹反 ×${reflected.count}`);
+      }
+    });
+  }
+
+  /** 普通点弹保留原形直接换组；复杂 Boss 弹拆成稳定的紫色反射弹，避免旧同步回调残留。 */
+  private reflectEnemyBullet(
+    bullet: Phaser.GameObjects.Rectangle,
+    angle: number,
+    batonDamage: number
+  ): void {
+    const body = bullet.body as Phaser.Physics.Arcade.Body;
+    const speed = Math.max(worldSize(260), body.velocity.length());
+    const damage = Math.max(batonDamage, (bullet.getData('damage') as number | undefined) ?? 0);
+    const straight = bullet.getData('hitboxMode') === 'straight';
+    const projectileVisual = bullet.getData('projectileVisual') as Phaser.GameObjects.GameObject | undefined;
+
+    if (!straight || !(projectileVisual instanceof Phaser.GameObjects.Image)) {
+      const x = bullet.x;
+      const y = bullet.y;
+      this.destroyEnemyBullet(bullet);
+      this.spawnReflectedBatonProjectile(x, y, angle, speed, damage);
+      return;
+    }
+
+    this.bullets.remove(bullet);
+    this.playerBullets.add(bullet);
+    for (const hitbox of (bullet.getData('hitboxes') as Phaser.GameObjects.Rectangle[] | undefined) ?? []) {
+      this.enemyBulletHitboxes.remove(hitbox);
+      this.playerBulletHitboxes.add(hitbox);
+    }
+    body.setVelocity(Math.cos(angle) * speed, Math.sin(angle) * speed);
+    bullet.setRotation(angle);
+    projectileVisual.setRotation(angle);
+    bullet.setData('damage', damage);
+    bullet.setData('angle', angle);
+    bullet.setData('hitboxAngle', angle);
+    bullet.setData('knockbackAngle', angle);
+    bullet.setData('knockbackSpeed', worldSize(150));
+    bullet.setData('launchX', bullet.x);
+    bullet.setData('launchY', bullet.y);
+    bullet.setData('maxTravelDistance', Infinity);
+    bullet.setData('bossSpecialProjectile', false);
+    bullet.setData('syncSpecialProjectile', undefined);
+    this.positionStraightBulletHitboxes(
+      bullet,
+      bullet.getData('hitboxLength') as number,
+      bullet.getData('hitboxSize') as number,
+      angle
+    );
+  }
+
+  private spawnReflectedBatonProjectile(
+    x: number,
+    y: number,
+    angle: number,
+    speed: number,
+    damage: number
+  ): void {
+    const length = worldSize(34);
+    const thickness = worldSize(9);
+    const bullet = this.add
+      .rectangle(x, y, length, thickness, BATON_BULLET_COLOR, 0.92)
+      .setStrokeStyle(worldSize(2), 0xf3e8ff, 0.96)
+      .setRotation(angle)
+      .setDepth(4);
+    this.playerBullets.add(bullet);
+    const body = bullet.body as Phaser.Physics.Arcade.Body;
+    body.setSize(thickness, thickness, true);
+    body.setVelocity(Math.cos(angle) * speed, Math.sin(angle) * speed);
+    bullet.setData('damage', damage);
+    bullet.setData('despawnBeat', Infinity);
+    bullet.setData('launchX', x);
+    bullet.setData('launchY', y);
+    bullet.setData('maxTravelDistance', Infinity);
+    bullet.setData('visualColor', BATON_BULLET_COLOR);
+    bullet.setData('trailColor', BATON_BULLET_COLOR);
+    bullet.setData('trailThickness', thickness);
+    bullet.setData('knockbackAngle', angle);
+    bullet.setData('knockbackSpeed', worldSize(150));
+    bullet.setData('hitboxMode', 'straight');
+    bullet.setData('hitboxLength', length);
+    bullet.setData('hitboxSize', thickness);
+    bullet.setData('hitboxAngle', angle);
+    this.createBulletHitboxes(bullet, this.playerBulletHitboxes, thickness);
+    this.positionStraightBulletHitboxes(bullet, length, thickness, angle);
   }
 
   private spawnBatonSweep(
@@ -5673,13 +5902,28 @@ export class MainScene extends Phaser.Scene {
   }
 
   private checkPickups(): void {
+    if (this.state === 'waveWeaponDialogue') return;
     for (const pickup of this.pickups.slice()) {
       if (Phaser.Math.Distance.Between(this.player.x, this.player.y, pickup.go.x, pickup.go.y) < 34) {
         this.pickups = this.pickups.filter((p) => p !== pickup);
         pickup.go.destroy();
-        this.equipWeapon(pickup.weapon);
+        this.unlockWeapon(pickup.weapon);
       }
     }
+  }
+
+  private unlockWeapon(weapon: WeaponDef): void {
+    this.unlockedWeapons.add(weapon.id);
+    this.equipWeapon(weapon);
+  }
+
+  private switchUnlockedWeapon(direction: 1 | -1): void {
+    const weaponOrder = [GLOWSTICKS, BATON].filter((weapon) => this.unlockedWeapons.has(weapon.id));
+    if (weaponOrder.length < 2) return;
+    const currentIndex = Math.max(0, weaponOrder.findIndex((weapon) => weapon.id === this.player.weapon.id));
+    const nextIndex = (currentIndex + direction + weaponOrder.length) % weaponOrder.length;
+    const nextWeapon = weaponOrder[nextIndex];
+    if (nextWeapon.id !== this.player.weapon.id) this.equipWeapon(nextWeapon);
   }
 
   private equipWeapon(weapon: WeaponDef): void {
@@ -5718,6 +5962,7 @@ export class MainScene extends Phaser.Scene {
     this.combo.startFever();
     this.triggerFeverScreenClear();
     this.hud.setFever(true);
+    this.hud.setFeverCountdown(0);
     this.hud.feverBurst();
     this.feverBorder.setAlpha(0.9);
   }

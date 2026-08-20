@@ -146,6 +146,7 @@ export class ComboSystem {
   startFever(): void {
     const bf = this.conductor.beatFloatAt(this.conductor.now());
     this.feverUntilBeat = Math.floor(Math.max(bf, 0)) + FEVER_DURATION_BEATS;
+    this.progress = 0;
   }
 
   /**

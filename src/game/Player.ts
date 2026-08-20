@@ -364,6 +364,11 @@ export class Player {
   setScriptedWalk(active: boolean): void {
     this.scriptedWalk = active;
     this.body.setVelocity(0, 0);
+    if (active && !this.dead) {
+      this.actionLockedUntil = 0;
+      this.go.anims.resume();
+      this.setAction('run', true);
+    }
   }
 
   setScriptedPosition(x: number, y: number): void {

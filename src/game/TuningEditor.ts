@@ -39,6 +39,9 @@ interface PersistedTuningConfig {
     fanAttackFrequency: number;
     enemyStraightBulletSpeedMultiplier: number;
     enemyBulletSizeMultiplier: number;
+    smallGuardBulletSizeMultiplier?: number;
+    fanBulletSizeMultiplier?: number;
+    bossBulletSizeMultiplier?: number;
     enemyDeathVolume: number;
     fanSpiralAttackChance: number;
     enemyBulletBeatSurgeEnabled: boolean;
@@ -98,7 +101,7 @@ export class TuningEditor {
   readonly container: Phaser.GameObjects.Container;
   playerMoveSpeed = 320;
   manualAimEnabled = false;
-  glowstickBulletSpeed = 520;
+  glowstickBulletSpeed = 1040;
   glowstickInfiniteRange = true;
   glowstickMaxRange = 164;
   glowstickAttackSpeed = 1;
@@ -121,7 +124,11 @@ export class TuningEditor {
   fanBulletSpeed = 144;
   fanAttackFrequency = 0.2;
   enemyStraightBulletSpeedMultiplier = 1.25;
+  /** 旧存档的统一敌弹倍率；只作为分敌人尺寸字段缺失时的迁移基准。 */
   enemyBulletSizeMultiplier = 1.5;
+  smallGuardBulletSizeMultiplier = 1.5;
+  fanBulletSizeMultiplier = 1.5;
+  bossBulletSizeMultiplier = 1.5;
   enemyDeathVolume = 1;
   fanSpiralAttackChance = 0.1;
   waveSpawnMinBatchSize = 2;
@@ -251,11 +258,11 @@ export class TuningEditor {
     }).setOrigin(0.5);
     objects.push(this.playerSpeedText);
     addButton(370, 240, '−', () => {
-      this.playerBulletSpeed = Phaser.Math.Clamp(this.playerBulletSpeed - 20, 100, 800);
+      this.playerBulletSpeed = Phaser.Math.Clamp(this.playerBulletSpeed - 20, 100, 1600);
       this.refresh();
     });
     addButton(490, 240, '+', () => {
-      this.playerBulletSpeed = Phaser.Math.Clamp(this.playerBulletSpeed + 20, 100, 800);
+      this.playerBulletSpeed = Phaser.Math.Clamp(this.playerBulletSpeed + 20, 100, 1600);
       this.refresh();
     });
 
@@ -362,6 +369,12 @@ export class TuningEditor {
     return kind === 'fan' ? this.enemyProjectileDamage.fan : this.enemyProjectileDamage.smallGuard;
   }
 
+  getEnemyBulletSizeMultiplier(kind: TunableEnemyKind): number {
+    if (kind === 'fan') return this.fanBulletSizeMultiplier;
+    if (kind === 'bossGuard') return this.bossBulletSizeMultiplier;
+    return this.smallGuardBulletSizeMultiplier;
+  }
+
   getWeaponDropChance(weaponId: WeaponId): number {
     return this.weaponDropChances[weaponId];
   }
@@ -460,7 +473,9 @@ export class TuningEditor {
       `fanBulletSpeed=${this.fanBulletSpeed}`,
       `fanAttackFrequency=${this.fanAttackFrequency}`,
       `enemyStraightBulletSpeedMultiplier=${this.enemyStraightBulletSpeedMultiplier}`,
-      `enemyBulletSizeMultiplier=${this.enemyBulletSizeMultiplier}`,
+      `smallGuardBulletSizeMultiplier=${this.smallGuardBulletSizeMultiplier}`,
+      `fanBulletSizeMultiplier=${this.fanBulletSizeMultiplier}`,
+      `bossBulletSizeMultiplier=${this.bossBulletSizeMultiplier}`,
       `smallGuardProjectileDamage=${this.enemyProjectileDamage.smallGuard}`,
       `fanProjectileDamage=${this.enemyProjectileDamage.fan}`,
       `enemyBulletBeatSurgeEnabled=${this.enemyBulletBeatSurgeEnabled}`,
@@ -558,6 +573,9 @@ export class TuningEditor {
         fanAttackFrequency: this.fanAttackFrequency,
         enemyStraightBulletSpeedMultiplier: this.enemyStraightBulletSpeedMultiplier,
         enemyBulletSizeMultiplier: this.enemyBulletSizeMultiplier,
+        smallGuardBulletSizeMultiplier: this.smallGuardBulletSizeMultiplier,
+        fanBulletSizeMultiplier: this.fanBulletSizeMultiplier,
+        bossBulletSizeMultiplier: this.bossBulletSizeMultiplier,
         enemyDeathVolume: this.enemyDeathVolume,
         fanSpiralAttackChance: this.fanSpiralAttackChance,
         enemyBulletBeatSurgeEnabled: this.enemyBulletBeatSurgeEnabled
@@ -656,7 +674,14 @@ export class TuningEditor {
         enemy.enemyStraightBulletSpeedMultiplier,
         this.enemyStraightBulletSpeedMultiplier
       );
-      this.enemyBulletSizeMultiplier = numberValue(enemy.enemyBulletSizeMultiplier, this.enemyBulletSizeMultiplier);
+      const legacyBulletSize = numberValue(enemy.enemyBulletSizeMultiplier, this.enemyBulletSizeMultiplier);
+      this.enemyBulletSizeMultiplier = legacyBulletSize;
+      this.smallGuardBulletSizeMultiplier = numberValue(
+        enemy.smallGuardBulletSizeMultiplier,
+        legacyBulletSize
+      );
+      this.fanBulletSizeMultiplier = numberValue(enemy.fanBulletSizeMultiplier, legacyBulletSize);
+      this.bossBulletSizeMultiplier = numberValue(enemy.bossBulletSizeMultiplier, legacyBulletSize);
       this.enemyDeathVolume = numberValue(enemy.enemyDeathVolume, this.enemyDeathVolume);
       this.fanSpiralAttackChance = numberValue(enemy.fanSpiralAttackChance, this.fanSpiralAttackChance);
       this.enemyBulletBeatSurgeEnabled = booleanValue(
