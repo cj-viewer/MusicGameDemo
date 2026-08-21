@@ -6,7 +6,7 @@ import type { WeaponId } from './weapons';
 
 export type TunableEnemyKind = 'smallGuard' | 'midGuard' | 'fan' | 'bossGuard';
 
-const PERSISTED_TUNING_STORAGE_KEY = 'music-game-demo:tuning-config:v1';
+const PERSISTED_TUNING_STORAGE_KEY = 'music-game-demo:tuning-config:v2';
 const TUNING_UI_FONT = '"Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif';
 const TUNING_PANEL = 0xcfdcb8;
 const TUNING_PANEL_LIGHT = 0xe9efd8;
@@ -86,8 +86,9 @@ function drawTuningPixelPanel(
   gfx.fillRect(x + width, y + height - 42, 5, 18);
 }
 
+
 interface PersistedTuningConfig {
-  schemaVersion: 1;
+  schemaVersion: 2;
   player: {
     moveSpeed: number;
     manualAimEnabled: boolean;
@@ -117,6 +118,9 @@ interface PersistedTuningConfig {
     fanAttackFrequency: number;
     enemyStraightBulletSpeedMultiplier: number;
     enemyBulletSizeMultiplier: number;
+    smallGuardBulletSizeMultiplier?: number;
+    fanBulletSizeMultiplier?: number;
+    bossBulletSizeMultiplier?: number;
     enemyDeathVolume: number;
     fanSpiralAttackChance: number;
     enemyBulletBeatSurgeEnabled: boolean;
@@ -176,7 +180,7 @@ export class TuningEditor {
   readonly container: Phaser.GameObjects.Container;
   playerMoveSpeed = 320;
   manualAimEnabled = false;
-  glowstickBulletSpeed = 520;
+  glowstickBulletSpeed = 1040;
   glowstickInfiniteRange = true;
   glowstickMaxRange = 164;
   glowstickAttackSpeed = 1;
@@ -193,15 +197,19 @@ export class TuningEditor {
   glowstickHeavyLaserThickness = 56;
   batonHeavyCrescentRange = 504;
   batonLightSweepAngle = 180;
-  batonLightSweepRange = 301;
+  batonLightSweepRange = 300;
   smallGuardBulletSpeed = 184;
   smallGuardAttackFrequency = 0.8;
   fanBulletSpeed = 144;
   fanAttackFrequency = 0.2;
   enemyStraightBulletSpeedMultiplier = 1.25;
+  /** 旧存档的统一敌弹倍率；只作为分敌人尺寸字段缺失时的迁移基准。 */
   enemyBulletSizeMultiplier = 1.5;
+  smallGuardBulletSizeMultiplier = 2;
+  fanBulletSizeMultiplier = 1.5;
+  bossBulletSizeMultiplier = 2;
   enemyDeathVolume = 1;
-  fanSpiralAttackChance = 0.1;
+  fanSpiralAttackChance = 0.3;
   waveSpawnMinBatchSize = 2;
   waveSpawnMaxBatchSize = 5;
   waveSpawnMinIntervalSeconds = 2;
@@ -219,12 +227,12 @@ export class TuningEditor {
   bossMoveSpeed = 28;
   bossAttackIntervalBeats = 4;
   bossProjectileDamage = 20;
-  bossProjectileSpeed = 230;
-  bossCrescentSpeed = 105;
+  bossProjectileSpeed = 280;
+  bossCrescentSpeed = 240;
   bossStompRadius = 230;
   bossStompKnockback = 520;
-  bossNoteFormationSpeed = 105;
-  bossNoteFormationBulletSize = 1.1;
+  bossNoteFormationSpeed = 300;
+  bossNoteFormationBulletSize = 1.3;
   bossMinionCount = 6;
   weaponJudgementDamageMultipliers: Record<WeaponId, Record<AttackJudgement, number>> = {
     glowsticks: { perfect: 1.2, good: 1, poor: 0.5 },
@@ -232,7 +240,7 @@ export class TuningEditor {
   };
   weaponAttackDamage: Record<WeaponId, { light: number; heavy: number }> = {
     glowsticks: { light: 10, heavy: 18 },
-    baton: { light: 12, heavy: 20 }
+    baton: { light: 16, heavy: 20 }
   };
   enemyProjectileDamage = {
     smallGuard: 12,
@@ -332,11 +340,11 @@ export class TuningEditor {
     }).setOrigin(0.5);
     objects.push(this.playerSpeedText);
     addButton(370, 240, '−', () => {
-      this.playerBulletSpeed = Phaser.Math.Clamp(this.playerBulletSpeed - 20, 100, 800);
+      this.playerBulletSpeed = Phaser.Math.Clamp(this.playerBulletSpeed - 20, 100, 1600);
       this.refresh();
     });
     addButton(490, 240, '+', () => {
-      this.playerBulletSpeed = Phaser.Math.Clamp(this.playerBulletSpeed + 20, 100, 800);
+      this.playerBulletSpeed = Phaser.Math.Clamp(this.playerBulletSpeed + 20, 100, 1600);
       this.refresh();
     });
 
@@ -443,6 +451,12 @@ export class TuningEditor {
     return kind === 'fan' ? this.enemyProjectileDamage.fan : this.enemyProjectileDamage.smallGuard;
   }
 
+  getEnemyBulletSizeMultiplier(kind: TunableEnemyKind): number {
+    if (kind === 'fan') return this.fanBulletSizeMultiplier;
+    if (kind === 'bossGuard') return this.bossBulletSizeMultiplier;
+    return this.smallGuardBulletSizeMultiplier;
+  }
+
   getWeaponDropChance(weaponId: WeaponId): number {
     return this.weaponDropChances[weaponId];
   }
@@ -464,7 +478,7 @@ export class TuningEditor {
       const raw = localStorage.getItem(PERSISTED_TUNING_STORAGE_KEY);
       if (!raw) return false;
       const saved = JSON.parse(raw) as Partial<PersistedTuningConfig>;
-      if (saved.schemaVersion !== 1) return false;
+      if (saved.schemaVersion !== 2) return false;
       this.applyPersistedConfig(saved);
       this.refresh();
       return true;
@@ -481,7 +495,7 @@ export class TuningEditor {
   buildCombatConfigText(generatedAt = new Date()): string {
     const lines = [
       '# MusicGameDemo 战斗参数快照',
-      'schemaVersion=1',
+      'schemaVersion=2',
       `generatedAt=${generatedAt.toISOString()}`,
       '',
       '[player]',
@@ -541,7 +555,9 @@ export class TuningEditor {
       `fanBulletSpeed=${this.fanBulletSpeed}`,
       `fanAttackFrequency=${this.fanAttackFrequency}`,
       `enemyStraightBulletSpeedMultiplier=${this.enemyStraightBulletSpeedMultiplier}`,
-      `enemyBulletSizeMultiplier=${this.enemyBulletSizeMultiplier}`,
+      `smallGuardBulletSizeMultiplier=${this.smallGuardBulletSizeMultiplier}`,
+      `fanBulletSizeMultiplier=${this.fanBulletSizeMultiplier}`,
+      `bossBulletSizeMultiplier=${this.bossBulletSizeMultiplier}`,
       `smallGuardProjectileDamage=${this.enemyProjectileDamage.smallGuard}`,
       `fanProjectileDamage=${this.enemyProjectileDamage.fan}`,
       `enemyBulletBeatSurgeEnabled=${this.enemyBulletBeatSurgeEnabled}`,
@@ -609,7 +625,7 @@ export class TuningEditor {
 
   private buildPersistedConfig(): PersistedTuningConfig {
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
       player: {
         moveSpeed: this.playerMoveSpeed,
         manualAimEnabled: this.manualAimEnabled,
@@ -639,6 +655,9 @@ export class TuningEditor {
         fanAttackFrequency: this.fanAttackFrequency,
         enemyStraightBulletSpeedMultiplier: this.enemyStraightBulletSpeedMultiplier,
         enemyBulletSizeMultiplier: this.enemyBulletSizeMultiplier,
+        smallGuardBulletSizeMultiplier: this.smallGuardBulletSizeMultiplier,
+        fanBulletSizeMultiplier: this.fanBulletSizeMultiplier,
+        bossBulletSizeMultiplier: this.bossBulletSizeMultiplier,
         enemyDeathVolume: this.enemyDeathVolume,
         fanSpiralAttackChance: this.fanSpiralAttackChance,
         enemyBulletBeatSurgeEnabled: this.enemyBulletBeatSurgeEnabled
@@ -737,7 +756,14 @@ export class TuningEditor {
         enemy.enemyStraightBulletSpeedMultiplier,
         this.enemyStraightBulletSpeedMultiplier
       );
-      this.enemyBulletSizeMultiplier = numberValue(enemy.enemyBulletSizeMultiplier, this.enemyBulletSizeMultiplier);
+      const legacyBulletSize = numberValue(enemy.enemyBulletSizeMultiplier, this.enemyBulletSizeMultiplier);
+      this.enemyBulletSizeMultiplier = legacyBulletSize;
+      this.smallGuardBulletSizeMultiplier = numberValue(
+        enemy.smallGuardBulletSizeMultiplier,
+        legacyBulletSize
+      );
+      this.fanBulletSizeMultiplier = numberValue(enemy.fanBulletSizeMultiplier, legacyBulletSize);
+      this.bossBulletSizeMultiplier = numberValue(enemy.bossBulletSizeMultiplier, legacyBulletSize);
       this.enemyDeathVolume = numberValue(enemy.enemyDeathVolume, this.enemyDeathVolume);
       this.fanSpiralAttackChance = numberValue(enemy.fanSpiralAttackChance, this.fanSpiralAttackChance);
       this.enemyBulletBeatSurgeEnabled = booleanValue(
