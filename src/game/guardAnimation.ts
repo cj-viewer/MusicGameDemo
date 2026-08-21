@@ -4,7 +4,7 @@ import { PLAYER_DISPLAY_HEIGHT } from './playerAnimation';
 export type GuardAction = 'idle' | 'run';
 export type GuardAttackEffect = 'attack-light' | 'attack-hard';
 
-export const GUARD_CHARACTER_FRAME_COUNT = 1;
+export const GUARD_CHARACTER_FRAME_COUNT = 4;
 /** 正式保安帧可见内容约 194px 高，校准到玩家约 76px 的场内视觉高度。 */
 export const GUARD_REFERENCE_CONTENT_HEIGHT = 194;
 export const GUARD_SPRITE_SCALE = (PLAYER_DISPLAY_HEIGHT / GUARD_REFERENCE_CONTENT_HEIGHT) * 1.25;
@@ -21,8 +21,8 @@ export const GUARD_BODY_SOURCE_BOUNDS = {
 } as const;
 
 export const GUARD_ATTACK_EFFECT_FRAMES: Record<GuardAttackEffect, readonly number[]> = {
-  'attack-light': [3],
-  'attack-hard': [3]
+  'attack-light': [1, 2, 3, 4, 5],
+  'attack-hard': [1, 2, 3, 4, 5, 6, 7]
 };
 
 export const GUARD_ATTACK_DURATION_MS = 500;
@@ -34,6 +34,10 @@ export const GUARD_ATTACK_EFFECT_SCALE = GUARD_SPRITE_SCALE;
 const GUARD_ATTACK_EFFECT_SOURCE_SIZE = 256;
 
 const attackEffectTimers = new WeakMap<Phaser.GameObjects.Sprite, Phaser.Time.TimerEvent>();
+const characterAnimationKey: Record<GuardAction, string> = {
+  idle: 'guard-idle',
+  run: 'guard-run'
+};
 export function guardCharacterTextureKey(action: GuardAction, frame: number): string {
   return `npc-guard-${action}-${frame}`;
 }
@@ -59,18 +63,29 @@ export function registerGuardAnimations(scene: Phaser.Scene): void {
     for (let frame = 1; frame <= GUARD_CHARACTER_FRAME_COUNT; frame++) {
       scene.textures.get(guardCharacterTextureKey(action, frame)).setFilter(Phaser.Textures.FilterMode.NEAREST);
     }
+    const key = characterAnimationKey[action];
+    if (scene.anims.exists(key)) continue;
+    scene.anims.create({
+      key,
+      frames: Array.from({ length: GUARD_CHARACTER_FRAME_COUNT }, (_, index) => ({
+        key: guardCharacterTextureKey(action, index + 1)
+      })),
+      frameRate: action === 'run' ? 10 : 8,
+      repeat: -1
+    });
   }
 }
 
 export function playGuardAnimation(
   sprite: Phaser.GameObjects.Sprite,
   action: GuardAction,
-  _restart = false
+  restart = false
 ): void {
   sprite.setScale(GUARD_SPRITE_SCALE);
-  if (sprite.anims.isPlaying) sprite.anims.stop();
-  const key = guardCharacterTextureKey(action, 1);
-  if (sprite.texture.key !== key) sprite.setTexture(key);
+  const key = characterAnimationKey[action];
+  if (restart || sprite.anims.currentAnim?.key !== key || !sprite.anims.isPlaying) {
+    sprite.play(key, true);
+  }
 }
 
 /**

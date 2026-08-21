@@ -36,6 +36,46 @@ export const TUTORIAL_CONTROL_SETTINGS_KEY = 'tutorial-control-settings';
 export const TUTORIAL_CONTROL_DASH_KEY = 'tutorial-control-dash';
 export const POST_TUTORIAL_VIDEO_KEY = 'post-tutorial-video';
 
+const tutorialOnlyTextureKeys = (): string[] => {
+  const keys = [
+    TUTORIAL_PATTERN_PANEL_KEY,
+    TUTORIAL_BOTTOM_ROCKS_KEY,
+    TUTORIAL_CONTROL_LIGHT_KEY,
+    TUTORIAL_CONTROL_HEAVY_KEY,
+    TUTORIAL_CONTROL_SETTINGS_KEY,
+    TUTORIAL_CONTROL_DASH_KEY,
+    'tutorial-character-shadow'
+  ];
+  for (const action of ['idle', 'run', 'roll'] as const) {
+    for (let frame = 1; frame <= TUTORIAL_CHARACTER_FRAME_COUNTS[action]; frame++) {
+      keys.push(tutorialCharacterTextureKey(action, frame));
+    }
+  }
+  for (const effect of ['attack-light', 'attack-hard'] as const) {
+    for (const frame of TUTORIAL_CHARACTER_ATTACK_EFFECT_FRAMES[effect]) {
+      keys.push(tutorialCharacterAttackEffectTextureKey(effect, frame));
+    }
+  }
+  return keys;
+};
+
+/** 教学对象销毁后移除只在教学阶段使用的全局纹理缓存。 */
+export function releaseTutorialTextureAssets(
+  scene: Phaser.Scene,
+  additionalTextureKeys: readonly string[] = []
+): void {
+  for (const key of [...tutorialOnlyTextureKeys(), ...additionalTextureKeys]) {
+    if (scene.textures.exists(key)) scene.textures.remove(key);
+  }
+}
+
+/** 教学结束过场销毁后释放浏览器持有的视频缓存。 */
+export function releasePostTutorialVideo(scene: Phaser.Scene): void {
+  if (scene.cache.video.exists(POST_TUTORIAL_VIDEO_KEY)) {
+    scene.cache.video.remove(POST_TUTORIAL_VIDEO_KEY);
+  }
+}
+
 /**
  * 进入教学关之前必须就绪的资源：全部贴图、打击音效、以及教学关默认使用的那一首 BGM。
  * Loader 会跳过缓存里已有的 key，所以同一批资源可以在 IntroScene 先排队预热，
@@ -144,12 +184,12 @@ export function queueCoreAssets(scene: Phaser.Scene): void {
  * 教学关用不到的 BGM 与教学结束过场。放在开场/教学阶段后台下载，
  * 不再阻塞 MainScene 的 preload。
  */
-export function queueDeferredBgm(scene: Phaser.Scene): void {
+export function queueDeferredBgm(scene: Phaser.Scene, includePostTutorialVideo = true): void {
   for (let slot = 0; slot < BGM_TRACKS.length; slot++) {
     if (slot === DEFAULT_TUTORIAL_BGM_SLOT) continue;
     queueBgmTrack(scene, BGM_TRACKS[slot]);
   }
-  queuePostTutorialVideo(scene);
+  if (includePostTutorialVideo) queuePostTutorialVideo(scene);
 }
 
 export function queuePostTutorialVideo(scene: Phaser.Scene): void {

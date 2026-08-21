@@ -10,6 +10,7 @@ export const STAGE_JUDGEMENT_DEPTH = -19;
 export interface StageEnvironmentController {
   showTutorial(): void;
   showSecondLevel(): void;
+  releaseTutorial(): void;
   pulse(heavy: boolean): void;
 }
 
@@ -55,8 +56,14 @@ export function createStageEnvironments(scene: Phaser.Scene): StageEnvironmentCo
       pinkStageBackground.setVisible(false);
     },
     showSecondLevel: () => {
-      tutorialBackground.setVisible(false);
+      if (tutorialBackground.active) tutorialBackground.setVisible(false);
       pinkStageBackground.setVisible(true);
+    },
+    releaseTutorial: () => {
+      if (tutorialBackground.active) tutorialBackground.destroy();
+      if (scene.textures.exists(TUTORIAL_BACKGROUND_KEY)) {
+        scene.textures.remove(TUTORIAL_BACKGROUND_KEY);
+      }
     },
     // 背景节拍动画在性能模式中停用；保留接口以免影响 Conductor 调用链。
     pulse: (_heavy) => {}

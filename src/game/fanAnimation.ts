@@ -4,10 +4,10 @@ import { PLAYER_SPRITE_SCALE, PLAYER_WEAPON_SCALE } from './playerAnimation';
 export type FanAction = 'idle' | 'run';
 export type FanAttackEffect = 'attack-light' | 'attack-hard';
 
-export const FAN_CHARACTER_FRAME_COUNT = 1;
+export const FAN_CHARACTER_FRAME_COUNT = 4;
 export const FAN_ATTACK_EFFECT_FRAMES: Record<FanAttackEffect, readonly number[]> = {
-  'attack-light': [3],
-  'attack-hard': [3]
+  'attack-light': [1, 2, 3, 4, 5],
+  'attack-hard': [1, 2, 3, 4, 5, 6]
 };
 
 /**
@@ -26,6 +26,10 @@ export const FAN_BODY_SOURCE_BOUNDS = {
 export const FAN_WEAPON_ORIGIN = { x: 101 / 128, y: 98 / 128 } as const;
 
 const attackEffectTimers = new WeakMap<Phaser.GameObjects.Sprite, Phaser.Time.TimerEvent>();
+const characterAnimationKey: Record<FanAction, string> = {
+  idle: 'fan-idle',
+  run: 'fan-run'
+};
 
 export function fanCharacterTextureKey(action: FanAction, frame: number): string {
   return `npc-fan-${action}-${frame}`;
@@ -48,15 +52,28 @@ export function fanAttackEffectAssetPath(effect: FanAttackEffect, frame: number)
 
 export function registerFanAnimations(scene: Phaser.Scene): void {
   for (const action of ['idle', 'run'] as const) {
-    scene.textures.get(fanCharacterTextureKey(action, 1)).setFilter(Phaser.Textures.FilterMode.NEAREST);
+    for (let frame = 1; frame <= FAN_CHARACTER_FRAME_COUNT; frame++) {
+      scene.textures.get(fanCharacterTextureKey(action, frame)).setFilter(Phaser.Textures.FilterMode.NEAREST);
+    }
+    const key = characterAnimationKey[action];
+    if (scene.anims.exists(key)) continue;
+    scene.anims.create({
+      key,
+      frames: Array.from({ length: FAN_CHARACTER_FRAME_COUNT }, (_, index) => ({
+        key: fanCharacterTextureKey(action, index + 1)
+      })),
+      frameRate: action === 'run' ? 10 : 8,
+      repeat: -1
+    });
   }
 }
 
-export function playFanAnimation(sprite: Phaser.GameObjects.Sprite, action: FanAction, _restart = false): void {
+export function playFanAnimation(sprite: Phaser.GameObjects.Sprite, action: FanAction, restart = false): void {
   sprite.setScale(FAN_SPRITE_SCALE);
-  if (sprite.anims.isPlaying) sprite.anims.stop();
-  const key = fanCharacterTextureKey(action, 1);
-  if (sprite.texture.key !== key) sprite.setTexture(key);
+  const key = characterAnimationKey[action];
+  if (restart || sprite.anims.currentAnim?.key !== key || !sprite.anims.isPlaying) {
+    sprite.play(key, true);
+  }
 }
 
 export function playFanAttackEffect(sprite: Phaser.GameObjects.Sprite, effect: FanAttackEffect): void {

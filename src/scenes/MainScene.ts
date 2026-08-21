@@ -39,6 +39,8 @@ import {
   queueCoreAssets,
   queueDeferredBgm,
   queuePostTutorialVideo,
+  releasePostTutorialVideo,
+  releaseTutorialTextureAssets,
   startBackgroundLoad,
   POST_TUTORIAL_VIDEO_KEY,
 } from '../game/assetManifest';
@@ -611,6 +613,8 @@ export class MainScene extends Phaser.Scene {
   /** 进入游戏的真实秒倒计时，-1 表示未激活。 */
   private countdownRemaining = -1;
   private countdownTimer?: Phaser.Time.TimerEvent;
+  /** 正式关切歌完成后即可从全局音频缓存移除的教学 BGM。 */
+  private tutorialBgmKeyToRelease?: string;
 
   constructor() {
     super('MainScene');
@@ -681,7 +685,7 @@ export class MainScene extends Phaser.Scene {
     this.activeSpecialAttackTimers.clear();
     this.load.off(Phaser.Loader.Events.FILE_COMPLETE, this.onDeferredFileComplete, this);
     this.load.on(Phaser.Loader.Events.FILE_COMPLETE, this.onDeferredFileComplete, this);
-    queueDeferredBgm(this);
+    queueDeferredBgm(this, !this.replayFromFirstLevel);
     startBackgroundLoad(this);
     this.enemies = [];
     this.pickups = [];
@@ -742,6 +746,7 @@ export class MainScene extends Phaser.Scene {
     this.suppressAttackUntil = 0;
     this.countdownRemaining = -1;
     this.countdownTimer = undefined;
+    this.tutorialBgmKeyToRelease = undefined;
     this.cameraLookX = 0;
     this.cameraLookY = 0;
     this.cameras.main
@@ -849,8 +854,17 @@ export class MainScene extends Phaser.Scene {
     if (this.scene.isActive('FpvMiniScene')) this.scene.stop('FpvMiniScene');
     this.scene.launch('FpvMiniScene');
     // 首次进入走教学；R Replay 直接从第一关入场开始。
-    if (this.replayFromFirstLevel) this.beginFirstLevel();
-    else this.startGame();
+    if (this.replayFromFirstLevel) {
+      const tutorialBgmKey = this.currentBgmTrack.key;
+      const levelBgmKey = BGM_TRACKS[this.tuningEditor.levelBgmSlot].key;
+      this.tutorialBgmKeyToRelease = tutorialBgmKey === levelBgmKey ? undefined : tutorialBgmKey;
+      this.releaseTutorialStageAssets();
+      releasePostTutorialVideo(this);
+      this.beginFirstLevel();
+      this.releasePendingTutorialBgmIfSafe();
+    } else {
+      this.startGame();
+    }
   }
 
   update(_time: number, delta: number): void {
@@ -1601,6 +1615,7 @@ export class MainScene extends Phaser.Scene {
       rate: songBpm / track.sourceBpm
     }) as Phaser.Sound.WebAudioSound | Phaser.Sound.HTML5AudioSound;
     this.bgm.on(Phaser.Sound.Events.COMPLETE, this.onBgmComplete, this);
+    this.releasePendingTutorialBgmIfSafe();
     if (playNow && this.conductor.started) {
       this.bgmFirstBeat = Math.max(0, Math.ceil(this.conductor.beatFloatAt(this.conductor.now())));
       this.playBgmAlignedToBeat(this.bgmFirstBeat);
@@ -1613,6 +1628,14 @@ export class MainScene extends Phaser.Scene {
     if (!pending || type !== 'audio' || key !== pending.track.key) return;
     this.pendingBgmSwitch = undefined;
     this.switchBgmTrack(pending.track, pending.playNow);
+  }
+
+  private releasePendingTutorialBgmIfSafe(): void {
+    const key = this.tutorialBgmKeyToRelease;
+    if (!key || key === this.currentBgmTrack.key) return;
+    this.sound.stopByKey(key);
+    if (this.cache.audio.exists(key)) this.cache.audio.remove(key);
+    this.tutorialBgmKeyToRelease = undefined;
   }
   private createSettingsPanel(): void {
     const uiFont = PIXEL_UI_FONT;
@@ -3664,7 +3687,13 @@ export class MainScene extends Phaser.Scene {
     this.hud.setGameplayHudVisible(false);
     this.hud.setTutorialComboVisible(false);
     this.hud.setWave('');
+    this.releaseTutorialStageAssets();
     this.startTutorialOutro();
+  }
+
+  private releaseTutorialStageAssets(): void {
+    this.stageEnvironment.releaseTutorial();
+    releaseTutorialTextureAssets(this, [TUTORIAL_PINK_PROJECTILE_TEXTURE]);
   }
 
   private startTutorialOutro(): void {
@@ -3751,8 +3780,13 @@ export class MainScene extends Phaser.Scene {
   private finishTutorialOutro(): void {
     if (this.state !== 'tutorialOutro' || this.tutorialOutroFinished) return;
     this.tutorialOutroFinished = true;
+    const tutorialBgmKey = this.currentBgmTrack.key;
+    const levelBgmKey = BGM_TRACKS[this.tuningEditor.levelBgmSlot].key;
+    this.tutorialBgmKeyToRelease = tutorialBgmKey === levelBgmKey ? undefined : tutorialBgmKey;
     this.destroyTutorialOutro();
+    releasePostTutorialVideo(this);
     this.beginFirstLevel();
+    this.releasePendingTutorialBgmIfSafe();
   }
 
   private destroyTutorialOutro(): void {

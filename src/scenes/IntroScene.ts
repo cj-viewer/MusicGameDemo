@@ -210,5 +210,21 @@ export class IntroScene extends Phaser.Scene {
     this.video?.off(Phaser.GameObjects.Events.VIDEO_ERROR, this.onVideoError, this);
     this.video?.off(Phaser.GameObjects.Events.VIDEO_LOCKED, this.restoreStartButton, this);
     this.video?.off(Phaser.GameObjects.Events.VIDEO_PLAYING, this.onVideoPlaying, this);
+    this.video?.stop(false);
+    this.video?.destroy();
+    this.menuBackground?.destroy();
+    this.menuContent?.destroy(true);
+    this.skipText?.destroy();
+    this.video = undefined;
+    this.menuBackground = undefined;
+    this.menuContent = undefined;
+    this.startUi = undefined;
+    this.skipText = undefined;
+    if (this.textures.exists(INTRO_TITLE_BACKGROUND_KEY)) {
+      this.textures.remove(INTRO_TITLE_BACKGROUND_KEY);
+    }
+    if (this.cache.video.exists(INTRO_VIDEO_KEY)) {
+      this.cache.video.remove(INTRO_VIDEO_KEY);
+    }
   }
 }
