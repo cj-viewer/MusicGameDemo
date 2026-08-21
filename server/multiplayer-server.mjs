@@ -77,7 +77,7 @@ wss.on('connection', (ws) => {
       const hit = distance <= maxRange && Math.abs(delta) <= halfArc;
       broadcast(room, { type: 'attack', playerId: player.id, heavy, angle: attackAngle, hit });
       if (!hit) return;
-      const damage = player.weapon === 'baton' ? (heavy ? 24 : 14) : (heavy ? 18 : 10);
+      const damage = player.weapon === 'baton' ? (heavy ? 24 : 16) : (heavy ? 18 : 10);
       target.hp = Math.max(0, target.hp - damage);
       broadcast(room, { type: 'health', players: publicPlayers(room), hitPlayerId: target.id, damage });
       if (target.hp <= 0) { room.started = false; broadcast(room, { type: 'match-over', winnerId: player.id }); }

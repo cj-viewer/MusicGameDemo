@@ -7,35 +7,117 @@ import { UI_SCALE, VIEW_HEIGHT, VIEW_WIDTH } from './displayConfig';
 const BAR_CENTER_X = 640;
 const BAR_Y = 668;
 const PANEL_WIDTH = 780;
-/** 正式关 Combo / 武器框严格收进两侧前景物件之间的可见空隙。 */
-const COMBO_PANEL_X = 503;
-const COMBO_PANEL_Y = 644;
-const COMBO_PANEL_WIDTH = 184;
-const COMBO_PANEL_HEIGHT = 50;
-const COMBO_PANEL_CENTER_X = COMBO_PANEL_X + COMBO_PANEL_WIDTH / 2;
-const COMBO_PANEL_CENTER_Y = COMBO_PANEL_Y + COMBO_PANEL_HEIGHT / 2;
-/** 正式关底部 Combo / 武器组保持已确认的紧凑尺寸。 */
-const COMBO_PANEL_SCALE = 0.72;
-const METER_X = COMBO_PANEL_X + 46;
-const METER_Y = COMBO_PANEL_CENTER_Y + 5;
-const METER_RADIUS = 18;
-const WEAPON_NAME_X = COMBO_PANEL_X + 104;
+/** 第一关 Combo / 武器框按最新黄框目标独立摆放；内容仍全部读取运行时状态。 */
+const COMBO_PANEL_X = 510;
+const COMBO_PANEL_Y = 594;
+const COMBO_PANEL_WIDTH = 268;
+const COMBO_PANEL_HEIGHT = 42;
+/** 底部 Combo / 武器组保持像素细条高度，同时横向覆盖两侧石子之间的目标区。 */
+const COMBO_PANEL_SCALE = 0.87;
+const METER_RADIUS = 16;
+type StatusPanelLayout = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  scale: number;
+  meterRadius: number;
+};
+
+const TUTORIAL_STATUS_PANEL: StatusPanelLayout = {
+  x: COMBO_PANEL_X,
+  y: COMBO_PANEL_Y,
+  width: COMBO_PANEL_WIDTH,
+  height: COMBO_PANEL_HEIGHT,
+  scale: COMBO_PANEL_SCALE,
+  meterRadius: METER_RADIUS
+};
+
+const FORMAL_STATUS_PANEL: StatusPanelLayout = {
+  x: 447,
+  y: 651,
+  width: 278,
+  height: COMBO_PANEL_HEIGHT,
+  scale: COMBO_PANEL_SCALE,
+  meterRadius: METER_RADIUS
+};
+
+function statusCenterX(layout: StatusPanelLayout): number {
+  return layout.x + layout.width / 2;
+}
+
+function statusCenterY(layout: StatusPanelLayout): number {
+  return layout.y + layout.height / 2;
+}
+
+function statusMeterX(layout: StatusPanelLayout): number {
+  return layout.x + layout.width * 0.25;
+}
+
+function statusMeterY(layout: StatusPanelLayout): number {
+  return statusCenterY(layout);
+}
+
+function statusWeaponX(layout: StatusPanelLayout): number {
+  return layout.x + layout.width * 0.75;
+}
 const STATE_X = BAR_CENTER_X + 400;
 /** Wave 文本移到四拍原来的上方位置；下移后的四拍不会与其重叠。 */
 const WAVE_X = 600;
 const WAVE_Y = 19;
-const COMBO_LABEL_Y = COMBO_PANEL_CENTER_Y - 14;
+const COMBO_LABEL_Y = statusCenterY(FORMAL_STATUS_PANEL) - 12;
 /** 角色头顶血条使用世界单位；最终屏幕足迹约为 153 × 53px。 */
 const PLAYER_HP_FRAME_WIDTH = 144;
 const PLAYER_HP_FRAME_HEIGHT = 50;
 const PLAYER_HP_BAR_WIDTH = 128;
 const PLAYER_HP_OFFSET_Y = 80;
-const HUD_FRAME_COLOR = 0xfffdf1;
-const HUD_GLASS_COLOR = 0xf2f0e8;
-const COMBO_METER_PROGRESS_COLOR = 0xf97316;
-const HUD_TEXT_COLOR = '#fffdf1';
-const HUD_MUTED_TEXT_COLOR = '#e3eee8';
-const HUD_FONT = '"Arial Narrow", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif';
+const HUD_FRAME_COLOR = 0x426764;
+const HUD_DARK_FRAME_COLOR = 0x284946;
+const HUD_SHADOW_COLOR = 0x1f3a38;
+const HUD_PANEL_COLOR = 0xcfdcb8;
+const HUD_PANEL_PINK = 0xf0c9df;
+const HUD_PANEL_PINK_LIGHT = 0xffe9f5;
+const HUD_PANEL_PINK_DARK = 0x6b4b78;
+const HUD_PANEL_PINK_SHADOW = 0x3f3154;
+const COMBO_METER_PROGRESS_COLOR = 0x49c9c8;
+const FORMAL_HUD_TEXT_COLOR = '#4f3b63';
+const HUD_TEXT_COLOR = '#315d5a';
+const HUD_MUTED_TEXT_COLOR = '#416965';
+const HUD_FONT = '"Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif';
+
+function fillHudPixelPanelPath(
+  gfx: Phaser.GameObjects.Graphics,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  step: number
+): void {
+  const s = Math.max(2, step);
+  const s2 = s * 2;
+  gfx.beginPath();
+  gfx.moveTo(x + s2, y);
+  gfx.lineTo(x + width - s2, y);
+  gfx.lineTo(x + width - s2, y + s);
+  gfx.lineTo(x + width - s, y + s);
+  gfx.lineTo(x + width - s, y + s2);
+  gfx.lineTo(x + width, y + s2);
+  gfx.lineTo(x + width, y + height - s2);
+  gfx.lineTo(x + width - s, y + height - s2);
+  gfx.lineTo(x + width - s, y + height - s);
+  gfx.lineTo(x + width - s2, y + height - s);
+  gfx.lineTo(x + width - s2, y + height);
+  gfx.lineTo(x + s2, y + height);
+  gfx.lineTo(x + s2, y + height - s);
+  gfx.lineTo(x + s, y + height - s);
+  gfx.lineTo(x + s, y + height - s2);
+  gfx.lineTo(x, y + height - s2);
+  gfx.lineTo(x, y + s2);
+  gfx.lineTo(x + s, y + s2);
+  gfx.lineTo(x + s, y + s);
+  gfx.lineTo(x + s2, y + s);
+  gfx.closePath();
+}
 /** 预览未来 3 拍（旧版 2 拍的 1.5 倍），相邻拍间距 120px；到达中心即拍点。 */
 const LOOKAHEAD_BEATS = 3;
 const NOTE_SPACING = 120;
@@ -89,26 +171,52 @@ export class HUD {
   private hpPulseUntil = 0;
   private screenLayer: Phaser.GameObjects.Container;
   private formalStatusLayer: Phaser.GameObjects.Container;
+  private redrawStatusChrome: (tutorialStyle: boolean) => void = () => undefined;
   private playerHpLayer: Phaser.GameObjects.Container;
   private bossHealthLayer: Phaser.GameObjects.Container;
   private bossHealthFill: Phaser.GameObjects.Rectangle;
   private bossHealthValue: Phaser.GameObjects.Text;
   private gameplayHudVisible = true;
   private tutorialComboVisible = false;
+  private statusMeterX = statusMeterX(FORMAL_STATUS_PANEL);
+  private statusMeterY = statusMeterY(FORMAL_STATUS_PANEL);
+  private statusMeterRadius = FORMAL_STATUS_PANEL.meterRadius;
+  private comboProgress = 0;
+  private comboLevel = 0;
+  private feverRatio = 0;
 
   constructor(scene: Phaser.Scene, conductor: Conductor) {
     this.scene = scene;
     this.conductor = conductor;
 
-    // 正式关沿用第一关的轻透白线语言：极淡雾面、细边与断角，不使用黑色实底。
+    // 全局 HUD 统一为参考图的像素面板：教学走浅绿系，正式关底部 HUD 走粉紫系。
     const hudChrome = scene.add.graphics().setDepth(9);
-    const drawGlassFrame = (x: number, y: number, width: number, height: number): void => {
-      const corner = 11;
-      hudChrome.fillStyle(HUD_GLASS_COLOR, 0.055);
-      hudChrome.fillRect(x, y, width, height);
-      hudChrome.lineStyle(1, HUD_FRAME_COLOR, 0.34);
-      hudChrome.strokeRect(x, y, width, height);
-      hudChrome.lineStyle(2, HUD_FRAME_COLOR, 0.82);
+    const drawFormalFrame = (x: number, y: number, width: number, height: number): void => {
+      const corner = 12;
+      hudChrome.fillStyle(HUD_PANEL_PINK_SHADOW, 0.44);
+      fillHudPixelPanelPath(hudChrome, x + 4, y + 4, width, height, 8);
+      hudChrome.fillPath();
+      hudChrome.fillStyle(HUD_PANEL_PINK, 0.9);
+      fillHudPixelPanelPath(hudChrome, x, y, width, height, 8);
+      hudChrome.fillPath();
+      hudChrome.fillStyle(HUD_PANEL_PINK_LIGHT, 0.48);
+      hudChrome.fillRect(x + 4, y + 4, width - 8, Math.max(6, Math.floor(height * 0.36)));
+      hudChrome.lineStyle(4, HUD_PANEL_PINK_DARK, 0.96);
+      fillHudPixelPanelPath(hudChrome, x, y, width, height, 8);
+      hudChrome.strokePath();
+      hudChrome.lineStyle(2, 0xfff3fb, 0.78);
+      fillHudPixelPanelPath(hudChrome, x + 4, y + 4, width - 8, height - 8, 4);
+      hudChrome.strokePath();
+      hudChrome.fillStyle(HUD_PANEL_PINK_DARK, 0.88);
+      hudChrome.fillRect(x + 12, y - 4, 8, 4);
+      hudChrome.fillRect(x + width - 20, y - 4, 8, 4);
+      hudChrome.fillRect(x + 12, y + height, 8, 4);
+      hudChrome.fillRect(x + width - 20, y + height, 8, 4);
+      hudChrome.fillRect(x - 4, y + 16, 4, 10);
+      hudChrome.fillRect(x + width, y + 16, 4, 10);
+      hudChrome.fillRect(x - 4, y + height - 26, 4, 10);
+      hudChrome.fillRect(x + width, y + height - 26, 4, 10);
+      hudChrome.lineStyle(3, 0xfff4fb, 0.9);
       hudChrome.lineBetween(x, y, x + corner, y);
       hudChrome.lineBetween(x, y, x, y + corner);
       hudChrome.lineBetween(x + width - corner, y, x + width, y);
@@ -118,24 +226,55 @@ export class HUD {
       hudChrome.lineBetween(x + width, y + height - corner, x + width, y + height);
       hudChrome.lineBetween(x + width - corner, y + height, x + width, y + height);
     };
-    drawGlassFrame(COMBO_PANEL_X, COMBO_PANEL_Y, COMBO_PANEL_WIDTH, COMBO_PANEL_HEIGHT);
-    hudChrome.lineStyle(1, HUD_FRAME_COLOR, 0.2);
-    hudChrome.lineBetween(
-      COMBO_PANEL_X + 92,
-      COMBO_PANEL_Y + 10,
-      COMBO_PANEL_X + 92,
-      COMBO_PANEL_Y + COMBO_PANEL_HEIGHT - 10
-    );
+    const drawTutorialFrame = (x: number, y: number, width: number, height: number): void => {
+      const corner = 10;
+      hudChrome.fillStyle(HUD_SHADOW_COLOR, 0.42);
+      fillHudPixelPanelPath(hudChrome, x + 4, y + 4, width, height, 8);
+      hudChrome.fillPath();
+      hudChrome.fillStyle(HUD_PANEL_COLOR, 0.9);
+      fillHudPixelPanelPath(hudChrome, x, y, width, height, 8);
+      hudChrome.fillPath();
+      hudChrome.fillStyle(0xe9f1ce, 0.42);
+      hudChrome.fillRect(x + 4, y + 4, width - 8, Math.max(6, Math.floor(height * 0.36)));
+      hudChrome.lineStyle(4, HUD_DARK_FRAME_COLOR, 0.96);
+      fillHudPixelPanelPath(hudChrome, x, y, width, height, 8);
+      hudChrome.strokePath();
+      hudChrome.lineStyle(2, 0xf4f8df, 0.8);
+      fillHudPixelPanelPath(hudChrome, x + 4, y + 4, width - 8, height - 8, 4);
+      hudChrome.strokePath();
+      hudChrome.fillStyle(HUD_DARK_FRAME_COLOR, 0.9);
+      hudChrome.fillRect(x + 12, y - 4, 8, 4);
+      hudChrome.fillRect(x + width - 20, y - 4, 8, 4);
+      hudChrome.fillRect(x + 12, y + height, 8, 4);
+      hudChrome.fillRect(x + width - 20, y + height, 8, 4);
+      hudChrome.fillRect(x - 4, y + 16, 4, 10);
+      hudChrome.fillRect(x + width, y + 16, 4, 10);
+      hudChrome.fillRect(x - 4, y + height - 26, 4, 10);
+      hudChrome.fillRect(x + width, y + height - 26, 4, 10);
+      hudChrome.lineStyle(3, 0xf4f8df, 0.92);
+      hudChrome.lineBetween(x, y, x + corner, y);
+      hudChrome.lineBetween(x, y, x, y + corner);
+      hudChrome.lineBetween(x + width - corner, y, x + width, y);
+      hudChrome.lineBetween(x + width, y, x + width, y + corner);
+      hudChrome.lineBetween(x, y + height - corner, x, y + height);
+      hudChrome.lineBetween(x, y + height, x + corner, y + height);
+      hudChrome.lineBetween(x + width, y + height - corner, x + width, y + height);
+      hudChrome.lineBetween(x + width - corner, y + height, x + width, y + height);
+    };
 
     const playerHpChrome = scene.add.graphics().setDepth(9);
     const hpLeft = -PLAYER_HP_FRAME_WIDTH / 2;
     const hpTop = -PLAYER_HP_FRAME_HEIGHT / 2;
     const hpCorner = 8;
-    playerHpChrome.fillStyle(HUD_GLASS_COLOR, 0.09);
+    playerHpChrome.fillStyle(HUD_SHADOW_COLOR, 0.34);
+    playerHpChrome.fillRect(hpLeft + 3, hpTop + 3, PLAYER_HP_FRAME_WIDTH, PLAYER_HP_FRAME_HEIGHT);
+    playerHpChrome.fillStyle(HUD_PANEL_PINK, 0.88);
     playerHpChrome.fillRect(hpLeft, hpTop, PLAYER_HP_FRAME_WIDTH, PLAYER_HP_FRAME_HEIGHT);
-    playerHpChrome.lineStyle(2, HUD_FRAME_COLOR, 0.48);
+    playerHpChrome.fillStyle(0xffeef7, 0.36);
+    playerHpChrome.fillRect(hpLeft + 4, hpTop + 4, PLAYER_HP_FRAME_WIDTH - 8, 15);
+    playerHpChrome.lineStyle(3, HUD_PANEL_PINK_DARK, 0.92);
     playerHpChrome.strokeRect(hpLeft, hpTop, PLAYER_HP_FRAME_WIDTH, PLAYER_HP_FRAME_HEIGHT);
-    playerHpChrome.lineStyle(3, HUD_FRAME_COLOR, 0.88);
+    playerHpChrome.lineStyle(2, 0xfff5fd, 0.82);
     playerHpChrome.lineBetween(hpLeft, hpTop, hpLeft + hpCorner, hpTop);
     playerHpChrome.lineBetween(hpLeft, hpTop, hpLeft, hpTop + hpCorner);
     playerHpChrome.lineBetween(-hpLeft - hpCorner, hpTop, -hpLeft, hpTop);
@@ -147,8 +286,8 @@ export class HUD {
 
     // 判定条背板
     this.panel = scene.add
-      .rectangle(BAR_CENTER_X, BAR_Y, PANEL_WIDTH, 60, 0x0f172a, 0.75)
-      .setStrokeStyle(1, 0x334155)
+      .rectangle(BAR_CENTER_X, BAR_Y, PANEL_WIDTH, 60, HUD_PANEL_COLOR, 0.84)
+      .setStrokeStyle(3, HUD_DARK_FRAME_COLOR, 0.9)
       .setDepth(10);
 
     // 中心判定点
@@ -162,13 +301,13 @@ export class HUD {
       .setDepth(10);
 
     this.feverText = scene.add
-      .text(METER_X, COMBO_LABEL_Y, '', {
+      .text(statusMeterX(FORMAL_STATUS_PANEL), COMBO_LABEL_Y, '', {
         fontFamily: HUD_FONT,
-        fontSize: '15px',
-        color: HUD_TEXT_COLOR,
+        fontSize: '12px',
+        color: FORMAL_HUD_TEXT_COLOR,
         letterSpacing: 1,
         resolution: 2,
-        shadow: { offsetX: 0, offsetY: 1, color: 'rgba(43, 63, 58, 0.55)', blur: 2, fill: true }
+        shadow: { offsetX: 1, offsetY: 1, color: 'rgba(255, 239, 250, 0.62)', blur: 0, fill: true }
       })
       .setOrigin(0.5)
       .setDepth(11)
@@ -176,16 +315,18 @@ export class HUD {
 
     this.meterGfx = scene.add.graphics().setDepth(10);
     this.meterBeatRing = scene.add
-      .circle(METER_X, METER_Y, METER_RADIUS)
-      .setStrokeStyle(2, HUD_FRAME_COLOR, 0.72)
+      .circle(this.statusMeterX, this.statusMeterY, this.statusMeterRadius)
+      .setStrokeStyle(2, HUD_PANEL_PINK_DARK, 0.72)
       .setFillStyle(0, 0)
       .setDepth(10);
     this.meterText = scene.add
-      .text(METER_X, METER_Y, '0%', {
+      .text(statusMeterX(FORMAL_STATUS_PANEL), statusMeterY(FORMAL_STATUS_PANEL), '0%', {
         fontFamily: HUD_FONT,
-        fontSize: '11px',
+        fontSize: '12px',
         fontStyle: 'bold',
-        color: HUD_TEXT_COLOR,
+        color: FORMAL_HUD_TEXT_COLOR,
+        stroke: '#fff0fa',
+        strokeThickness: 1,
         resolution: 2
       })
       .setOrigin(0.5)
@@ -199,78 +340,124 @@ export class HUD {
         color: HUD_TEXT_COLOR,
         letterSpacing: 1,
         resolution: 2,
-        shadow: { offsetX: 0, offsetY: 1, color: 'rgba(43, 63, 58, 0.55)', blur: 2, fill: true }
+        shadow: { offsetX: 1, offsetY: 1, color: 'rgba(255, 248, 238, 0.65)', blur: 0, fill: true }
       })
       .setOrigin(0, 0.5)
       .setDepth(11);
     this.hpBarBg = scene.add
-      .rectangle(-PLAYER_HP_BAR_WIDTH / 2 - 2, 10, PLAYER_HP_BAR_WIDTH + 4, 16, HUD_FRAME_COLOR, 0.08)
+      .rectangle(-PLAYER_HP_BAR_WIDTH / 2 - 2, 10, PLAYER_HP_BAR_WIDTH + 4, 16, 0x6f5482, 0.22)
       .setOrigin(0, 0.5)
       .setStrokeStyle(1, HUD_FRAME_COLOR, 0.52)
       .setDepth(10);
     this.hpBar = scene.add
-      .rectangle(-PLAYER_HP_BAR_WIDTH / 2, 10, PLAYER_HP_BAR_WIDTH, 10, 0xd4f2df)
+      .rectangle(-PLAYER_HP_BAR_WIDTH / 2, 10, PLAYER_HP_BAR_WIDTH, 10, 0x9ee8a8)
       .setOrigin(0, 0.5)
       .setAlpha(0.9)
       .setDepth(10);
     this.hpText = scene.add
-      .text(PLAYER_HP_BAR_WIDTH / 2, -13, '100 / 100', {
+      .text(PLAYER_HP_BAR_WIDTH / 2, -13, '', {
         fontFamily: HUD_FONT,
         fontSize: '13px',
         color: HUD_MUTED_TEXT_COLOR,
         resolution: 2,
-        shadow: { offsetX: 0, offsetY: 1, color: 'rgba(43, 63, 58, 0.55)', blur: 1, fill: true }
+        shadow: { offsetX: 1, offsetY: 1, color: 'rgba(255, 248, 238, 0.6)', blur: 0, fill: true }
       })
       .setOrigin(1, 0.5)
       .setDepth(10);
 
     this.waveText = scene.add
-      .text(WAVE_X, WAVE_Y, '', { fontFamily: 'Arial', fontSize: '13px', color: '#e2e8f0' })
+      .text(WAVE_X, WAVE_Y, '', {
+        fontFamily: HUD_FONT,
+        fontSize: '13px',
+        fontStyle: 'bold',
+        color: '#4f3b63',
+        resolution: 2
+      })
       .setOrigin(0.5)
       .setDepth(10);
 
     this.weaponText = scene.add
-      .text(WEAPON_NAME_X, METER_Y, '', {
+      .text(statusWeaponX(FORMAL_STATUS_PANEL), statusMeterY(FORMAL_STATUS_PANEL), '', {
         fontFamily: HUD_FONT,
         fontSize: '20px',
-        color: '#d8f3ed',
+        fontStyle: 'bold',
+        color: FORMAL_HUD_TEXT_COLOR,
+        stroke: '#fff0fa',
+        strokeThickness: 1,
         letterSpacing: 1,
         resolution: 2,
-        shadow: { offsetX: 0, offsetY: 1, color: 'rgba(43, 63, 58, 0.62)', blur: 2, fill: true }
+        shadow: { offsetX: 1, offsetY: 1, color: 'rgba(255, 248, 238, 0.68)', blur: 0, fill: true }
       })
-      .setOrigin(0, 0.5)
+      .setOrigin(0.5)
       .setDepth(10);
 
+    this.redrawStatusChrome = (tutorialStyle: boolean): void => {
+      const layout = tutorialStyle ? TUTORIAL_STATUS_PANEL : FORMAL_STATUS_PANEL;
+      this.statusMeterX = statusMeterX(layout);
+      this.statusMeterY = statusMeterY(layout);
+      this.statusMeterRadius = layout.meterRadius;
+      if (this.formalStatusLayer) {
+        this.formalStatusLayer
+          .setPosition(statusCenterX(layout) * (1 - layout.scale), statusCenterY(layout) * (1 - layout.scale))
+          .setScale(layout.scale);
+      }
+      this.feverText.setPosition(this.statusMeterX, statusCenterY(layout) - 12);
+      this.meterBeatRing.setPosition(this.statusMeterX, this.statusMeterY);
+      this.meterBeatRing.setRadius(this.statusMeterRadius);
+      this.meterText.setPosition(this.statusMeterX, this.statusMeterY);
+      this.weaponText.setPosition(statusWeaponX(layout), this.statusMeterY);
+      hudChrome.clear();
+      if (tutorialStyle) {
+        drawTutorialFrame(layout.x, layout.y, layout.width, layout.height);
+      } else {
+        drawFormalFrame(layout.x, layout.y, layout.width, layout.height);
+      }
+      hudChrome.lineStyle(2, tutorialStyle ? HUD_DARK_FRAME_COLOR : HUD_PANEL_PINK_DARK, 0.42);
+      hudChrome.lineBetween(
+        statusCenterX(layout),
+        layout.y + 7,
+        statusCenterX(layout),
+        layout.y + layout.height - 7
+      );
+      this.meterBeatRing.setStrokeStyle(2, tutorialStyle ? HUD_DARK_FRAME_COLOR : HUD_PANEL_PINK_DARK, 0.72);
+      this.meterText.setColor(tutorialStyle ? HUD_TEXT_COLOR : FORMAL_HUD_TEXT_COLOR);
+      this.meterText.setStroke(tutorialStyle ? '#eff6d7' : '#fff0fa', 1);
+      this.weaponText.setColor(tutorialStyle ? HUD_TEXT_COLOR : FORMAL_HUD_TEXT_COLOR);
+      this.weaponText.setStroke(tutorialStyle ? '#eff6d7' : '#fff0fa', 1);
+      this.redrawMeter();
+    };
+    this.redrawStatusChrome(false);
+
     this.stateText = scene.add
-      .text(STATE_X, BAR_Y, '', { fontFamily: 'Arial', fontSize: '15px', color: '#fbbf24' })
+      .text(STATE_X, BAR_Y, '', { fontFamily: HUD_FONT, fontSize: '15px', fontStyle: 'bold', color: '#a87922', resolution: 2 })
       .setOrigin(0, 0.5)
       .setDepth(10);
 
     this.messageText = scene.add
       .text(640, 320, '', {
-        fontFamily: 'Arial',
+        fontFamily: HUD_FONT,
         fontSize: '52px',
-        color: '#ffffff',
+        color: HUD_TEXT_COLOR,
         align: 'center',
-        stroke: '#000000',
-        strokeThickness: 6
+        stroke: '#f4f2dc',
+        strokeThickness: 4
       })
       .setOrigin(0.5)
       .setDepth(20);
 
     this.victoryBackdrop = scene.add
-      .rectangle(VIEW_WIDTH / 2, UI_SCALE * 320, UI_SCALE * 430, UI_SCALE * 116, 0x34223f, 0.92)
-      .setStrokeStyle(2, 0x6b3b70, 0.7)
+      .rectangle(VIEW_WIDTH / 2, UI_SCALE * 320, UI_SCALE * 430, UI_SCALE * 116, HUD_PANEL_PINK, 0.9)
+      .setStrokeStyle(4, HUD_PANEL_PINK_DARK, 0.9)
       .setDepth(0.2)
       .setVisible(false);
     this.victoryText = scene.add
       .text(VIEW_WIDTH / 2, UI_SCALE * 320, 'VICTORY', {
-        fontFamily: 'Arial',
+        fontFamily: HUD_FONT,
         fontSize: `${64 * UI_SCALE}px`,
         fontStyle: 'bold',
-        color: '#d8b4fe',
-        stroke: '#2b1834',
-        strokeThickness: 5
+        color: '#5b3f72',
+        stroke: '#ffeaf6',
+        strokeThickness: 3
       })
       .setOrigin(0.5)
       .setDepth(0.21)
@@ -280,11 +467,11 @@ export class HUD {
     // 主场景镜头会做轻微前探和拉远；用独立屏幕层抵消 scroll 与 zoom，保留旧 HUD 像素布局。
     this.formalStatusLayer = scene.add
       .container(
-        COMBO_PANEL_CENTER_X * (1 - COMBO_PANEL_SCALE),
-        COMBO_PANEL_CENTER_Y * (1 - COMBO_PANEL_SCALE),
+        statusCenterX(FORMAL_STATUS_PANEL) * (1 - FORMAL_STATUS_PANEL.scale),
+        statusCenterY(FORMAL_STATUS_PANEL) * (1 - FORMAL_STATUS_PANEL.scale),
         [hudChrome, this.feverText, this.meterGfx, this.meterBeatRing, this.meterText, this.weaponText]
       )
-      .setScale(COMBO_PANEL_SCALE);
+      .setScale(FORMAL_STATUS_PANEL.scale);
 
     this.screenLayer = scene.add
       .container(screenLayerOffset(VIEW_WIDTH), screenLayerOffset(VIEW_HEIGHT))
@@ -304,8 +491,8 @@ export class HUD {
     const bossBarWidth = 760;
     const bossBarY = 610;
     const bossBackdrop = scene.add
-      .rectangle(640, bossBarY, bossBarWidth + 12, 24, 0x09090b, 0.9)
-      .setStrokeStyle(1, 0xd6d3d1, 0.7);
+      .rectangle(640, bossBarY, bossBarWidth + 12, 24, HUD_PANEL_PINK, 0.9)
+      .setStrokeStyle(3, HUD_PANEL_PINK_DARK, 0.88);
     this.bossHealthFill = scene.add
       .rectangle(640 - bossBarWidth / 2, bossBarY, bossBarWidth, 14, 0x991b1b, 1)
       .setOrigin(0, 0.5);
@@ -522,6 +709,7 @@ export class HUD {
 
   setTutorialComboVisible(visible: boolean): void {
     this.tutorialComboVisible = visible;
+    this.redrawStatusChrome(visible);
     this.refreshHudVisibility();
   }
 
@@ -546,7 +734,7 @@ export class HUD {
     }
     const patternText = this.pattern.map((key) => (key === 'L' ? '轻' : '重')).join(' → ');
     this.weaponText.setText(this.beatGuideVisible ? `${this.weaponName}　${patternText}` : this.weaponName);
-    this.weaponText.setColor(this.weaponName === '警棍' ? '#ead8f6' : '#d8f3ed');
+    this.weaponText.setColor(this.tutorialComboVisible ? HUD_TEXT_COLOR : FORMAL_HUD_TEXT_COLOR);
   }
 
   onBeat(beatInMeasure: number): void {
@@ -560,7 +748,7 @@ export class HUD {
     this.pulseVictory(heavy);
     const pulseScale = heavy ? 1.16 : 1.1;
     this.scene.tweens.killTweensOf([this.meterBeatRing, this.meterText, this.feverText, this.weaponText, this.waveText]);
-    this.meterBeatRing.setStrokeStyle(heavy ? 3 : 2, heavy ? 0xffe39a : 0xd8f3ed, 0.92);
+    this.meterBeatRing.setStrokeStyle(heavy ? 3 : 2, heavy ? 0xe2b844 : HUD_PANEL_PINK_DARK, 0.92);
     for (const target of [this.meterBeatRing, this.meterText, this.feverText, this.weaponText, this.waveText]) {
       target.setScale(pulseScale);
     }
@@ -630,10 +818,10 @@ export class HUD {
    */
   beatPulse(level: number, fever: boolean): void {
     if (level <= 0 && !fever) return;
-    const colors = [0x475569, 0x67e8f9, 0x67e8f9, 0xfacc15, 0xfacc15, 0xf97316];
+    const colors = [HUD_PANEL_PINK_DARK, 0x4ec8c9, 0x4ec8c9, 0xe0b744, 0xe0b744, 0xd9823a];
     const color = fever ? 0xf97316 : colors[level];
     const ring = this.scene.add
-      .circle(METER_X, METER_Y, METER_RADIUS)
+      .circle(this.statusMeterX, this.statusMeterY, this.statusMeterRadius)
       .setStrokeStyle(fever ? 4 : 2 + level * 0.4, color, 0.9)
       .setDepth(10);
     this.formalStatusLayer.add(ring);
@@ -660,12 +848,12 @@ export class HUD {
   feverBurst(): void {
     const burst = this.scene.add
       .text(640, 360, 'FEVER TIME!', {
-        fontFamily: 'Arial',
+        fontFamily: HUD_FONT,
         fontSize: '72px',
         fontStyle: 'bold',
-        color: '#f97316',
-        stroke: '#ffffff',
-        strokeThickness: 6
+        color: '#d9823a',
+        stroke: '#fff3dc',
+        strokeThickness: 5
       })
       .setOrigin(0.5)
       .setDepth(20)
@@ -692,7 +880,7 @@ export class HUD {
     // 判定条处的入场冲击环
     for (let i = 0; i < 3; i++) {
       const ring = this.scene.add
-        .circle(METER_X, METER_Y, METER_RADIUS)
+        .circle(this.statusMeterX, this.statusMeterY, this.statusMeterRadius)
         .setStrokeStyle(5, 0xf97316, 0.9)
         .setDepth(10);
       this.formalStatusLayer.add(ring);
@@ -707,45 +895,56 @@ export class HUD {
     }
   }
 
+  private redrawMeter(): void {
+    this.meterGfx.clear();
+    this.meterGfx.lineStyle(2, HUD_PANEL_PINK_DARK, 0.28);
+    this.meterGfx.strokeCircle(this.statusMeterX, this.statusMeterY, this.statusMeterRadius);
+    const ratio = this.feverMode
+      ? this.feverRatio
+      : this.comboLevel >= 5
+        ? 1
+        : (this.comboProgress - this.comboLevel * 20) / 20;
+    if (ratio > 0) {
+      this.meterGfx.lineStyle(this.feverMode ? 4 : 3, COMBO_METER_PROGRESS_COLOR, 0.95);
+      this.meterGfx.beginPath();
+      this.meterGfx.arc(
+        this.statusMeterX,
+        this.statusMeterY,
+        this.statusMeterRadius,
+        -Math.PI / 2,
+        -Math.PI / 2 + Math.PI * 2 * Phaser.Math.Clamp(ratio, 0, 1),
+        false
+      );
+      this.meterGfx.strokePath();
+    }
+  }
+
   setFever(active: boolean): void {
     this.feverMode = active;
     if (!active) {
-      if (this.beatGuideVisible) this.panel.setStrokeStyle(1, 0x334155);
-      this.feverText.setColor(HUD_TEXT_COLOR);
-      this.meterText.setColor(HUD_TEXT_COLOR);
+      if (this.beatGuideVisible) this.panel.setStrokeStyle(3, HUD_DARK_FRAME_COLOR, 0.9);
+      this.feverText.setColor(FORMAL_HUD_TEXT_COLOR);
+      this.meterText.setColor(FORMAL_HUD_TEXT_COLOR);
     } else {
       this.feverText.setColor('#ffe39a');
       this.meterText.setColor('#ffe39a');
     }
+    this.redrawMeter();
   }
 
   /** Fever 倒计时环（替代常规进度环） */
   setFeverCountdown(ratio: number): void {
+    this.feverRatio = ratio;
     if (!this.feverMode) return;
-    this.meterGfx.clear();
-    this.meterGfx.lineStyle(2, HUD_FRAME_COLOR, 0.28);
-    this.meterGfx.strokeCircle(METER_X, METER_Y, METER_RADIUS);
-    if (ratio > 0) {
-      this.meterGfx.lineStyle(4, COMBO_METER_PROGRESS_COLOR, 0.95);
-      this.meterGfx.beginPath();
-      this.meterGfx.arc(METER_X, METER_Y, METER_RADIUS, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio, false);
-      this.meterGfx.strokePath();
-    }
+    this.redrawMeter();
     this.meterText.setText(`${Math.round(Phaser.Math.Clamp(ratio, 0, 1) * 100)}%`);
   }
 
   setCombo(progress: number, level: number): void {
+    this.comboProgress = progress;
+    this.comboLevel = level;
     if (this.feverMode) return;
-    this.meterGfx.clear();
-    this.meterGfx.lineStyle(2, HUD_FRAME_COLOR, 0.28);
-    this.meterGfx.strokeCircle(METER_X, METER_Y, METER_RADIUS);
-    const toNext = level >= 5 ? 1 : (progress - level * 20) / 20;
-    if (toNext > 0) {
-      this.meterGfx.lineStyle(3, COMBO_METER_PROGRESS_COLOR, 0.95);
-      this.meterGfx.beginPath();
-      this.meterGfx.arc(METER_X, METER_Y, METER_RADIUS, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * toNext, false);
-      this.meterGfx.strokePath();
-    }
+    this.redrawMeter();
     this.meterText.setText(`${Math.round(Phaser.Math.Clamp(progress, 0, 100))}%`);
   }
 
@@ -772,7 +971,7 @@ export class HUD {
     });
     this.meterText.setColor('#dc2626');
     this.scene.time.delayedCall(220, () => {
-      this.meterText.setColor(this.feverMode ? '#ffe39a' : HUD_TEXT_COLOR);
+      this.meterText.setColor(this.feverMode ? '#ffe39a' : FORMAL_HUD_TEXT_COLOR);
     });
   }
 

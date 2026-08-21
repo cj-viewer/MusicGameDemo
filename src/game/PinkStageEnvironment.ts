@@ -51,7 +51,7 @@ export function preloadStageEnvironments(
   scene: Phaser.Scene,
   asset: (file: string) => string
 ): void {
-  scene.load.image(TUTORIAL_BACKGROUND_KEY, asset('images/backgrounds/pond-stage/pond-stage-background.png'));
+  scene.load.image(TUTORIAL_BACKGROUND_KEY, asset('images/backgrounds/pond-stage/pond-stage-background.png?v=11111-20260820'));
   scene.load.image(
     PINK_STAGE_BACKGROUND_KEY,
     asset('images/backgrounds/pink-stage/pink-stage-runtime-base.png')

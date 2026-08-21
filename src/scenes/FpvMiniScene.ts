@@ -23,6 +23,47 @@ const ARENA_LEFT = ui(94);
 const ARENA_RIGHT = ui(1186);
 const ARENA_TOP = ui(12);
 const ARENA_BOTTOM = ui(626);
+const FPV_UI_FONT = '"Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif';
+const FPV_PANEL = 0xf0c9df;
+const FPV_PANEL_LIGHT = 0xffe9f5;
+const FPV_FRAME = 0x6b4b78;
+const FPV_DARK = 0x4f3b63;
+const FPV_GRID = 0xb887bd;
+const FPV_TEXT = '#fff0fa';
+
+function fillFpvPixelPanelPath(
+  gfx: Phaser.GameObjects.Graphics,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  step: number
+): void {
+  const s = Math.max(2, step);
+  const s2 = s * 2;
+  gfx.beginPath();
+  gfx.moveTo(x + s2, y);
+  gfx.lineTo(x + width - s2, y);
+  gfx.lineTo(x + width - s2, y + s);
+  gfx.lineTo(x + width - s, y + s);
+  gfx.lineTo(x + width - s, y + s2);
+  gfx.lineTo(x + width, y + s2);
+  gfx.lineTo(x + width, y + height - s2);
+  gfx.lineTo(x + width - s, y + height - s2);
+  gfx.lineTo(x + width - s, y + height - s);
+  gfx.lineTo(x + width - s2, y + height - s);
+  gfx.lineTo(x + width - s2, y + height);
+  gfx.lineTo(x + s2, y + height);
+  gfx.lineTo(x + s2, y + height - s);
+  gfx.lineTo(x + s, y + height - s);
+  gfx.lineTo(x + s, y + height - s2);
+  gfx.lineTo(x, y + height - s2);
+  gfx.lineTo(x, y + s2);
+  gfx.lineTo(x + s, y + s2);
+  gfx.lineTo(x + s, y + s);
+  gfx.lineTo(x + s2, y + s);
+  gfx.closePath();
+}
 
 interface Projected {
   screenX: number;
@@ -54,22 +95,41 @@ export class FpvMiniScene extends Phaser.Scene {
     this.freeBulletSprites = [];
     this.posts = [];
 
-    this.add.rectangle(PANEL_W / 2, PANEL_H / 2, PANEL_W, PANEL_H, 0x0b1026, 0.98).setDepth(-10000);
-    this.add.rectangle(PANEL_W / 2, (HORIZON_Y + PANEL_H) / 2, PANEL_W, PANEL_H - HORIZON_Y, 0x1f2937).setDepth(-10000);
+    const panelGfx = this.add.graphics().setDepth(-10002);
+    panelGfx.fillStyle(FPV_DARK, 0.32);
+    fillFpvPixelPanelPath(panelGfx, 2, 2, PANEL_W - 2, PANEL_H - 2, 8);
+    panelGfx.fillPath();
+    panelGfx.fillStyle(FPV_PANEL, 0.9);
+    fillFpvPixelPanelPath(panelGfx, 0, 0, PANEL_W - 4, PANEL_H - 4, 8);
+    panelGfx.fillPath();
+    panelGfx.lineStyle(3, FPV_FRAME, 0.92);
+    fillFpvPixelPanelPath(panelGfx, 0, 0, PANEL_W - 4, PANEL_H - 4, 8);
+    panelGfx.strokePath();
+    panelGfx.fillStyle(FPV_PANEL_LIGHT, 0.82);
+    panelGfx.fillRect(12, -3, 10, 4);
+    panelGfx.fillRect(PANEL_W - 30, -3, 10, 4);
+    panelGfx.fillRect(12, PANEL_H - 4, 10, 4);
+    panelGfx.fillRect(PANEL_W - 30, PANEL_H - 4, 10, 4);
+    panelGfx.fillRect(-4, 20, 4, 14);
+    panelGfx.fillRect(PANEL_W - 4, 20, 4, 14);
+    panelGfx.fillRect(-4, PANEL_H - 38, 4, 14);
+    panelGfx.fillRect(PANEL_W - 4, PANEL_H - 38, 4, 14);
+    this.add.rectangle(PANEL_W / 2, (HORIZON_Y + PANEL_H) / 2, PANEL_W, PANEL_H - HORIZON_Y, FPV_DARK, 0.54).setDepth(-10000);
+    this.add.rectangle(PANEL_W / 2, 10, PANEL_W - 14, 4, FPV_PANEL_LIGHT, 0.55).setDepth(-9999);
     const ground = this.add.graphics().setDepth(-9000);
-    ground.lineStyle(1, 0x334155, 0.72);
+    ground.lineStyle(1, FPV_GRID, 0.5);
     for (const distance of [60, 100, 180, 320, 560]) {
       const y = HORIZON_Y + (EYE_HEIGHT * FOCAL) / distance;
       ground.lineBetween(0, y, PANEL_W, y);
     }
-    this.add.rectangle(PANEL_W / 2, PANEL_H / 2, PANEL_W - 2, PANEL_H - 2).setStrokeStyle(1, 0xe879f9, 0.72).setFillStyle(0, 0).setDepth(10000);
-    this.add.text(8, 7, 'FPV', { fontFamily: 'Arial', fontSize: '10px', color: '#f5d0fe' }).setDepth(10001);
-    this.compass = this.add.text(PANEL_W / 2, 7, '—', { fontFamily: 'Arial', fontSize: '10px', color: '#d8b4fe' }).setOrigin(0.5).setDepth(10001);
+    this.add.rectangle(PANEL_W / 2, PANEL_H / 2, PANEL_W - 14, PANEL_H - 14).setStrokeStyle(1, FPV_PANEL_LIGHT, 0.48).setFillStyle(0, 0).setDepth(10000);
+    this.add.text(8, 7, 'FPV', { fontFamily: FPV_UI_FONT, fontSize: '10px', fontStyle: 'bold', color: FPV_TEXT, resolution: 2 }).setDepth(10001);
+    this.compass = this.add.text(PANEL_W / 2, 7, '—', { fontFamily: FPV_UI_FONT, fontSize: '10px', fontStyle: 'bold', color: FPV_TEXT, resolution: 2 }).setOrigin(0.5).setDepth(10001);
     const crosshair = this.add.graphics().setDepth(10001);
-    crosshair.lineStyle(1, 0xf5d0fe, 0.72);
+    crosshair.lineStyle(1, FPV_PANEL_LIGHT, 0.78);
     crosshair.lineBetween(PANEL_W / 2 - 6, HORIZON_Y, PANEL_W / 2 + 6, HORIZON_Y);
     crosshair.lineBetween(PANEL_W / 2, HORIZON_Y - 6, PANEL_W / 2, HORIZON_Y + 6);
-    this.beatRing = this.add.circle(PANEL_W / 2, HORIZON_Y, 19.5).setStrokeStyle(1, 0xe879f9, 0.65).setDepth(10001);
+    this.beatRing = this.add.circle(PANEL_W / 2, HORIZON_Y, 19.5).setStrokeStyle(1, FPV_FRAME, 0.7).setDepth(10001);
 
     for (let index = 0; index < ENEMY_POOL; index++) {
       this.freeEnemySprites.push(this.add.image(0, 0, 'guard').setOrigin(0.5, 1).setVisible(false));

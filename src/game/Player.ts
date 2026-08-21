@@ -364,10 +364,45 @@ export class Player {
   setScriptedWalk(active: boolean): void {
     this.scriptedWalk = active;
     this.body.setVelocity(0, 0);
+    if (active && !this.dead) {
+      this.actionLockedUntil = 0;
+      this.go.anims.resume();
+      this.setAction('run', true);
+    }
   }
 
   setScriptedPosition(x: number, y: number): void {
     this.body.reset(x, y);
+  }
+
+  /** 剧情退场：停下脚本步态并让角色、武器和阴影作为一个整体淡出。 */
+  fadeOutScripted(durationMs: number, onComplete: () => void): void {
+    this.scriptedWalk = false;
+    this.dead = true;
+    this.body.setVelocity(0, 0);
+    this.body.enable = false;
+    this.actionLockedUntil = Infinity;
+    this.scene.tweens.killTweensOf([
+      this.go,
+      this.weaponSprite,
+      this.shadowSprite,
+      this.attackFx,
+      this.aimArrow
+    ]);
+    this.scene.tweens.add({
+      targets: [this.go, this.weaponSprite, this.shadowSprite, this.attackFx, this.aimArrow],
+      alpha: 0,
+      duration: durationMs,
+      ease: 'Sine.easeIn',
+      onComplete: () => {
+        this.go.setVisible(false);
+        this.weaponSprite.setVisible(false);
+        this.shadowSprite.setVisible(false);
+        this.attackFx.setVisible(false);
+        this.aimArrow.setVisible(false);
+        onComplete();
+      }
+    });
   }
 
   /** 攻击触发前也刷新一次，保证鼠标按下的同一帧就使用最新指向。 */
@@ -384,7 +419,7 @@ export class Player {
     this.body.setVelocity(this.knockbackVelocity.x, this.knockbackVelocity.y);
   }
 
-  /** Fever Time 的正确输入恢复生命，不超过最大生命。 */
+  /** Fever 清屏完成时的唯一战斗回血入口。 */
   heal(amount: number): void {
     if (this.dead || amount <= 0) return;
     const previousHp = this.hp;
@@ -392,6 +427,12 @@ export class Player {
     if (this.hp === previousHp) return;
     this.scene.hud.setHp(this.hp, this.maxHp);
     this.flash(0x86efac);
+  }
+
+  /** 进入正式关时重置关卡初始生命；不播放战斗回血反馈。 */
+  restoreFullHealthForLevelStart(): void {
+    this.hp = this.maxHp;
+    this.scene.hud.setHp(this.hp, this.maxHp);
   }
 
   /** 战败：两套完整死亡动画随机播放其一，并隐藏手持武器。 */

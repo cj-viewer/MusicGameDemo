@@ -4,6 +4,12 @@ import { queueCoreAssets, startBackgroundLoad } from '../game/assetManifest';
 
 const INTRO_VIDEO_KEY = 'intro-video';
 const INTRO_TITLE_BACKGROUND_KEY = 'intro-title-background';
+const INTRO_UI_FONT = '"Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif';
+const INTRO_PANEL = 0xf0c9df;
+const INTRO_PANEL_LIGHT = 0xffe9f5;
+const INTRO_FRAME = 0x6b4b78;
+const INTRO_TEXT = '#4f3b63';
+const INTRO_CYAN = 0x4ec8c9;
 
 export class IntroScene extends Phaser.Scene {
   private video?: Phaser.GameObjects.Video;
@@ -48,25 +54,30 @@ export class IntroScene extends Phaser.Scene {
     const buttonX = ui(1060);
     const buttonY = ui(205);
     this.startButton = this.add
-      .rectangle(buttonX, buttonY, ui(220), ui(60), 0x7a244e, 0.44)
-      .setStrokeStyle(ui(2), 0xffffff, 0.92)
+      .rectangle(buttonX, buttonY, ui(220), ui(60), INTRO_PANEL, 0.94)
+      .setStrokeStyle(ui(3), INTRO_FRAME, 0.95)
       .setInteractive({ useHandCursor: true });
     const startButtonInner = this.add
-      .rectangle(buttonX, buttonY, ui(206), ui(46), 0xfff8ec, 0.04)
-      .setStrokeStyle(ui(1), 0xfff5dc, 0.72);
+      .rectangle(buttonX, buttonY - ui(16), ui(204), ui(8), INTRO_PANEL_LIGHT, 0.55);
+    const startPixelTabs = [
+      this.add.rectangle(buttonX - ui(82), buttonY - ui(34), ui(14), ui(6), INTRO_FRAME, 0.9),
+      this.add.rectangle(buttonX + ui(82), buttonY - ui(34), ui(14), ui(6), INTRO_FRAME, 0.9),
+      this.add.rectangle(buttonX - ui(82), buttonY + ui(34), ui(14), ui(6), INTRO_FRAME, 0.9),
+      this.add.rectangle(buttonX + ui(82), buttonY + ui(34), ui(14), ui(6), INTRO_FRAME, 0.9)
+    ];
     this.startButtonText = this.add
       .text(buttonX, buttonY, '单 人 模 式', {
-        fontFamily: '"Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif',
+        fontFamily: INTRO_UI_FONT,
         fontSize: `${ui(26)}px`,
         fontStyle: 'bold',
-        color: '#fffdf1',
+        color: INTRO_TEXT,
         letterSpacing: ui(6),
         resolution: 2,
-        shadow: { color: '#7b284d', blur: ui(4), fill: true, offsetY: ui(1) }
+        shadow: { color: '#fff0fa', blur: 0, fill: true, offsetX: ui(1), offsetY: ui(1) }
       })
       .setOrigin(0.5);
     this.menuContent = this.add
-      .container(0, 0, [this.startButton, startButtonInner, this.startButtonText])
+      .container(0, 0, [this.startButton, startButtonInner, ...startPixelTabs, this.startButtonText])
       .setDepth(2);
     this.startUi = this.menuContent;
 
@@ -83,36 +94,41 @@ export class IntroScene extends Phaser.Scene {
     this.video.on(Phaser.GameObjects.Events.VIDEO_PLAYING, this.onVideoPlaying, this);
 
     this.startButton.on('pointerover', () =>
-      this.startButton?.setFillStyle(0xa33b68, 0.62).setStrokeStyle(ui(2), 0xfff5dc, 1)
+      this.startButton?.setFillStyle(INTRO_PANEL_LIGHT, 0.96).setStrokeStyle(ui(3), INTRO_FRAME, 1)
     );
     this.startButton.on('pointerout', () =>
-      this.startButton?.setFillStyle(0x7a244e, 0.44).setStrokeStyle(ui(2), 0xffffff, 0.92)
+      this.startButton?.setFillStyle(INTRO_PANEL, 0.94).setStrokeStyle(ui(3), INTRO_FRAME, 0.95)
     );
     this.startButton.on('pointerdown', this.playIntro, this);
 
     const multiplayerY = ui(285);
     const multiplayerButton = this.add
-      .rectangle(buttonX, multiplayerY, ui(220), ui(60), 0x164e63, 0.58)
-      .setStrokeStyle(ui(2), 0x67e8f9, 0.95)
+      .rectangle(buttonX, multiplayerY, ui(220), ui(60), INTRO_CYAN, 0.9)
+      .setStrokeStyle(ui(3), 0x1e7577, 0.95)
       .setInteractive({ useHandCursor: true });
     const multiplayerInner = this.add
-      .rectangle(buttonX, multiplayerY, ui(206), ui(46), 0xffffff, 0.035)
-      .setStrokeStyle(ui(1), 0xa5f3fc, 0.7);
+      .rectangle(buttonX, multiplayerY - ui(16), ui(204), ui(8), 0xd7ffff, 0.45);
+    const multiplayerPixelTabs = [
+      this.add.rectangle(buttonX - ui(82), multiplayerY - ui(34), ui(14), ui(6), 0x1e7577, 0.9),
+      this.add.rectangle(buttonX + ui(82), multiplayerY - ui(34), ui(14), ui(6), 0x1e7577, 0.9),
+      this.add.rectangle(buttonX - ui(82), multiplayerY + ui(34), ui(14), ui(6), 0x1e7577, 0.9),
+      this.add.rectangle(buttonX + ui(82), multiplayerY + ui(34), ui(14), ui(6), 0x1e7577, 0.9)
+    ];
     const multiplayerText = this.add.text(buttonX, multiplayerY, '多 人 联 机', {
-      fontFamily: '"Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif',
-      fontSize: ui(24) + 'px', fontStyle: 'bold', color: '#ecfeff', letterSpacing: ui(4), resolution: 2
+      fontFamily: INTRO_UI_FONT,
+      fontSize: ui(24) + 'px', fontStyle: 'bold', color: INTRO_TEXT, letterSpacing: ui(4), resolution: 2
     }).setOrigin(0.5);
-    this.menuContent.add([multiplayerButton, multiplayerInner, multiplayerText]);
+    this.menuContent.add([multiplayerButton, multiplayerInner, ...multiplayerPixelTabs, multiplayerText]);
     multiplayerButton
-      .on('pointerover', () => multiplayerButton.setFillStyle(0x0e7490, 0.82))
-      .on('pointerout', () => multiplayerButton.setFillStyle(0x164e63, 0.58))
+      .on('pointerover', () => multiplayerButton.setFillStyle(0x7de1e2, 0.96))
+      .on('pointerout', () => multiplayerButton.setFillStyle(INTRO_CYAN, 0.9))
       .on('pointerdown', () => this.scene.start('MultiplayerLobbyScene'));
 
     this.skipText = this.add
       .text(VIEW_WIDTH - ui(20), VIEW_HEIGHT - ui(20), '空格跳过', {
-        fontFamily: 'Arial, Microsoft YaHei, sans-serif',
+        fontFamily: INTRO_UI_FONT,
         fontSize: `${ui(12)}px`,
-        color: '#ffffff'
+        color: '#fff0fa'
       })
       .setOrigin(1)
       .setAlpha(0.75)
