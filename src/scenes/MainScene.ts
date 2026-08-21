@@ -41,12 +41,6 @@ import {
   queuePostTutorialVideo,
   startBackgroundLoad,
   POST_TUTORIAL_VIDEO_KEY,
-  TUTORIAL_BOTTOM_ROCKS_KEY,
-  TUTORIAL_CONTROL_DASH_KEY,
-  TUTORIAL_CONTROL_HEAVY_KEY,
-  TUTORIAL_CONTROL_LIGHT_KEY,
-  TUTORIAL_CONTROL_SETTINGS_KEY,
-  TUTORIAL_PATTERN_PANEL_KEY
 } from '../game/assetManifest';
 import {
   createStageEnvironments,
@@ -144,36 +138,164 @@ const TUTORIAL_PATTERN_PANEL_X = 114.07098267244896;
 const TUTORIAL_PATTERN_PANEL_Y = 86.03587055872106;
 const TUTORIAL_PATTERN_PANEL_WIDTH = 354.68973765582154;
 const TUTORIAL_PATTERN_PANEL_HEIGHT = 170.59471811127755;
-const TUTORIAL_PATTERN_PANEL_CROPS = [
-  { x: 63, y: 124, width: 94, height: 95 },
-  { x: 174, y: 124, width: 94, height: 95 },
-  { x: 286, y: 124, width: 94, height: 95 },
-  { x: 397, y: 124, width: 95, height: 95 }
-] as const;
-const TUTORIAL_BOTTOM_ROCKS_LAYOUT = {
-  x: 89,
-  y: 877,
-  width: 1704,
-  height: 112
-} as const;
+const TUTORIAL_PATTERN_ICON_CENTERS = [86, 142, 198, 254] as const;
+const TUTORIAL_PATTERN_ICON_Y = 104;
 const TUTORIAL_CONTROL_LAYOUTS = [
-  { key: TUTORIAL_CONTROL_LIGHT_KEY, x: 130, y: 450 },
-  { key: TUTORIAL_CONTROL_HEAVY_KEY, x: 128, y: 549 },
-  { key: TUTORIAL_CONTROL_SETTINGS_KEY, x: 128, y: 648 },
-  { key: TUTORIAL_CONTROL_DASH_KEY, x: 128, y: 747 }
+  { x: 130, y: 450, text: '左键　轻攻击', icon: 'mouse' },
+  { x: 128, y: 549, text: '右键　重攻击', icon: 'mouse' },
+  { x: 128, y: 648, text: 'Esc　设置', icon: 'key' },
+  { x: 128, y: 747, text: 'L / R Shift　冲刺', icon: 'key' }
 ] as const;
 const TUTORIAL_CONTROL_WIDTH = 320;
 const TUTORIAL_CONTROL_HEIGHT = 64;
 const TUTORIAL_CONTROL_ENTRANCE_DELAY = 160;
 const TUTORIAL_CONTROL_ENTRANCE_DURATION = 280;
-/** 正式关四拍图案放大为上一版的两倍。 */
-const FORMAL_PATTERN_SCALE = 1.16;
+/** 正式关四拍图案只调整显示位置与比例，不改变连招判定。 */
+const FORMAL_PATTERN_SCALE = 0.88;
 /** 放在 ARENA 顶部反馈框线（2K y=96）下方，避免框线穿过图案。 */
-const FORMAL_PATTERN_ICON_Y = 112;
+const FORMAL_PATTERN_ICON_Y = 94;
 const FORMAL_PATTERN_BASE_COLOR = 0xffffff;
 const FORMAL_PATTERN_LIGHT_COLOR = 0x67e8f9;
 const FORMAL_PATTERN_HEAVY_COLOR = 0xfbbf24;
 const FORMAL_PATTERN_HIT_FLASH_MS = 220;
+const PIXEL_UI_FONT = '"Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif';
+const PIXEL_UI_GREEN_PANEL = 0xcfdcb8;
+const PIXEL_UI_GREEN_PANEL_LIGHT = 0xe9efd8;
+const PIXEL_UI_GREEN_FRAME = 0x426764;
+const PIXEL_UI_GREEN_DARK = 0x2d5653;
+const PIXEL_UI_CYAN = 0x4ec8c9;
+const PIXEL_UI_PINK_PANEL = 0xf0c9df;
+const PIXEL_UI_PINK_LIGHT = 0xffe9f5;
+const PIXEL_UI_PINK_FRAME = 0x6b4b78;
+
+function fillPixelPanelPath(
+  gfx: Phaser.GameObjects.Graphics,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  step: number
+): void {
+  const s = Math.max(2, step);
+  const s2 = s * 2;
+  gfx.beginPath();
+  gfx.moveTo(x + s2, y);
+  gfx.lineTo(x + width - s2, y);
+  gfx.lineTo(x + width - s2, y + s);
+  gfx.lineTo(x + width - s, y + s);
+  gfx.lineTo(x + width - s, y + s2);
+  gfx.lineTo(x + width, y + s2);
+  gfx.lineTo(x + width, y + height - s2);
+  gfx.lineTo(x + width - s, y + height - s2);
+  gfx.lineTo(x + width - s, y + height - s);
+  gfx.lineTo(x + width - s2, y + height - s);
+  gfx.lineTo(x + width - s2, y + height);
+  gfx.lineTo(x + s2, y + height);
+  gfx.lineTo(x + s2, y + height - s);
+  gfx.lineTo(x + s, y + height - s);
+  gfx.lineTo(x + s, y + height - s2);
+  gfx.lineTo(x, y + height - s2);
+  gfx.lineTo(x, y + s2);
+  gfx.lineTo(x + s, y + s2);
+  gfx.lineTo(x + s, y + s);
+  gfx.lineTo(x + s2, y + s);
+  gfx.closePath();
+}
+
+function drawPixelPanel(
+  gfx: Phaser.GameObjects.Graphics,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  fillColor: number,
+  frameColor: number,
+  darkColor: number,
+  lightColor: number,
+  alpha = 0.92,
+  step = 8
+): void {
+  gfx.fillStyle(darkColor, 0.34);
+  fillPixelPanelPath(gfx, x + step / 2, y + step / 2, width, height, step);
+  gfx.fillPath();
+  gfx.fillStyle(fillColor, alpha);
+  fillPixelPanelPath(gfx, x, y, width, height, step);
+  gfx.fillPath();
+  gfx.fillStyle(lightColor, 0.42);
+  gfx.fillRect(x + step, y + step, width - step * 2, Math.max(step, Math.floor(height * 0.26)));
+  gfx.lineStyle(4, darkColor, 0.98);
+  fillPixelPanelPath(gfx, x, y, width, height, step);
+  gfx.strokePath();
+  gfx.lineStyle(2, frameColor, 0.86);
+  fillPixelPanelPath(gfx, x + step / 2, y + step / 2, width - step, height - step, Math.max(3, step / 2));
+  gfx.strokePath();
+  gfx.fillStyle(darkColor, 0.9);
+  gfx.fillRect(x + step, y - step / 2, step * 0.8, step / 2);
+  gfx.fillRect(x + width - step * 1.8, y - step / 2, step * 0.8, step / 2);
+  gfx.fillRect(x + step, y + height, step * 0.8, step / 2);
+  gfx.fillRect(x + width - step * 1.8, y + height, step * 0.8, step / 2);
+  gfx.fillStyle(darkColor, 0.88);
+  gfx.fillRect(x - step / 2, y + step * 1.8, step / 2, step);
+  gfx.fillRect(x + width, y + step * 1.8, step / 2, step);
+  gfx.fillRect(x - step / 2, y + height - step * 2.8, step / 2, step);
+  gfx.fillRect(x + width, y + height - step * 2.8, step / 2, step);
+  gfx.fillStyle(lightColor, 0.82);
+  gfx.fillRect(x + step * 1.2, y + step * 1.2, step * 0.75, step * 0.75);
+  gfx.fillRect(x + width - step * 2, y + step * 1.2, step * 0.75, step * 0.75);
+}
+
+function drawPixelBox(
+  gfx: Phaser.GameObjects.Graphics,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  fillColor: number,
+  darkColor: number,
+  lightColor: number,
+  alpha = 0.96
+): void {
+  gfx.fillStyle(darkColor, 0.32);
+  gfx.fillRect(x + 3, y + 3, width, height);
+  gfx.fillStyle(fillColor, alpha);
+  gfx.fillRect(x, y, width, height);
+  gfx.lineStyle(4, darkColor, 0.98);
+  gfx.strokeRect(x, y, width, height);
+  gfx.lineStyle(2, lightColor, 0.88);
+  gfx.strokeRect(x + 4, y + 4, width - 8, height - 8);
+  gfx.fillStyle(lightColor, 0.28);
+  gfx.fillRect(x + 6, y + 6, width - 12, Math.max(4, Math.floor(height * 0.22)));
+  gfx.fillStyle(darkColor, 0.85);
+  gfx.fillRect(x - 3, y + 8, 3, 8);
+  gfx.fillRect(x + width, y + 8, 3, 8);
+  gfx.fillRect(x - 3, y + height - 16, 3, 8);
+  gfx.fillRect(x + width, y + height - 16, 3, 8);
+}
+
+function drawPixelMouseIcon(
+  gfx: Phaser.GameObjects.Graphics,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  darkColor: number,
+  lightColor: number
+): void {
+  const half = Math.floor(width / 2);
+  gfx.fillStyle(0xf5f8e5, 0.98);
+  gfx.fillRect(x, y + 4, width, height - 8);
+  gfx.fillStyle(darkColor, 1);
+  gfx.fillRect(x, y + 10, 4, height - 16);
+  gfx.fillRect(x + width - 4, y + 10, 4, height - 16);
+  gfx.fillRect(x + 4, y + 4, width - 8, 4);
+  gfx.fillRect(x + 4, y + height - 8, width - 8, 4);
+  gfx.fillStyle(lightColor, 0.72);
+  gfx.fillRect(x + 6, y + 8, half - 8, 12);
+  gfx.fillStyle(0xffffff, 0.95);
+  gfx.fillRect(x + half + 2, y + 8, half - 8, 12);
+  gfx.fillStyle(darkColor, 0.9);
+  gfx.fillRect(x + half - 1, y + 6, 2, height - 12);
+}
 const BATON_KNOCKBACK_SPEED = 187.5;
 const BATON_HEAVY_KNOCKBACK_SPEED = 360;
 const BATON_CRESCENT_KNOCKBACK_SPEED = 480;
@@ -377,7 +499,10 @@ export class MainScene extends Phaser.Scene {
       || this.state === 'tutorialOutro'
     ) return;
     const openingSettings = this.tuningEditor.visible || !this.volumePanelVisible;
-    if (openingSettings) this.completeTutorialControlTask(2, true);
+    if (openingSettings) {
+      this.flashTutorialControlCard(2);
+      this.completeTutorialControlTask(2, true);
+    }
     if (this.tuningEditor.visible) {
       this.setTuningEditorVisible(false);
       this.setVolumePanelVisible(true);
@@ -425,8 +550,8 @@ export class MainScene extends Phaser.Scene {
   private formalPatternBaseY = 0;
   /** 用于忽略已过期的延迟隐藏回调。 */
   private formalPatternVisibilityRun = 0;
-  private tutorialBeatHighlights: Phaser.GameObjects.Image[] = [];
-  private tutorialHitHighlights: Phaser.GameObjects.Image[] = [];
+  private tutorialBeatHighlights: Phaser.GameObjects.Shape[] = [];
+  private tutorialHitHighlights: Phaser.GameObjects.Shape[] = [];
   private batonHoldTrack?: Phaser.GameObjects.Rectangle;
   private batonHoldFill?: Phaser.GameObjects.Rectangle;
   private batonHoldLabel?: Phaser.GameObjects.Text;
@@ -457,7 +582,8 @@ export class MainScene extends Phaser.Scene {
   private confirmUi?: Phaser.GameObjects.Container;
   /** PSD 教学石子前景与操作卡组成的屏幕固定 UI。 */
   private tutorialControlGuide?: Phaser.GameObjects.Container;
-  private tutorialControlRows: Phaser.GameObjects.Image[] = [];
+  private tutorialControlRows: Phaser.GameObjects.Container[] = [];
+  private tutorialControlFlashes: Phaser.GameObjects.Rectangle[] = [];
   private tutorialControlTaskArmed = false;
   private tutorialControlRunId = 0;
   /** 轻、重攻击卡同时常驻；分别完成后才继续设置与闪现教学。 */
@@ -491,18 +617,22 @@ export class MainScene extends Phaser.Scene {
     const barHeight = hd(14);
     const label = this.add
       .text(cx, cy - hd(34), '加载中…', {
-        fontFamily: 'Arial, Microsoft YaHei, sans-serif',
+        fontFamily: PIXEL_UI_FONT,
         fontSize: `${hd(22)}px`,
-        color: '#e9d5ff'
+        fontStyle: 'bold',
+        color: '#315d5a',
+        stroke: '#f4f2dc',
+        strokeThickness: 2
       })
       .setOrigin(0.5)
       .setDepth(1000);
     const frame = this.add
       .rectangle(cx, cy, barWidth, barHeight)
-      .setStrokeStyle(2, 0x67e8f9, 0.9)
+      .setFillStyle(PIXEL_UI_GREEN_PANEL, 0.78)
+      .setStrokeStyle(3, PIXEL_UI_GREEN_FRAME, 0.9)
       .setDepth(1000);
     const fill = this.add
-      .rectangle(cx - barWidth / 2 + 2, cy, 0, barHeight - 4, 0xec4899)
+      .rectangle(cx - barWidth / 2 + 3, cy, 0, barHeight - 6, PIXEL_UI_CYAN)
       .setOrigin(0, 0.5)
       .setDepth(1000);
     const onProgress = (value: number): void => {
@@ -566,6 +696,7 @@ export class MainScene extends Phaser.Scene {
     this.confirmUi = undefined;
     this.tutorialControlGuide = undefined;
     this.tutorialControlRows = [];
+    this.tutorialControlFlashes = [];
     this.tutorialControlTaskArmed = false;
     this.tutorialControlRunId = 0;
     this.tutorialAttackTasksCompleted.clear();
@@ -866,6 +997,7 @@ export class MainScene extends Phaser.Scene {
         return;
       }
       if (this.state === 'over' || this.state === 'victory' || this.time.now < this.suppressAttackUntil) return;
+      if (btn) this.flashTutorialControlCard(btn === 'L' ? 0 : 1);
       const attackHandled = btn === 'H' && this.player.weapon.id === 'baton'
         ? this.beginBatonHeavyHold()
         : btn ? this.handleAttackInput(btn) : false;
@@ -930,6 +1062,7 @@ export class MainScene extends Phaser.Scene {
 
       if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
         event.preventDefault();
+        this.flashTutorialControlCard(3);
         if (this.tryKeyboardDodge()) this.completeTutorialControlTask(3);
       }
     });
@@ -1192,14 +1325,14 @@ export class MainScene extends Phaser.Scene {
     } as const;
     const style = styles[judgement];
     const textStyle: Phaser.Types.GameObjects.Text.TextStyle = {
-      fontFamily: '"Arial Narrow", Arial, sans-serif',
+      fontFamily: PIXEL_UI_FONT,
       fontSize: `${style.size}px`,
       fontStyle: 'bold italic',
       color: style.top,
-      stroke: '#111827',
-      strokeThickness: 4,
+      stroke: '#7f938b',
+      strokeThickness: 2.5,
       letterSpacing: 1,
-      shadow: { offsetX: 0, offsetY: 2, color: '#000000', blur: 3, stroke: false, fill: true }
+      shadow: { offsetX: 0, offsetY: 1, color: 'rgba(43, 63, 58, 0.45)', blur: 2, stroke: false, fill: true }
     };
     const label = this.add.text(0, 0, style.label, textStyle).setOrigin(0.5);
     const gradient = label.context.createLinearGradient(0, 0, 0, label.height);
@@ -1403,13 +1536,16 @@ export class MainScene extends Phaser.Scene {
     this.switchBgmTrack(pending.track, pending.playNow);
   }
   private createSettingsPanel(): void {
-    const uiFont = '"Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif';
-    const frameColor = 0xf7f5e7;
+    const uiFont = PIXEL_UI_FONT;
+    const frameColor = PIXEL_UI_GREEN_FRAME;
+    const panelTextColor = '#315d5a';
+    const mutedTextColor = '#496e69';
+    const accentTextColor = '#1e7577';
     const textShadow = {
-      offsetX: 0,
+      offsetX: 1,
       offsetY: 1,
-      color: 'rgba(52, 71, 65, 0.72)',
-      blur: 2,
+      color: 'rgba(244, 244, 218, 0.78)',
+      blur: 0,
       stroke: false,
       fill: true
     } as const;
@@ -1430,27 +1566,38 @@ export class MainScene extends Phaser.Scene {
     this.volumePanelFrostImage = this.add
       .image(320, 360, SETTINGS_PANEL_FROST_TEXTURE_KEY)
       .setDisplaySize(SETTINGS_PANEL_WIDTH, SETTINGS_PANEL_HEIGHT);
-    // 场景采样先做真实模糊，再叠一层很薄的乳白雾；不使用深色隐私底或全屏暗罩。
-    const panelBackground = this.add
-      .rectangle(320, 360, SETTINGS_PANEL_WIDTH, SETTINGS_PANEL_HEIGHT, 0xf2f0e8, 0.18)
-      .setStrokeStyle(1, frameColor, 0.72);
+    // 场景采样先做真实模糊，再叠参考图里的浅色像素面板；只改样式，不改设置交互。
+    const panelPixelFrame = this.add.graphics();
+    drawPixelPanel(
+      panelPixelFrame,
+      SETTINGS_PANEL_X,
+      SETTINGS_PANEL_Y,
+      SETTINGS_PANEL_WIDTH,
+      SETTINGS_PANEL_HEIGHT,
+      PIXEL_UI_GREEN_PANEL,
+      PIXEL_UI_GREEN_FRAME,
+      PIXEL_UI_GREEN_DARK,
+      PIXEL_UI_GREEN_PANEL_LIGHT,
+      0.86,
+      10
+    );
     const panelFrost = this.add.graphics();
     panelFrost.fillGradientStyle(
-      0xffffff,
-      0xffffff,
-      0xffffff,
-      0xffffff,
-      0.1,
-      0.1,
-      0.035,
-      0.035
+      PIXEL_UI_GREEN_PANEL_LIGHT,
+      PIXEL_UI_GREEN_PANEL_LIGHT,
+      PIXEL_UI_GREEN_PANEL,
+      PIXEL_UI_GREEN_PANEL,
+      0.36,
+      0.36,
+      0.12,
+      0.12
     );
     panelFrost.fillRect(SETTINGS_PANEL_X, SETTINGS_PANEL_Y, SETTINGS_PANEL_WIDTH, SETTINGS_PANEL_HEIGHT);
-    const panelTopHighlight = this.add.rectangle(320, 36, 578, 1, frameColor, 0.28);
+    const panelTopHighlight = this.add.rectangle(320, 36, 578, 2, PIXEL_UI_GREEN_PANEL_LIGHT, 0.7);
     const panelInnerFrame = this.add.rectangle(320, 360, 578, 628, 0xffffff, 0)
-      .setStrokeStyle(1, frameColor, 0.22);
+      .setStrokeStyle(2, frameColor, 0.38);
     const cornerFrame = this.add.graphics();
-    cornerFrame.lineStyle(2, frameColor, 0.9);
+    cornerFrame.lineStyle(3, frameColor, 0.95);
     const cornerLength = 17;
     const corners: Array<[number, number, number, number]> = [
       [20, 35, 1, 1],
@@ -1468,29 +1615,29 @@ export class MainScene extends Phaser.Scene {
     cornerFrame.fillStyle(frameColor, 0.92);
     corners.forEach(([x, y]) => cornerFrame.fillRect(x - 2, y - 2, 4, 4));
 
-    const sectionTag = this.add.rectangle(80, 106, 102, 28, frameColor, 0.07)
+    const sectionTag = this.add.rectangle(80, 106, 102, 28, PIXEL_UI_GREEN_PANEL_LIGHT, 0.82)
       .setOrigin(0, 0.5)
-      .setStrokeStyle(1, frameColor, 0.48);
-    const sectionDivider = this.add.rectangle(385, 106, 410, 1, frameColor, 0.18);
+      .setStrokeStyle(2, frameColor, 0.76);
+    const sectionDivider = this.add.rectangle(385, 106, 410, 2, frameColor, 0.24);
     const objects: Phaser.GameObjects.GameObject[] = [
       this.volumePanelFrostImage,
-      panelBackground,
+      panelPixelFrame,
       panelFrost,
       panelTopHighlight,
       panelInnerFrame,
       cornerFrame,
       this.add.text(320, 55, '音量设置', {
         fontFamily: uiFont,
-        fontSize: '24px',
+        fontSize: '26px',
         fontStyle: 'bold',
-        color: '#fffef6',
+        color: panelTextColor,
         resolution: 2,
         shadow: textShadow
       }).setOrigin(0.5),
       this.add.text(320, 80, '游戏已暂停', {
         fontFamily: uiFont,
         fontSize: '12px',
-        color: '#fffef6',
+        color: mutedTextColor,
         resolution: 2,
         shadow: textShadow
       }).setAlpha(0.78).setOrigin(0.5),
@@ -1499,7 +1646,7 @@ export class MainScene extends Phaser.Scene {
       this.add.text(131, 106, '音频分类', {
         fontFamily: uiFont,
         fontSize: '16px',
-        color: '#fffef6',
+        color: panelTextColor,
         resolution: 2,
         shadow: textShadow
       }).setOrigin(0.5),
@@ -1512,9 +1659,9 @@ export class MainScene extends Phaser.Scene {
     this.heavyModeToggleTexts = {};
     const debugObjects: Phaser.GameObjects.GameObject[] = [
       this.add.text(690, 84, '战斗参数', {
-        fontFamily: 'Arial', fontSize: '20px', fontStyle: 'bold', color: '#67e8f9'
+        fontFamily: uiFont, fontSize: '20px', fontStyle: 'bold', color: accentTextColor, resolution: 2, shadow: textShadow
       }).setOrigin(0, 0.5),
-      this.add.rectangle(640, 360, 2, 510, 0x334155, 0.9)
+      this.add.rectangle(640, 360, 3, 510, PIXEL_UI_GREEN_FRAME, 0.46)
     ];
 
     const beginDrag = (channel: VolumeControlChannel, pointer: Phaser.Input.Pointer): void => {
@@ -1530,7 +1677,7 @@ export class MainScene extends Phaser.Scene {
       const labelText = this.add.text(80, y, label, {
         fontFamily: uiFont,
         fontSize: '16px',
-        color: '#fffef6',
+        color: panelTextColor,
         resolution: 2,
         shadow: textShadow
       }).setOrigin(0, 0.5);
@@ -1547,34 +1694,34 @@ export class MainScene extends Phaser.Scene {
         y,
         SETTINGS_VOLUME_TRACK_WIDTH,
         4,
-        frameColor,
-        0.2
-      ).setStrokeStyle(1, frameColor, 0.34);
+        PIXEL_UI_GREEN_DARK,
+        0.22
+      ).setStrokeStyle(1, frameColor, 0.56);
       const fill = this.add.rectangle(
         SETTINGS_VOLUME_TRACK_X,
         y,
         SETTINGS_VOLUME_TRACK_WIDTH,
         4,
-        0xe9ead2,
-        0.82
+        PIXEL_UI_CYAN,
+        0.78
       ).setOrigin(0, 0.5);
       const thumb = this.add.circle(
         SETTINGS_VOLUME_TRACK_X + SETTINGS_VOLUME_TRACK_WIDTH,
         y,
         7,
-        0x66736e,
-        0.9
+        PIXEL_UI_GREEN_PANEL_LIGHT,
+        0.96
       )
-        .setStrokeStyle(1.5, frameColor, 0.95)
+        .setStrokeStyle(2, frameColor, 0.95)
         .setInteractive({ useHandCursor: true });
       const valueText = this.add.text(570, y, '', {
         fontFamily: uiFont,
         fontSize: '14px',
-        color: '#fffef6',
+        color: panelTextColor,
         resolution: 2,
         shadow: textShadow
       }).setOrigin(0.5);
-      const rowDivider = this.add.rectangle(325, y + 24, 490, 1, frameColor, 0.1);
+      const rowDivider = this.add.rectangle(325, y + 24, 490, 1, frameColor, 0.16);
       hitTrack.on('pointerdown', (pointer: Phaser.Input.Pointer) => beginDrag(channel, pointer));
       thumb.on('pointerdown', (pointer: Phaser.Input.Pointer) => beginDrag(channel, pointer));
       this.volumeSliders[channel] = { fill, thumb, valueText, max };
@@ -1591,11 +1738,11 @@ export class MainScene extends Phaser.Scene {
     });
 
     const addCombatTab = (page: CombatSettingsPage, x: number, label: string): void => {
-      const rect = this.add.rectangle(x, 116, 126, 30, 0x334155)
-        .setStrokeStyle(1, 0x64748b)
+      const rect = this.add.rectangle(x, 116, 126, 30, PIXEL_UI_GREEN_PANEL, 0.88)
+        .setStrokeStyle(2, PIXEL_UI_GREEN_FRAME, 0.82)
         .setInteractive({ useHandCursor: true });
       const text = this.add.text(x, 116, label, {
-        fontFamily: 'Arial', fontSize: '15px', fontStyle: 'bold', color: '#e2e8f0'
+        fontFamily: uiFont, fontSize: '15px', fontStyle: 'bold', color: panelTextColor, resolution: 2, shadow: textShadow
       }).setOrigin(0.5);
       rect.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
         pointer.event.stopPropagation();
@@ -1624,11 +1771,11 @@ export class MainScene extends Phaser.Scene {
       label: string,
       onClick: () => void
     ): void => {
-      const rect = this.add.rectangle(x, y, 38, 30, 0x334155)
-        .setStrokeStyle(1, 0x94a3b8)
+      const rect = this.add.rectangle(x, y, 38, 30, PIXEL_UI_GREEN_PANEL_LIGHT, 0.92)
+        .setStrokeStyle(2, PIXEL_UI_GREEN_FRAME, 0.86)
         .setInteractive({ useHandCursor: true });
       const text = this.add.text(x, y, label, {
-        fontFamily: 'Arial', fontSize: '19px', color: '#ffffff'
+        fontFamily: uiFont, fontSize: '19px', fontStyle: 'bold', color: panelTextColor, resolution: 2
       }).setOrigin(0.5);
       rect.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
         pointer.event.stopPropagation();
@@ -1644,14 +1791,14 @@ export class MainScene extends Phaser.Scene {
       step: number
     ): void => {
       target.push(this.add.text(690, y, label, {
-        fontFamily: 'Arial', fontSize: '16px', color: '#cbd5e1'
+        fontFamily: uiFont, fontSize: '16px', color: panelTextColor, resolution: 2, shadow: textShadow
       }).setOrigin(0, 0.5));
       const isBpmKey = BPM_SETTING_KEYS.includes(key as BpmSettingKey);
       const initialValue = isBpmKey
         ? `${this.tuningEditor[key as BpmSettingKey].toFixed(2)} BPM`
         : '';
       const valueText = this.add.text(1030, y, initialValue, {
-        fontFamily: 'Arial', fontSize: '15px', color: '#67e8f9'
+        fontFamily: uiFont, fontSize: '15px', fontStyle: 'bold', color: accentTextColor, resolution: 2
       }).setOrigin(0.5);
       if (isBpmKey) {
         valueText.setInteractive({ useHandCursor: true });
@@ -1659,8 +1806,8 @@ export class MainScene extends Phaser.Scene {
           pointer.event.stopPropagation();
           this.promptForBpmSetting(key as BpmSettingKey);
         });
-        valueText.on('pointerover', () => valueText.setColor('#ffffff'));
-        valueText.on('pointerout', () => valueText.setColor('#67e8f9'));
+        valueText.on('pointerover', () => valueText.setColor('#1b7779'));
+        valueText.on('pointerout', () => valueText.setColor(accentTextColor));
       }
       this.combatValueTexts[key] = valueText;
       target.push(valueText);
@@ -1716,7 +1863,7 @@ export class MainScene extends Phaser.Scene {
 
     // BPM 拆成两类：判定节奏只影响拍点判定窗口，歌曲本身只影响 BGM 实际播放速度，二者互不影响。
     comboMeterPageObjects.push(this.add.text(690, comboMeterY, '判定节奏（只影响拍点判定，不改变音乐播放速度）', {
-      fontFamily: 'Arial', fontSize: '14px', fontStyle: 'bold', color: '#fbbf24'
+      fontFamily: uiFont, fontSize: '14px', fontStyle: 'bold', color: '#a87922', resolution: 2
     }).setOrigin(0, 0.5));
     comboMeterY += COMBO_METER_HEADER_H;
     const rhythmBpmRows: Array<[CombatSettingKey, string, number]> = [
@@ -1729,7 +1876,7 @@ export class MainScene extends Phaser.Scene {
     });
 
     comboMeterPageObjects.push(this.add.text(690, comboMeterY, '歌曲本身（只改变 BGM 播放速度，不影响判定拍点）', {
-      fontFamily: 'Arial', fontSize: '14px', fontStyle: 'bold', color: '#67e8f9'
+      fontFamily: uiFont, fontSize: '14px', fontStyle: 'bold', color: accentTextColor, resolution: 2
     }).setOrigin(0, 0.5));
     comboMeterY += COMBO_METER_HEADER_H;
     const songBpmRows: Array<[CombatSettingKey, string, number]> = [
@@ -1744,7 +1891,7 @@ export class MainScene extends Phaser.Scene {
     addCombatRow(comboMeterPageObjects, 'levelBeatAlignmentOffsetMs', comboMeterY, '正式关节拍对齐偏移', 5);
     comboMeterY += COMBO_METER_ROW_H;
     comboMeterPageObjects.push(this.add.text(690, comboMeterY, '点击 BPM 数值可直接输入（40–240）；关闭 P Menu 后立即重新对齐。', {
-      fontFamily: 'Arial', fontSize: '14px', color: '#94a3b8'
+      fontFamily: uiFont, fontSize: '14px', color: mutedTextColor, resolution: 2
     }).setOrigin(0, 0.5));
 
     const enemyRows: Array<[CombatSettingKey, string, number]> = [
@@ -1783,13 +1930,13 @@ export class MainScene extends Phaser.Scene {
 
     const addHeavyModeToggle = (weaponId: WeaponId, y: number, label: string): void => {
       modePageObjects.push(this.add.text(690, y, label, {
-        fontFamily: 'Arial', fontSize: '16px', color: '#cbd5e1'
+        fontFamily: uiFont, fontSize: '16px', color: panelTextColor, resolution: 2, shadow: textShadow
       }).setOrigin(0, 0.5));
-      const button = this.add.rectangle(1040, y, 150, 36, 0x334155)
-        .setStrokeStyle(1, 0x94a3b8)
+      const button = this.add.rectangle(1040, y, 150, 36, PIXEL_UI_GREEN_PANEL, 0.92)
+        .setStrokeStyle(2, PIXEL_UI_GREEN_FRAME, 0.86)
         .setInteractive({ useHandCursor: true });
       const text = this.add.text(1040, y, '', {
-        fontFamily: 'Arial', fontSize: '15px', fontStyle: 'bold', color: '#ffffff'
+        fontFamily: uiFont, fontSize: '15px', fontStyle: 'bold', color: panelTextColor, resolution: 2
       }).setOrigin(0.5);
       button.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
         pointer.event.stopPropagation();
@@ -1805,13 +1952,13 @@ export class MainScene extends Phaser.Scene {
       modePageObjects.push(button, text);
     };
     modePageObjects.push(this.add.text(690, 155, '玩家瞄准模式', {
-      fontFamily: 'Arial', fontSize: '16px', color: '#cbd5e1'
+      fontFamily: uiFont, fontSize: '16px', color: panelTextColor, resolution: 2, shadow: textShadow
     }).setOrigin(0, 0.5));
-    this.manualAimToggleButton = this.add.rectangle(1040, 155, 150, 36, 0x334155)
-      .setStrokeStyle(1, 0x94a3b8)
+    this.manualAimToggleButton = this.add.rectangle(1040, 155, 150, 36, PIXEL_UI_GREEN_PANEL, 0.92)
+      .setStrokeStyle(2, PIXEL_UI_GREEN_FRAME, 0.86)
       .setInteractive({ useHandCursor: true });
     this.manualAimToggleText = this.add.text(1040, 155, '', {
-      fontFamily: 'Arial', fontSize: '15px', fontStyle: 'bold', color: '#ffffff'
+      fontFamily: uiFont, fontSize: '15px', fontStyle: 'bold', color: panelTextColor, resolution: 2
     }).setOrigin(0.5);
     this.manualAimToggleButton.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       pointer.event.stopPropagation();
@@ -1828,26 +1975,26 @@ export class MainScene extends Phaser.Scene {
     addCombatRow(modePageObjects, 'batonLightSweepAngle', 430, '警棍轻击范围角度', 10);
     addCombatRow(modePageObjects, 'batonLightSweepRange', 475, '警棍轻击距离范围', 10);
 
-    const saveButton = this.add.rectangle(810, 535, 220, 40, 0x92400e)
-      .setStrokeStyle(2, 0xfbbf24, 0.95)
+    const saveButton = this.add.rectangle(810, 535, 220, 40, 0xf2d06b, 0.92)
+      .setStrokeStyle(3, 0xa87922, 0.95)
       .setInteractive({ useHandCursor: true });
     const saveText = this.add.text(810, 535, '保存当前配置', {
-      fontFamily: 'Arial', fontSize: '17px', fontStyle: 'bold', color: '#fff7ed'
+      fontFamily: uiFont, fontSize: '17px', fontStyle: 'bold', color: '#5f4a1d', resolution: 2
     }).setOrigin(0.5);
-    const exportButton = this.add.rectangle(1060, 535, 220, 40, 0x0f766e)
-      .setStrokeStyle(2, 0x67e8f9, 0.95)
+    const exportButton = this.add.rectangle(1060, 535, 220, 40, 0x4ec8c9, 0.88)
+      .setStrokeStyle(3, 0x1e7577, 0.95)
       .setInteractive({ useHandCursor: true });
     const exportText = this.add.text(1060, 535, '导出参数 TXT', {
-      fontFamily: 'Arial', fontSize: '17px', fontStyle: 'bold', color: '#ecfeff'
+      fontFamily: uiFont, fontSize: '17px', fontStyle: 'bold', color: '#174f51', resolution: 2
     }).setOrigin(0.5);
     const persistenceHint = this.add.text(690, 573, '保存会写入本浏览器并在刷新后自动恢复；导出仍生成 TXT 文件。', {
-      fontFamily: 'Arial', fontSize: '14px', color: '#94a3b8'
+      fontFamily: uiFont, fontSize: '14px', color: mutedTextColor, resolution: 2
     }).setOrigin(0, 0.5);
     saveButton.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
       pointer.event.stopPropagation();
       const saved = this.tuningEditor.savePersistedConfig();
       persistenceHint
-        .setColor(saved ? '#86efac' : '#fca5a5')
+        .setColor(saved ? '#1e7d54' : '#b94b4b')
         .setText(saved ? '配置已保存；刷新或下次打开游戏时会自动恢复。' : '保存失败：浏览器未允许本机存储。');
     });
     exportButton.on('pointerdown', (pointer: Phaser.Input.Pointer) => {
@@ -1872,18 +2019,18 @@ export class MainScene extends Phaser.Scene {
     );
 
     const fpvLabel = this.add.text(80, 470, '右下 FPV 观察窗', {
-      fontFamily: 'Arial', fontSize: '16px', color: '#cbd5e1'
+      fontFamily: uiFont, fontSize: '16px', color: panelTextColor, resolution: 2, shadow: textShadow
     }).setOrigin(0, 0.5);
-    this.fpvToggleButton = this.add.rectangle(430, 470, 130, 34, 0x0f766e)
-      .setStrokeStyle(2, 0x67e8f9, 0.95)
+    this.fpvToggleButton = this.add.rectangle(430, 470, 130, 34, PIXEL_UI_CYAN, 0.88)
+      .setStrokeStyle(3, 0x1e7577, 0.95)
       .setInteractive({ useHandCursor: true });
     this.fpvToggleText = this.add.text(430, 470, '', {
-      fontFamily: 'Arial', fontSize: '15px', fontStyle: 'bold', color: '#ecfeff'
+      fontFamily: uiFont, fontSize: '15px', fontStyle: 'bold', color: '#174f51', resolution: 2
     }).setOrigin(0.5);
     const hint = this.add.text(320, 660, '按 Esc 关闭音量设置', {
       fontFamily: uiFont,
       fontSize: '13px',
-      color: '#fffef6',
+      color: mutedTextColor,
       resolution: 2,
       shadow: textShadow
     }).setAlpha(0.76).setOrigin(0.5);
@@ -1925,8 +2072,8 @@ export class MainScene extends Phaser.Scene {
       pageContainer?.each((child: Phaser.GameObjects.GameObject) => {
         if (child.input) child.input.enabled = active;
       });
-      this.combatTabButtons[candidate]?.setFillStyle(active ? 0x0f766e : 0x334155);
-      this.combatTabButtons[candidate]?.setStrokeStyle(1, active ? 0x67e8f9 : 0x64748b);
+      this.combatTabButtons[candidate]?.setFillStyle(active ? PIXEL_UI_CYAN : PIXEL_UI_GREEN_PANEL, active ? 0.9 : 0.88);
+      this.combatTabButtons[candidate]?.setStrokeStyle(2, active ? 0x1e7577 : PIXEL_UI_GREEN_FRAME, 0.88);
     }
   }
 
@@ -2035,7 +2182,8 @@ export class MainScene extends Phaser.Scene {
 
   private refreshFpvToggle(): void {
     if (!this.fpvToggleText) return;
-    this.fpvToggleButton.setFillStyle(this.fpvWindowEnabled ? 0x0f766e : 0x334155);
+    this.fpvToggleButton.setFillStyle(this.fpvWindowEnabled ? PIXEL_UI_CYAN : PIXEL_UI_GREEN_PANEL, this.fpvWindowEnabled ? 0.9 : 0.88);
+    this.fpvToggleButton.setStrokeStyle(3, this.fpvWindowEnabled ? 0x1e7577 : PIXEL_UI_GREEN_FRAME, 0.92);
     this.fpvToggleText.setText(this.fpvWindowEnabled ? '已开启' : '已关闭');
   }
 
@@ -2559,11 +2707,14 @@ export class MainScene extends Phaser.Scene {
     };
     for (const weaponId of ['glowsticks', 'baton'] as const) {
       const enabled = modeEnabled[weaponId];
-      this.heavyModeToggleButtons[weaponId]?.setFillStyle(enabled ? 0x0f766e : 0x334155);
+      this.heavyModeToggleButtons[weaponId]?.setFillStyle(enabled ? PIXEL_UI_CYAN : PIXEL_UI_GREEN_PANEL, enabled ? 0.9 : 0.88);
+      this.heavyModeToggleButtons[weaponId]?.setStrokeStyle(2, enabled ? 0x1e7577 : PIXEL_UI_GREEN_FRAME, 0.9);
       this.heavyModeToggleTexts[weaponId]?.setText(enabled ? '新模式开启' : '沿用旧模式');
     }
     if (this.manualAimToggleButton && this.manualAimToggleText) {
-      this.manualAimToggleButton.setFillStyle(this.tuningEditor.manualAimEnabled ? 0x0f766e : 0x334155);
+      const manualEnabled = this.tuningEditor.manualAimEnabled;
+      this.manualAimToggleButton.setFillStyle(manualEnabled ? PIXEL_UI_CYAN : PIXEL_UI_GREEN_PANEL, manualEnabled ? 0.9 : 0.88);
+      this.manualAimToggleButton.setStrokeStyle(2, manualEnabled ? 0x1e7577 : PIXEL_UI_GREEN_FRAME, 0.9);
       this.manualAimToggleText.setText(this.tuningEditor.manualAimEnabled ? '手动瞄准' : '自动瞄准');
     }
   }
@@ -2671,42 +2822,35 @@ export class MainScene extends Phaser.Scene {
     const bubbleHeight = worldSize(104);
     const pixel = worldSize(3);
     const bubble = this.add.graphics();
-    // 圆润像素气泡：块状阴影和粗像素边保留像素感，圆角、猫耳与粉色角标增加可爱感。
-    bubble.fillStyle(0x000000, 0.22);
-    bubble.fillRoundedRect(
-      -bubbleWidth / 2 + pixel * 2,
-      -bubbleHeight / 2 + pixel * 2,
+    // 参考图像素气泡：台阶边、粗阴影、深色清晰字，不再使用黑框或半透明白线。
+    drawPixelPanel(
+      bubble,
+      -bubbleWidth / 2,
+      -bubbleHeight / 2,
       bubbleWidth,
       bubbleHeight,
-      worldSize(16)
+      0xf2f0d8,
+      PIXEL_UI_GREEN_FRAME,
+      PIXEL_UI_GREEN_DARK,
+      0xf8f5df,
+      0.96,
+      worldSize(8)
     );
-    bubble.fillStyle(0x000000, 1);
-    bubble.fillTriangle(-worldSize(26), bubbleHeight / 2 - pixel, 0, bubbleHeight / 2 + worldSize(24), worldSize(22), bubbleHeight / 2 - pixel);
-    bubble.fillRoundedRect(-bubbleWidth / 2, -bubbleHeight / 2, bubbleWidth, bubbleHeight, worldSize(16));
-    bubble.fillRect(-bubbleWidth / 2 + worldSize(34), -bubbleHeight / 2 - pixel * 2, worldSize(22), pixel * 3);
-    bubble.fillRect(bubbleWidth / 2 - worldSize(56), -bubbleHeight / 2 - pixel * 2, worldSize(22), pixel * 3);
-    bubble.fillStyle(0xffffff, 1);
-    bubble.fillTriangle(-worldSize(18), bubbleHeight / 2 - pixel * 2, 0, bubbleHeight / 2 + worldSize(14), worldSize(14), bubbleHeight / 2 - pixel * 2);
-    bubble.fillRoundedRect(
-      -bubbleWidth / 2 + pixel,
-      -bubbleHeight / 2 + pixel,
-      bubbleWidth - pixel * 2,
-      bubbleHeight - pixel * 2,
-      worldSize(13)
-    );
-    bubble.fillRect(-bubbleWidth / 2 + worldSize(38), -bubbleHeight / 2 - pixel, worldSize(14), pixel * 2);
-    bubble.fillRect(bubbleWidth / 2 - worldSize(52), -bubbleHeight / 2 - pixel, worldSize(14), pixel * 2);
-    bubble.fillStyle(0xf9a8d4, 1);
+    bubble.fillStyle(PIXEL_UI_GREEN_DARK, 0.96);
+    bubble.fillTriangle(-worldSize(24), bubbleHeight / 2 - pixel, 0, bubbleHeight / 2 + worldSize(20), worldSize(24), bubbleHeight / 2 - pixel);
+    bubble.fillStyle(0xf2f0d8, 0.96);
+    bubble.fillTriangle(-worldSize(16), bubbleHeight / 2 - pixel * 2, 0, bubbleHeight / 2 + worldSize(12), worldSize(16), bubbleHeight / 2 - pixel * 2);
+    bubble.fillStyle(0xf29ecb, 0.9);
     bubble.fillRect(-bubbleWidth / 2 + worldSize(20), -worldSize(6), pixel * 2, pixel * 2);
     bubble.fillRect(bubbleWidth / 2 - worldSize(28), -worldSize(6), pixel * 2, pixel * 2);
 
     this.tutorialDialogueText = this.add.text(0, -worldSize(6), lines[0], {
-      fontFamily: '"Arial Black", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif',
+      fontFamily: PIXEL_UI_FONT,
       fontSize: `${worldSize(16)}px`,
       fontStyle: 'bold',
-      color: '#000000',
-      stroke: '#000000',
-      strokeThickness: worldSize(0.55),
+      color: '#243f3d',
+      stroke: '#f8f5df',
+      strokeThickness: worldSize(0.7),
       align: 'center',
       fixedWidth: bubbleWidth - worldSize(52),
       wordWrap: { width: bubbleWidth - worldSize(52), useAdvancedWrap: true },
@@ -2714,12 +2858,12 @@ export class MainScene extends Phaser.Scene {
     }).setOrigin(0.5);
     const hint = this.add
       .text(bubbleWidth / 2 - worldSize(20), bubbleHeight / 2 - worldSize(14), '左键 / "  继续  ›', {
-        fontFamily: '"Arial Black", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif',
+        fontFamily: PIXEL_UI_FONT,
         fontSize: `${worldSize(9)}px`,
         fontStyle: 'bold',
-        color: '#000000',
-        stroke: '#000000',
-        strokeThickness: worldSize(0.4)
+        color: '#496e69',
+        stroke: '#f8f5df',
+        strokeThickness: worldSize(0.35)
       })
       .setOrigin(1, 0.5)
       .setAlpha(0.85);
@@ -2816,6 +2960,54 @@ export class MainScene extends Phaser.Scene {
     this.hud.setWave('教学中');
   }
 
+  private createTutorialControlCard(text: string, icon: 'mouse' | 'key'): Phaser.GameObjects.Container {
+    const card = this.add.container(0, 0);
+    const gfx = this.add.graphics();
+    drawPixelPanel(
+      gfx,
+      0,
+      0,
+      TUTORIAL_CONTROL_WIDTH,
+      TUTORIAL_CONTROL_HEIGHT,
+      PIXEL_UI_CYAN,
+      0xd8fff4,
+      PIXEL_UI_GREEN_DARK,
+      0xa9fff3,
+      0.94,
+      8
+    );
+    gfx.fillStyle(PIXEL_UI_GREEN_DARK, 0.22);
+    gfx.fillRect(8, TUTORIAL_CONTROL_HEIGHT - 8, TUTORIAL_CONTROL_WIDTH - 16, 4);
+    const flash = this.add
+      .rectangle(0, 0, TUTORIAL_CONTROL_WIDTH, TUTORIAL_CONTROL_HEIGHT, 0xf3fff6, 0.56)
+      .setOrigin(0)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setAlpha(0);
+
+    if (icon === 'mouse') {
+      drawPixelMouseIcon(gfx, 24, 15, 34, 34, PIXEL_UI_GREEN_DARK, 0xa9fff3);
+    } else {
+      drawPixelBox(gfx, 22, 17, 40, 30, 0xf4f8df, PIXEL_UI_GREEN_DARK, 0xffffff, 0.96);
+      gfx.fillStyle(PIXEL_UI_GREEN_DARK, 0.82);
+      gfx.fillRect(32, 27, 5, 5);
+      gfx.fillRect(42, 27, 5, 5);
+      gfx.fillRect(52, 27, 5, 5);
+    }
+
+    const label = this.add.text(184, TUTORIAL_CONTROL_HEIGHT / 2, text, {
+      fontFamily: PIXEL_UI_FONT,
+      fontSize: '24px',
+      fontStyle: 'bold',
+      color: '#245654',
+      stroke: '#eaf8df',
+      strokeThickness: 2,
+      resolution: 2
+    }).setOrigin(0.5);
+    card.setData('flash', flash);
+    card.add([gfx, flash, label]);
+    return card;
+  }
+
   /** 按 bg1.psd 原坐标显示石子前景与四张操作卡；只改变视觉，不参与输入或判定。 */
   private createTutorialControlGuide(): void {
     this.destroyTutorialControlGuide();
@@ -2825,22 +3017,19 @@ export class MainScene extends Phaser.Scene {
       .setScale(PSD_LAYOUT_SCALE / MAIN_CAMERA_BASE_ZOOM)
       .setScrollFactor(0)
       .setName('tutorial-psd-ui');
-    const bottomRocks = this.add
-      .image(TUTORIAL_BOTTOM_ROCKS_LAYOUT.x, TUTORIAL_BOTTOM_ROCKS_LAYOUT.y, TUTORIAL_BOTTOM_ROCKS_KEY)
-      .setOrigin(0)
-      .setDisplaySize(TUTORIAL_BOTTOM_ROCKS_LAYOUT.width, TUTORIAL_BOTTOM_ROCKS_LAYOUT.height);
     const rows = TUTORIAL_CONTROL_LAYOUTS.map((layout) =>
-      this.add
-        .image(layout.x, layout.y, layout.key)
-        .setOrigin(0)
-        .setDisplaySize(TUTORIAL_CONTROL_WIDTH, TUTORIAL_CONTROL_HEIGHT)
+      this.createTutorialControlCard(layout.text, layout.icon)
+        .setPosition(layout.x, layout.y)
         .setAlpha(0)
     );
 
     // PSD 中石子原本烘焙在底图里；拆成前景保留遮挡层级，操作任务卡绘制在最上方。
-    guide.add([bottomRocks, ...rows]);
+    guide.add(rows);
     this.tutorialControlGuide = guide;
     this.tutorialControlRows = rows;
+    this.tutorialControlFlashes = rows
+      .map((row) => row.getData('flash') as Phaser.GameObjects.Rectangle | undefined)
+      .filter((flash): flash is Phaser.GameObjects.Rectangle => !!flash);
     this.startTutorialControlSequence();
   }
 
@@ -2891,6 +3080,21 @@ export class MainScene extends Phaser.Scene {
     return true;
   }
 
+  private flashTutorialControlCard(taskIndex: number): void {
+    if (this.state !== 'tutorial') return;
+    const row = this.tutorialControlRows[taskIndex];
+    const flash = row?.getData('flash') as Phaser.GameObjects.Rectangle | undefined;
+    if (!row?.active || !row.visible || !flash?.active) return;
+    this.tweens.killTweensOf(flash);
+    flash.setAlpha(0.62);
+    this.tweens.add({
+      targets: flash,
+      alpha: 0,
+      duration: 180,
+      ease: 'Quad.easeOut'
+    });
+  }
+
   private resumeTutorialControlAfterSettings(): void {
   }
 
@@ -2898,7 +3102,9 @@ export class MainScene extends Phaser.Scene {
     this.tutorialControlRunId++;
     this.tutorialControlTaskArmed = false;
     this.tweens?.killTweensOf(this.tutorialControlRows);
+    this.tweens?.killTweensOf(this.tutorialControlFlashes);
     this.tutorialControlRows = [];
+    this.tutorialControlFlashes = [];
     this.tutorialControlGuide?.destroy(true);
     this.tutorialControlGuide = undefined;
   }
@@ -2930,52 +3136,142 @@ export class MainScene extends Phaser.Scene {
       .setScrollFactor(0);
 
     if (tutorial) {
-      const panel = this.add
-        .image(TUTORIAL_PATTERN_PANEL_X, TUTORIAL_PATTERN_PANEL_Y, TUTORIAL_PATTERN_PANEL_KEY)
-        .setOrigin(0)
-        .setDisplaySize(TUTORIAL_PATTERN_PANEL_WIDTH, TUTORIAL_PATTERN_PANEL_HEIGHT);
-      ui.add(panel);
+      const panelGfx = this.add.graphics();
+      drawPixelPanel(
+        panelGfx,
+        TUTORIAL_PATTERN_PANEL_X,
+        TUTORIAL_PATTERN_PANEL_Y,
+        TUTORIAL_PATTERN_PANEL_WIDTH,
+        TUTORIAL_PATTERN_PANEL_HEIGHT,
+        PIXEL_UI_GREEN_PANEL,
+        PIXEL_UI_GREEN_PANEL_LIGHT,
+        PIXEL_UI_GREEN_FRAME,
+        0xeef5d6,
+        0.94,
+        10
+      );
+      panelGfx.lineStyle(3, PIXEL_UI_GREEN_DARK, 0.74);
+      panelGfx.lineBetween(
+        TUTORIAL_PATTERN_PANEL_X + 28,
+        TUTORIAL_PATTERN_PANEL_Y + 62,
+        TUTORIAL_PATTERN_PANEL_X + TUTORIAL_PATTERN_PANEL_WIDTH - 28,
+        TUTORIAL_PATTERN_PANEL_Y + 62
+      );
+      panelGfx.fillStyle(PIXEL_UI_GREEN_DARK, 0.92);
+      panelGfx.fillRect(TUTORIAL_PATTERN_PANEL_X + 24, TUTORIAL_PATTERN_PANEL_Y + 58, 8, 8);
+      panelGfx.fillRect(
+        TUTORIAL_PATTERN_PANEL_X + TUTORIAL_PATTERN_PANEL_WIDTH - 32,
+        TUTORIAL_PATTERN_PANEL_Y + 58,
+        8,
+        8
+      );
+      ui.add(panelGfx);
 
-      const createHighlightLayer = (): Phaser.GameObjects.Image[] =>
-        TUTORIAL_PATTERN_PANEL_CROPS.map((crop) => {
-          const highlight = this.add
-            .image(TUTORIAL_PATTERN_PANEL_X, TUTORIAL_PATTERN_PANEL_Y, TUTORIAL_PATTERN_PANEL_KEY)
-            .setOrigin(0)
-            .setDisplaySize(TUTORIAL_PATTERN_PANEL_WIDTH, TUTORIAL_PATTERN_PANEL_HEIGHT)
-            .setCrop(crop.x, crop.y, crop.width, crop.height)
-            .setBlendMode(Phaser.BlendModes.ADD)
-            .setAlpha(0);
-          ui.add(highlight);
-          return highlight;
-        });
+      const title = this.add.text(TUTORIAL_PATTERN_PANEL_X + 30, TUTORIAL_PATTERN_PANEL_Y + 24, '教学 · 按节拍打出连段', {
+        fontFamily: PIXEL_UI_FONT,
+        fontSize: '22px',
+        fontStyle: 'bold',
+        color: '#2d5653',
+        resolution: 2
+      }).setOrigin(0, 0.5);
+      ui.add(title);
 
-      this.tutorialBeatHighlights = createHighlightLayer();
-      this.tutorialHitHighlights = createHighlightLayer();
+      this.combo.pattern.forEach((key, index) => {
+        const cx = TUTORIAL_PATTERN_PANEL_X + TUTORIAL_PATTERN_ICON_CENTERS[index];
+        const cy = TUTORIAL_PATTERN_PANEL_Y + TUTORIAL_PATTERN_ICON_Y;
+        const buttonGfx = this.add.graphics();
+        if (key === 'L') {
+          drawPixelBox(buttonGfx, cx - 25, cy - 25, 50, 50, PIXEL_UI_CYAN, PIXEL_UI_GREEN_DARK, 0xd8fff4, 0.96);
+        } else {
+          buttonGfx.fillStyle(0x8f6b14, 0.3);
+          buttonGfx.fillRect(cx - 28, cy - 20, 56, 40);
+          buttonGfx.fillStyle(0xfbbf24, 0.98);
+          buttonGfx.beginPath();
+          buttonGfx.moveTo(cx, cy - 31);
+          buttonGfx.lineTo(cx + 31, cy);
+          buttonGfx.lineTo(cx, cy + 31);
+          buttonGfx.lineTo(cx - 31, cy);
+          buttonGfx.closePath();
+          buttonGfx.fillPath();
+          buttonGfx.lineStyle(3, 0x8f6b14, 0.95);
+          buttonGfx.strokePath();
+          buttonGfx.lineStyle(2, 0xfff2a6, 0.9);
+          buttonGfx.strokePoints([
+            new Phaser.Math.Vector2(cx, cy - 23),
+            new Phaser.Math.Vector2(cx + 23, cy),
+            new Phaser.Math.Vector2(cx, cy + 23),
+            new Phaser.Math.Vector2(cx - 23, cy)
+          ], true);
+        }
+        ui.add(buttonGfx);
+
+        const label = this.add.text(cx, cy, key === 'L' ? '轻' : '重', {
+          fontFamily: PIXEL_UI_FONT,
+          fontSize: '26px',
+          fontStyle: 'bold',
+          color: key === 'L' ? '#ffffff' : '#315350',
+          stroke: key === 'L' ? '#2d5653' : '#fff1a6',
+          strokeThickness: 2,
+          resolution: 2
+        }).setOrigin(0.5);
+        ui.add(label);
+
+        const beatHighlight: Phaser.GameObjects.Shape = key === 'L'
+          ? this.add.rectangle(cx, cy, 58, 58, 0xffffff, 0.72).setStrokeStyle(4, 0xffffff, 1)
+          : this.add.rectangle(cx, cy, 52, 52, 0xfff3a3, 0.72).setAngle(45);
+        beatHighlight.setBlendMode(Phaser.BlendModes.ADD).setAlpha(0);
+        const hitHighlight: Phaser.GameObjects.Shape = key === 'L'
+          ? this.add.rectangle(cx, cy, 62, 62, 0xa9fff3, 0.92).setStrokeStyle(4, 0xffffff, 1)
+          : this.add.rectangle(cx, cy, 56, 56, 0xffda4a, 0.92).setAngle(45);
+        hitHighlight.setBlendMode(Phaser.BlendModes.ADD).setAlpha(0);
+        ui.add([beatHighlight, hitHighlight]);
+        this.tutorialBeatHighlights.push(beatHighlight);
+        this.tutorialHitHighlights.push(hitHighlight);
+      });
     } else {
+      const panelGfx = this.add.graphics();
+      const panelWidth = 260;
+      const panelHeight = 78;
+      const panelLeft = -panelWidth / 2;
+      const panelTop = FORMAL_PATTERN_ICON_Y - 50;
+      drawPixelPanel(
+        panelGfx,
+        panelLeft,
+        panelTop,
+        panelWidth,
+        panelHeight,
+        PIXEL_UI_PINK_PANEL,
+        0xffedf7,
+        PIXEL_UI_PINK_FRAME,
+        PIXEL_UI_PINK_LIGHT,
+        0.9,
+        8
+      );
+      ui.add(panelGfx);
       // 默认以白色显示当前连招；只有正确输入才短暂恢复轻 / 重拍色。
-      const xs = [-108, -36, 36, 108];
+      const xs = [-78, -26, 26, 78];
       this.combo.pattern.forEach((key, i) => {
         const icon: Phaser.GameObjects.Shape = key === 'L'
-          ? this.add.circle(xs[i], FORMAL_PATTERN_ICON_Y, 14).setStrokeStyle(3, FORMAL_PATTERN_BASE_COLOR)
-          : this.add.rectangle(xs[i], FORMAL_PATTERN_ICON_Y, 22, 22, FORMAL_PATTERN_BASE_COLOR).setAngle(45);
+          ? this.add.circle(xs[i], FORMAL_PATTERN_ICON_Y, 10).setStrokeStyle(2.4, FORMAL_PATTERN_BASE_COLOR)
+          : this.add.rectangle(xs[i], FORMAL_PATTERN_ICON_Y, 16, 16, FORMAL_PATTERN_BASE_COLOR).setAngle(45);
         ui.add(icon);
         this.patternIcons.push(icon);
       });
       if (this.player.weapon.id === 'baton') {
         // 长按段现在是第 3→4 拍（xs[2]→xs[3]），按下/松开箭头和长按条都要跟着挪到最后两格。
         const pressMark = this.add.text(xs[2], FORMAL_PATTERN_ICON_Y, '↓', {
-          fontFamily: 'Arial', fontSize: '13px', fontStyle: 'bold', color: '#1f2937'
+          fontFamily: PIXEL_UI_FONT, fontSize: '10px', fontStyle: 'bold', color: '#4f3b63', resolution: 2
         }).setOrigin(0.5);
         const releaseMark = this.add.text(xs[3], FORMAL_PATTERN_ICON_Y, '↑', {
-          fontFamily: 'Arial', fontSize: '13px', fontStyle: 'bold', color: '#1f2937'
+          fontFamily: PIXEL_UI_FONT, fontSize: '10px', fontStyle: 'bold', color: '#4f3b63', resolution: 2
         }).setOrigin(0.5);
         const holdCenterX = (xs[2] + xs[3]) / 2;
-        this.batonHoldTrack = this.add.rectangle(holdCenterX, FORMAL_PATTERN_ICON_Y + 30, 72, 6, 0x475569, 0.9);
-        this.batonHoldFill = this.add.rectangle(xs[2], FORMAL_PATTERN_ICON_Y + 30, 1, 6, FORMAL_PATTERN_HEAVY_COLOR, 1)
+        this.batonHoldTrack = this.add.rectangle(holdCenterX, FORMAL_PATTERN_ICON_Y + 24, 54, 4, PIXEL_UI_PINK_FRAME, 0.55);
+        this.batonHoldFill = this.add.rectangle(xs[2], FORMAL_PATTERN_ICON_Y + 24, 1, 4, FORMAL_PATTERN_HEAVY_COLOR, 1)
           .setOrigin(0, 0.5)
           .setVisible(false);
         this.batonHoldLabel = this.add.text(holdCenterX, FORMAL_PATTERN_ICON_Y + 43, '第3拍按下 · 第4拍松开', {
-          fontFamily: 'Arial', fontSize: '10px', fontStyle: 'bold', color: '#f8fafc'
+          fontFamily: PIXEL_UI_FONT, fontSize: '10px', fontStyle: 'bold', color: '#4f3b63', resolution: 2
         }).setOrigin(0.5);
         ui.add([pressMark, releaseMark, this.batonHoldTrack, this.batonHoldFill, this.batonHoldLabel]);
       }
@@ -3229,7 +3525,7 @@ export class MainScene extends Phaser.Scene {
   private spawnTutorialVerdict(mark: string, color: string): void {
     if (!this.patternPanel || !this.tutorialStreakText) return;
     const text = this.add
-      .text(190, 128, mark, { fontFamily: 'Arial', fontSize: '30px', fontStyle: 'bold', color })
+      .text(190, 128, mark, { fontFamily: PIXEL_UI_FONT, fontSize: '30px', fontStyle: 'bold', color, resolution: 2 })
       .setOrigin(0.5);
     this.patternPanel.add(text);
     this.tweens.add({ targets: text, y: 100, alpha: 0, duration: 500, ease: 'Sine.easeOut', onComplete: () => text.destroy() });
@@ -3277,9 +3573,9 @@ export class MainScene extends Phaser.Scene {
       .setDepth(5000);
     this.tutorialOutroText = this.add
       .text(screenX, screenY, '加载过场动画…', {
-        fontFamily: 'Arial, Microsoft YaHei, sans-serif',
+        fontFamily: PIXEL_UI_FONT,
         fontSize: `${hd(18)}px`,
-        color: '#ffffff'
+        color: '#fff8e6'
       })
       .setOrigin(0.5)
       .setScale(1 / MAIN_CAMERA_BASE_ZOOM)
@@ -3324,7 +3620,7 @@ export class MainScene extends Phaser.Scene {
         CAMERA_BASE_SCROLL_Y + (VIEW_HEIGHT - hd(20)) / MAIN_CAMERA_BASE_ZOOM,
         '空格跳过',
         {
-          fontFamily: 'Arial, Microsoft YaHei, sans-serif',
+          fontFamily: PIXEL_UI_FONT,
           fontSize: `${hd(12)}px`,
           color: '#ffffff'
         }
@@ -3440,12 +3736,12 @@ export class MainScene extends Phaser.Scene {
   private showCountdownTick(label: string, color: string): void {
     const text = this.add
       .text(640, 300, label, {
-        fontFamily: 'Arial',
+        fontFamily: PIXEL_UI_FONT,
         fontSize: '96px',
         fontStyle: 'bold',
         color,
-        stroke: '#000000',
-        strokeThickness: 8
+        stroke: '#8fa49c',
+        strokeThickness: 5
       })
       .setOrigin(0.5)
       .setDepth(20)
@@ -3748,22 +4044,53 @@ export class MainScene extends Phaser.Scene {
   private showGameOverMessage(): void {
     const camera = this.cameras.main;
     const view = camera.worldView;
-    const message = this.add
-      .text(view.centerX, view.bottom - 72, '我怒闯演唱会失败。\n按R再试一次。', {
-        fontFamily: 'Arial',
-        fontSize: '24px',
-        color: '#e5e7eb',
-        align: 'center',
-        backgroundColor: '#0f172acc',
-        padding: { x: 24, y: 14 },
-        stroke: '#000000',
-        strokeThickness: 5
-      })
-      .setOrigin(0.5, 1)
+    const panel = this.add
+      .container(view.centerX, view.bottom - 208)
       .setDepth(1003)
-      .setAlpha(0)
-      .setScale(1 / MAIN_CAMERA_BASE_ZOOM);
-    this.tweens.add({ targets: message, alpha: 1, duration: 220 });
+      .setScale(1 / MAIN_CAMERA_BASE_ZOOM)
+      .setAlpha(0);
+
+    const message = this.add
+      .text(0, 0, '我怒闯演唱会失败。\n按R再试一次。', {
+        fontFamily: '"Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif',
+        fontSize: '24px',
+        fontStyle: 'bold',
+        color: '#315d5a',
+        align: 'center',
+        stroke: '#eef4dc',
+        strokeThickness: 2,
+        lineSpacing: 2,
+        resolution: 2
+      })
+      .setOrigin(0.5);
+
+    const width = Math.max(268, Math.ceil(message.width + 58));
+    const height = Math.max(74, Math.ceil(message.height + 34));
+    const left = -width / 2;
+    const top = -height;
+    const right = width / 2;
+    message.setPosition(0, top + height / 2);
+
+    const glass = this.add.graphics();
+    drawPixelPanel(
+      glass,
+      left,
+      top,
+      width,
+      height,
+      PIXEL_UI_GREEN_PANEL,
+      PIXEL_UI_GREEN_FRAME,
+      PIXEL_UI_GREEN_DARK,
+      PIXEL_UI_GREEN_PANEL_LIGHT,
+      0.94,
+      8
+    );
+    glass.fillStyle(PIXEL_UI_CYAN, 0.9);
+    glass.fillRect(left + 22, top + height / 2 - 3, 6, 6);
+    glass.fillRect(right - 28, top + height / 2 - 3, 6, 6);
+
+    panel.add([glass, message]);
+    this.tweens.add({ targets: panel, alpha: 1, duration: 220 });
   }
 
   getAutoAimAngle(moveAngle: number): number {
@@ -4032,21 +4359,42 @@ export class MainScene extends Phaser.Scene {
 
     for (let y = 0; y < size; y++) {
       for (let x = 0; x < size; x++) {
-        const distance = Math.hypot(x - center, y - center);
         this.writeCompositePixel(
           image.data,
           (y * size + x) * 4,
           shellRgb,
           midRgb,
           coreRgb,
-          distance - shellRadius,
-          distance - midRadius,
-          distance - coreRadius,
+          this.teardropSdf(x, y, center, center, shellRadius),
+          this.teardropSdf(x, y, center, center, midRadius),
+          this.teardropSdf(x, y, center, center, coreRadius),
           haloSigma
         );
       }
     }
     context.putImageData(image, 0, 0);
+  }
+
+  private teardropSdf(
+    x: number,
+    y: number,
+    centerX: number,
+    centerY: number,
+    radius: number
+  ): number {
+    // Texture points to the right. The visible Image rotates to the projectile angle,
+    // so the small tip stays behind the projectile and the rounded head faces its target.
+    const tipX = centerX - radius * 1.08;
+    const headCenterX = centerX + radius * 0.22;
+    const headRadius = radius * 0.86;
+    const dy = y - centerY;
+
+    if (x >= headCenterX) return Math.hypot(x - headCenterX, dy) - headRadius;
+    if (x <= tipX) return Math.hypot(x - tipX, dy);
+
+    const progress = Phaser.Math.Clamp((x - tipX) / (headCenterX - tipX), 0, 1);
+    const halfHeight = headRadius * Math.sin(progress * Math.PI * 0.5);
+    return Math.abs(dy) - halfHeight;
   }
 
   private writeCompositePixel(
@@ -4537,6 +4885,7 @@ export class MainScene extends Phaser.Scene {
     const projectileVisual = this.add
       .image(x, y, this.ensureEnemyProjectileTexture(sourceKind, visualDiameter, bossStyle, tutorialPink))
       .setDisplaySize(compositeDiameter, compositeDiameter)
+      .setRotation(angle)
       .setDepth(4)
       .setBlendMode(Phaser.BlendModes.NORMAL);
     this.bullets.add(bullet);

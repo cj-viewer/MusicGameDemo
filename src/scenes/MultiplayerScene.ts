@@ -14,6 +14,23 @@ interface Fighter {
 const BPM = 132;
 const BEAT_MS = 60000 / BPM;
 const HIT_WINDOW_MS = 190;
+const UI_FONT = 'Microsoft YaHei UI, Microsoft YaHei, PingFang SC, sans-serif';
+const PANEL = 0xf0c9df;
+const PANEL_LIGHT = 0xffe9f5;
+const FRAME = 0x6b4b78;
+const TEXT = '#4f3b63';
+const CYAN = 0x4ec8c9;
+
+function addPixelTabs(scene: Phaser.Scene, x: number, y: number, width: number, height: number, color: number, depth = 52): void {
+  const tabW = ui(14);
+  const tabH = ui(6);
+  const dx = width / 2 - ui(28);
+  const dy = height / 2 + tabH / 2;
+  scene.add.rectangle(x - dx, y - dy, tabW, tabH, color, 0.92).setDepth(depth);
+  scene.add.rectangle(x + dx, y - dy, tabW, tabH, color, 0.92).setDepth(depth);
+  scene.add.rectangle(x - dx, y + dy, tabW, tabH, color, 0.92).setDepth(depth);
+  scene.add.rectangle(x + dx, y + dy, tabW, tabH, color, 0.92).setDepth(depth);
+}
 
 export class MultiplayerScene extends Phaser.Scene {
   private client!: MultiplayerClient;
@@ -91,8 +108,8 @@ export class MultiplayerScene extends Phaser.Scene {
     playPlayerAnimation(sprite, 'idle');
     this.fighters.set(state.id, { id: state.id, weapon: state.weapon, sprite, weaponImage, targetX: state.x, targetY: state.y, hp: state.hp, facing: state.id === 1 ? 0 : Math.PI });
     this.add.text(state.x, state.y - ui(80), state.id === this.localId ? '你' : '对手', {
-      fontFamily: 'Microsoft YaHei UI, sans-serif', fontSize: ui(15) + 'px', color: state.id === 1 ? '#fde68a' : '#67e8f9',
-      backgroundColor: '#090b18aa', padding: { x: ui(6), y: ui(3) }
+      fontFamily: UI_FONT, fontSize: ui(15) + 'px', fontStyle: 'bold', color: state.id === 1 ? '#8b6925' : '#1e7577',
+      backgroundColor: '#f0c9dfdd', padding: { x: ui(6), y: ui(3) }
     }).setOrigin(0.5).setDepth(20).setData('followId', state.id);
   }
 
@@ -105,22 +122,24 @@ export class MultiplayerScene extends Phaser.Scene {
   }
 
   private createHud(): void {
-    this.add.rectangle(VIEW_WIDTH / 2, ui(48), VIEW_WIDTH, ui(96), 0x050713, 0.78).setDepth(50);
+    this.add.rectangle(VIEW_WIDTH / 2, ui(48), VIEW_WIDTH, ui(96), PANEL, 0.72).setDepth(50);
+    this.add.rectangle(VIEW_WIDTH / 2, ui(48), VIEW_WIDTH - ui(28), ui(72), 0xffffff, 0).setStrokeStyle(ui(3), FRAME, 0.72).setDepth(51);
+    addPixelTabs(this, VIEW_WIDTH / 2, ui(48), VIEW_WIDTH - ui(28), ui(72), FRAME, 52);
     [1, 2].forEach((id) => {
       const x = id === 1 ? ui(60) : VIEW_WIDTH - ui(60);
       const origin = id === 1 ? 0 : 1;
-      this.add.text(x, ui(20), id === 1 ? 'P1 警棍' : 'P2 荧光棒', { fontFamily: 'Microsoft YaHei UI, sans-serif', fontSize: ui(17) + 'px', color: id === 1 ? '#fde68a' : '#67e8f9' }).setOrigin(origin, 0).setDepth(51);
-      this.add.rectangle(x, ui(65), ui(430), ui(22), 0x30364d).setOrigin(origin, 0.5).setDepth(51);
-      const bar = this.add.rectangle(x, ui(65), ui(430), ui(22), id === 1 ? 0xf59e0b : 0x22d3ee).setOrigin(origin, 0.5).setDepth(52);
+      this.add.text(x, ui(20), id === 1 ? 'P1 警棍' : 'P2 荧光棒', { fontFamily: UI_FONT, fontSize: ui(17) + 'px', fontStyle: 'bold', color: id === 1 ? '#8b6925' : '#1e7577' }).setOrigin(origin, 0).setDepth(52);
+      this.add.rectangle(x, ui(65), ui(430), ui(22), PANEL_LIGHT, 0.76).setOrigin(origin, 0.5).setStrokeStyle(ui(2), FRAME, 0.62).setDepth(52);
+      const bar = this.add.rectangle(x, ui(65), ui(430), ui(22), id === 1 ? 0xe2b844 : CYAN).setOrigin(origin, 0.5).setDepth(53);
       this.hpBars.set(id, bar);
     });
-    this.add.text(VIEW_WIDTH / 2, ui(18), '房间 ' + this.roomCode, { fontFamily: 'Consolas, sans-serif', fontSize: ui(14) + 'px', color: '#c4b5fd' }).setOrigin(0.5).setDepth(51);
-    this.beatDot = this.add.circle(VIEW_WIDTH / 2, ui(66), ui(12), 0xff4f9a, 1).setDepth(52);
+    this.add.text(VIEW_WIDTH / 2, ui(18), '房间 ' + this.roomCode, { fontFamily: 'Consolas, Microsoft YaHei UI, sans-serif', fontSize: ui(14) + 'px', color: TEXT }).setOrigin(0.5).setDepth(52);
+    this.beatDot = this.add.circle(VIEW_WIDTH / 2, ui(66), ui(12), 0xe2b844, 1).setStrokeStyle(ui(2), FRAME, 0.75).setDepth(53);
     this.add.text(VIEW_WIDTH / 2, VIEW_HEIGHT - ui(42), '方向键 / WASD 移动　Z / J 轻击　X / K 重击　攻击必须踩拍', {
-      fontFamily: 'Microsoft YaHei UI, sans-serif', fontSize: ui(16) + 'px', color: '#ffffff',
-      backgroundColor: '#050713cc', padding: { x: ui(18), y: ui(8) }
+      fontFamily: UI_FONT, fontSize: ui(16) + 'px', color: TEXT,
+      backgroundColor: '#f0c9dfdd', padding: { x: ui(18), y: ui(8) }
     }).setOrigin(0.5).setDepth(51);
-    this.judgement = this.add.text(VIEW_WIDTH / 2, ui(125), '', { fontFamily: 'Arial, Microsoft YaHei UI, sans-serif', fontSize: ui(28) + 'px', fontStyle: 'bold', color: '#ffffff' }).setOrigin(0.5).setDepth(55);
+    this.judgement = this.add.text(VIEW_WIDTH / 2, ui(125), '', { fontFamily: UI_FONT, fontSize: ui(28) + 'px', fontStyle: 'bold', color: TEXT, stroke: '#fff0fa', strokeThickness: ui(2) }).setOrigin(0.5).setDepth(55);
   }
 
   private tryAttack(heavy: boolean): void {
@@ -174,10 +193,13 @@ export class MultiplayerScene extends Phaser.Scene {
 
   private endMatch(label: string, color: string): void {
     if (this.matchEnded) return; this.matchEnded = true;
-    this.add.rectangle(VIEW_WIDTH / 2, VIEW_HEIGHT / 2, ui(600), ui(310), 0x080b1b, 0.94).setStrokeStyle(ui(3), 0xffffff, 0.7).setDepth(100);
-    this.add.text(VIEW_WIDTH / 2, VIEW_HEIGHT / 2 - ui(60), label, { fontFamily: 'Microsoft YaHei UI, sans-serif', fontSize: ui(52) + 'px', fontStyle: 'bold', color }).setOrigin(0.5).setDepth(101);
-    const back = this.add.rectangle(VIEW_WIDTH / 2, VIEW_HEIGHT / 2 + ui(70), ui(250), ui(62), 0x7c2d68).setInteractive({ useHandCursor: true }).setDepth(101);
-    this.add.text(back.x, back.y, '返回主菜单', { fontFamily: 'Microsoft YaHei UI, sans-serif', fontSize: ui(22) + 'px', color: '#ffffff' }).setOrigin(0.5).setDepth(102);
+    this.add.rectangle(VIEW_WIDTH / 2 + ui(6), VIEW_HEIGHT / 2 + ui(6), ui(600), ui(310), 0x2c2346, 0.32).setDepth(100);
+    this.add.rectangle(VIEW_WIDTH / 2, VIEW_HEIGHT / 2, ui(600), ui(310), PANEL, 0.96).setStrokeStyle(ui(4), FRAME, 0.92).setDepth(101);
+    addPixelTabs(this, VIEW_WIDTH / 2, VIEW_HEIGHT / 2, ui(600), ui(310), FRAME, 102);
+    this.add.rectangle(VIEW_WIDTH / 2, VIEW_HEIGHT / 2 - ui(125), ui(560), ui(34), PANEL_LIGHT, 0.5).setDepth(102);
+    this.add.text(VIEW_WIDTH / 2, VIEW_HEIGHT / 2 - ui(60), label, { fontFamily: UI_FONT, fontSize: ui(52) + 'px', fontStyle: 'bold', color, stroke: '#fff0fa', strokeThickness: ui(2) }).setOrigin(0.5).setDepth(102);
+    const back = this.add.rectangle(VIEW_WIDTH / 2, VIEW_HEIGHT / 2 + ui(70), ui(250), ui(62), CYAN, 0.9).setStrokeStyle(ui(3), 0x1e7577, 0.95).setInteractive({ useHandCursor: true }).setDepth(102);
+    this.add.text(back.x, back.y, '返回主菜单', { fontFamily: UI_FONT, fontSize: ui(22) + 'px', fontStyle: 'bold', color: '#174f51' }).setOrigin(0.5).setDepth(103);
     back.on('pointerdown', () => { this.client.close(); this.scene.start('IntroScene'); });
   }
 }
