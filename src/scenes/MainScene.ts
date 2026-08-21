@@ -572,7 +572,6 @@ export class MainScene extends Phaser.Scene {
   private batonHoldTrack?: Phaser.GameObjects.Rectangle;
   private batonHoldFill?: Phaser.GameObjects.Rectangle;
   private batonHoldLabel?: Phaser.GameObjects.Text;
-  private batonHoldFeedbackUntil = 0;
   private batonHeavyHeld = false;
   private batonHoldFireTimer?: Phaser.Time.TimerEvent;
   private batonHoldAttackOnBeat = false;
@@ -715,7 +714,6 @@ export class MainScene extends Phaser.Scene {
     this.batonHoldTrack = undefined;
     this.batonHoldFill = undefined;
     this.batonHoldLabel = undefined;
-    this.batonHoldFeedbackUntil = 0;
     this.batonHeavyHeld = false;
     this.batonHoldFireTimer = undefined;
     this.batonHoldAttackOnBeat = false;
@@ -1332,9 +1330,7 @@ export class MainScene extends Phaser.Scene {
     if (submitRelease && this.combo.expectsHeavyRelease && !this.gamePaused) {
       return this.handleAttackInput('H', undefined, 'release');
     }
-    if (this.batonHoldLabel && this.batonHoldLabel.text.startsWith('持续')) {
-      this.showBatonHoldReleaseFeedback(false, 'poor');
-    }
+    if (this.batonHoldLabel) this.showBatonHoldReleaseFeedback(false, 'poor');
     return false;
   }
 
@@ -3388,7 +3384,7 @@ export class MainScene extends Phaser.Scene {
         this.batonHoldFill = this.add.rectangle(xs[2], FORMAL_PATTERN_ICON_Y + 24, 1, 4, FORMAL_PATTERN_HEAVY_COLOR, 1)
           .setOrigin(0, 0.5)
           .setVisible(false);
-        this.batonHoldLabel = this.add.text(holdCenterX, FORMAL_PATTERN_ICON_Y + 43, '第3拍按下 · 第4拍松开', {
+        this.batonHoldLabel = this.add.text(holdCenterX, FORMAL_PATTERN_ICON_Y + 43, '长按 · 松开', {
           fontFamily: PIXEL_UI_FONT, fontSize: '10px', fontStyle: 'bold', color: '#4f3b63', resolution: 2
         }).setOrigin(0.5);
         ui.add([pressMark, releaseMark, this.batonHoldTrack, this.batonHoldFill, this.batonHoldLabel]);
@@ -3920,36 +3916,28 @@ export class MainScene extends Phaser.Scene {
       .setVisible(true)
       .setFillStyle(FORMAL_PATTERN_HEAVY_COLOR, 1)
       .setDisplaySize(Math.max(1, 72 * progress), 6);
-    if (this.time.now >= this.batonHoldFeedbackUntil) {
-      this.batonHoldLabel.setText('持续按住').setColor('#fde68a');
-    }
+    this.batonHoldLabel.setText('长按 · 松开').setColor('#4f3b63');
   }
 
   private showBatonHoldPressFeedback(judgement: AttackJudgement): void {
     if (!this.batonHoldTrack || !this.batonHoldFill || !this.batonHoldLabel) return;
-    this.batonHoldFeedbackUntil = this.time.now + 180;
     const missed = judgement === 'poor';
     this.batonHoldTrack.setFillStyle(missed ? 0x7f1d1d : 0x78350f, 0.95);
     this.batonHoldFill
       .setVisible(true)
       .setDisplaySize(1, 6)
       .setFillStyle(missed ? 0xef4444 : FORMAL_PATTERN_HEAVY_COLOR, 1);
-    this.batonHoldLabel
-      .setText(`按下 ${judgement === 'perfect' ? 'PERFECT' : judgement === 'good' ? 'GOOD' : 'MISS'}`)
-      .setColor(judgement === 'perfect' ? '#fff4b8' : judgement === 'good' ? '#bfdbfe' : '#fecaca');
+    this.batonHoldLabel.setText('长按 · 松开').setColor(missed ? '#fecaca' : '#4f3b63');
   }
 
-  private showBatonHoldReleaseFeedback(success: boolean, judgement: AttackJudgement): void {
+  private showBatonHoldReleaseFeedback(success: boolean, _judgement: AttackJudgement): void {
     if (!this.batonHoldTrack || !this.batonHoldFill || !this.batonHoldLabel) return;
-    this.batonHoldFeedbackUntil = Infinity;
     this.batonHoldFill
       .setVisible(true)
       .setDisplaySize(72, 6)
       .setFillStyle(success ? 0x4ade80 : 0xef4444, 1);
     this.batonHoldTrack.setFillStyle(success ? 0x14532d : 0x7f1d1d, 0.95);
-    this.batonHoldLabel
-      .setText(success ? `松开 ${judgement === 'perfect' ? 'PERFECT' : 'GOOD'}` : '松开 MISS')
-      .setColor(success ? '#bbf7d0' : '#fecaca');
+    this.batonHoldLabel.setText('长按 · 松开').setColor(success ? '#bbf7d0' : '#fecaca');
   }
 
   private buildWaveSpawnQueue(idx: number): WaveEnemyFactory[] {
