@@ -24,7 +24,6 @@ import {
   playGuardAnimation,
   playGuardAttackEffect
 } from './guardAnimation';
-import { enableEmissiveBloom } from './EmissiveFx';
 import {
   TUTORIAL_CHARACTER_ATTACK_DURATION_MS,
   TUTORIAL_CHARACTER_BODY_SOURCE_BOUNDS,
@@ -35,8 +34,6 @@ import {
   tutorialCharacterTextureKey
 } from './tutorialCharacterAnimation';
 
-const GUARD_EMISSIVE_COLOR = 0x52efff;
-const FAN_EMISSIVE_COLOR = 0xff543d;
 const CHARACTER_SHADOW_ALPHA = 0.45;
 const CHARACTER_SHADOW_DEPTH_OFFSET = 0.004;
 
@@ -81,7 +78,6 @@ export abstract class Enemy {
   private bodySourceBounds?: EnemyBodySourceBounds;
   private knockbackUntil = 0;
   private knockbackVelocity = new Phaser.Math.Vector2();
-  private baseScaleX: number;
   private baseScaleY: number;
   private readonly shadow?: Phaser.GameObjects.Image;
   private readonly shadowOptions?: EnemyShadowOptions;
@@ -101,7 +97,6 @@ export abstract class Enemy {
     this.maxHp = hp;
     this.baseColor = color;
     this.bodySourceBounds = bodySourceBounds;
-    this.baseScaleX = go.scaleX;
     this.baseScaleY = go.scaleY;
     this.shadowOptions = shadowOptions;
     if (shadowOptions) {
@@ -175,32 +170,13 @@ export abstract class Enemy {
   /** 更新单位基础体型，并同步角色、阴影与后续节拍缩放的基准。 */
   protected setVisualScale(scale: number): void {
     this.scene.tweens.killTweensOf(this.go);
-    this.baseScaleX = scale;
     this.baseScaleY = scale;
     this.go.setScale(scale);
     this.shadow?.setScale(scale * (this.shadowOptions?.scaleMultiplier ?? 1));
   }
 
-  /** 所有敌人按轻 / 重拍节奏脚底锚定，只做纵向上弹。 */
-  pulseBeat(heavy: boolean): void {
-    if (this.dead) return;
-    const peakScaleY = heavy ? 1.1 : 1.05;
-    const totalDuration = heavy ? 220 : 170;
-    const baseY = this.go.y;
-    const baseDisplayHeight = this.go.height * this.baseScaleY;
-    const yForScale = (scaleY: number) => baseY + (baseDisplayHeight * (1 - scaleY)) / 2;
-    this.scene.tweens.killTweensOf(this.go);
-    // 横轴始终保持基础比例与镜像状态；Y 位移补偿令脚底在上弹和回落中不漂移。
-    this.go.setScale(this.baseScaleX, this.baseScaleY * peakScaleY);
-    this.go.setY(yForScale(peakScaleY));
-    this.scene.tweens.add({
-      targets: this.go,
-      scaleY: this.baseScaleY,
-      y: baseY,
-      duration: totalDuration,
-      ease: 'Back.easeOut'
-    });
-  }
+  /** 性能模式停用敌群逐拍 Tween；移动、攻击与判定不受影响。 */
+  pulseBeat(_heavy: boolean): void {}
 
   /** 物理组接管对象后执行一次，避免 Group 默认值覆盖出生时的初始运动状态。 */
   onSpawned(): void {}
@@ -402,19 +378,10 @@ export class SmallGuard extends Enemy {
     );
     this.sprite = sprite;
     this.attackFx = scene.add
-      .sprite(x, y, 'npc-guard-attack-light-fx-1')
+      .sprite(x, y, 'npc-guard-attack-light-fx-3')
       .setScale(GUARD_ATTACK_EFFECT_SCALE)
       .setAlpha(0.82)
       .setVisible(false);
-    enableEmissiveBloom(this.attackFx, GUARD_EMISSIVE_COLOR, {
-      glowStrength: 0.2,
-      innerStrength: 0.03,
-      glowDistance: 19,
-      glowQuality: 2,
-      blurRadius: 8,
-      bloomAmount: 0.05,
-      threshold: 0.07
-    });
     this.weaponSprite = scene.add
       .image(x, y, 'npc-guard-weapon-baton')
       .setOrigin(GUARD_WEAPON_ORIGIN.x, GUARD_WEAPON_ORIGIN.y)
@@ -774,19 +741,10 @@ export class FanEnemy extends Enemy {
     );
     this.sprite = sprite;
     this.attackFx = scene.add
-      .sprite(x, y, 'npc-fan-attack-hard-fx-2')
+      .sprite(x, y, 'npc-fan-attack-hard-fx-3')
       .setScale(FAN_SPRITE_SCALE)
       .setAlpha(0.84)
       .setVisible(false);
-    enableEmissiveBloom(this.attackFx, FAN_EMISSIVE_COLOR, {
-      glowStrength: 0.22,
-      innerStrength: 0.04,
-      glowDistance: 21,
-      glowQuality: 2,
-      blurRadius: 9,
-      bloomAmount: 0.055,
-      threshold: 0.06
-    });
     this.weaponSprite = scene.add
       .image(x, y, 'npc-fan-weapon-glowstick')
       .setOrigin(FAN_WEAPON_ORIGIN.x, FAN_WEAPON_ORIGIN.y)
@@ -938,19 +896,10 @@ export class TutorialCharacter extends Enemy {
     );
     this.sprite = sprite;
     this.attackFx = scene.add
-      .sprite(x, y, 'tutorial-character-attack-light-fx-1')
+      .sprite(x, y, 'tutorial-character-attack-light-fx-3')
       .setScale(TUTORIAL_CHARACTER_SPRITE_SCALE)
       .setAlpha(0.84)
       .setVisible(false);
-    enableEmissiveBloom(this.attackFx, FAN_EMISSIVE_COLOR, {
-      glowStrength: 0.22,
-      innerStrength: 0.04,
-      glowDistance: 21,
-      glowQuality: 2,
-      blurRadius: 9,
-      bloomAmount: 0.055,
-      threshold: 0.06
-    });
     this.chooseMovementAngle();
     this.rollUntil = scene.time.now + TUTORIAL_CHARACTER_ROLL_DURATION_MS;
     playTutorialCharacterAnimation(this.sprite, 'roll', true);

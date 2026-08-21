@@ -18,6 +18,7 @@ export interface PlayerAnimationAssetSpec {
   filePrefix: string;
   frameCount: number;
   paddedIndex: boolean;
+  sourceFrames?: readonly number[];
 }
 
 /** 远端正式玩家素材：统一为 256px 方形画布，透明内容脚底约位于源图 y=186。 */
@@ -41,13 +42,13 @@ export const PLAYER_BODY_SOURCE_OFFSET_X = (PLAYER_SOURCE_FRAME_SIZE - PLAYER_BO
 export const PLAYER_BODY_SOURCE_OFFSET_Y = PLAYER_SOURCE_BASELINE_Y - PLAYER_BODY_SOURCE_HEIGHT;
 
 export const PLAYER_ANIMATION_ASSETS: PlayerAnimationAssetSpec[] = [
-  { action: 'idle', directory: 'idle', filePrefix: 'player_idle-', frameCount: 8, paddedIndex: false },
-  { action: 'run', directory: 'run', filePrefix: 'player_run_', frameCount: 8, paddedIndex: true },
-  { action: 'dash', directory: 'dash', filePrefix: 'player_dash_', frameCount: 12, paddedIndex: true },
-  { action: 'attack-light', directory: 'attack_light', filePrefix: 'player_attack_light_', frameCount: 5, paddedIndex: true },
-  { action: 'attack-hard', directory: 'attack_hard', filePrefix: 'player_attack_hard_', frameCount: 5, paddedIndex: true },
-  { action: 'death-1', directory: 'death01', filePrefix: 'player_death01_', frameCount: 8, paddedIndex: true },
-  { action: 'death-2', directory: 'death02', filePrefix: 'player_death02_', frameCount: 8, paddedIndex: true }
+  { action: 'idle', directory: 'idle', filePrefix: 'player_idle-', frameCount: 1, paddedIndex: false },
+  { action: 'run', directory: 'run', filePrefix: 'player_run_', frameCount: 1, paddedIndex: true },
+  { action: 'dash', directory: 'dash', filePrefix: 'player_dash_', frameCount: 6, paddedIndex: true },
+  { action: 'attack-light', directory: 'attack_light', filePrefix: 'player_attack_light_', frameCount: 1, paddedIndex: true, sourceFrames: [3] },
+  { action: 'attack-hard', directory: 'attack_hard', filePrefix: 'player_attack_hard_', frameCount: 1, paddedIndex: true, sourceFrames: [3] },
+  { action: 'death-1', directory: 'death01', filePrefix: 'player_death01_', frameCount: 4, paddedIndex: true },
+  { action: 'death-2', directory: 'death02', filePrefix: 'player_death02_', frameCount: 4, paddedIndex: true }
 ];
 
 export function playerTextureKey(action: PlayerAction, frame: number): string {
@@ -59,7 +60,8 @@ export function playerAnimationKey(action: PlayerAction): string {
 }
 
 export function playerAssetPath(spec: PlayerAnimationAssetSpec, frame: number): string {
-  const index = spec.paddedIndex ? String(frame).padStart(2, '0') : String(frame);
+  const sourceFrame = spec.sourceFrames?.[frame - 1] ?? frame;
+  const index = spec.paddedIndex ? String(sourceFrame).padStart(2, '0') : String(sourceFrame);
   return `images/characters/player/animation/${spec.directory}/${spec.filePrefix}${index}.png`;
 }
 
@@ -87,13 +89,9 @@ export function registerPlayerAnimations(scene: Phaser.Scene): void {
     });
   };
 
-  create('idle', 8, { frameRate: 8, repeat: -1 });
-  create('run', 8, { frameRate: 12, repeat: -1 });
-  create('dash', 12, { duration: PLAYER_DASH_ANIMATION_DURATION_MS, repeat: 0 });
-  create('attack-light', 5, { duration: 200, repeat: 0 });
-  create('attack-hard', 5, { duration: 200, repeat: 0 });
-  create('death-1', 8, { duration: PLAYER_DEATH_ANIMATION_DURATION_MS, repeat: 0 });
-  create('death-2', 8, { duration: PLAYER_DEATH_ANIMATION_DURATION_MS, repeat: 0 });
+  create('dash', 6, { duration: PLAYER_DASH_ANIMATION_DURATION_MS, repeat: 0 });
+  create('death-1', 4, { duration: PLAYER_DEATH_ANIMATION_DURATION_MS, repeat: 0 });
+  create('death-2', 4, { duration: PLAYER_DEATH_ANIMATION_DURATION_MS, repeat: 0 });
 }
 
 export function playPlayerAnimation(
@@ -104,6 +102,12 @@ export function playPlayerAnimation(
   sprite.setScale(PLAYER_SPRITE_SCALE);
   // 轻重攻击 PNG 是纯特效层，不能替换角色本体纹理。
   if (action === 'attack-light' || action === 'attack-hard') return;
+  if (action === 'idle' || action === 'run') {
+    if (sprite.anims.isPlaying) sprite.anims.stop();
+    const textureKey = playerTextureKey(action, 1);
+    if (sprite.texture.key !== textureKey) sprite.setTexture(textureKey);
+    return;
+  }
   const key = playerAnimationKey(action);
   if (forceRestart || sprite.anims.currentAnim?.key !== key || !sprite.anims.isPlaying) {
     sprite.play(key, true);
@@ -116,9 +120,19 @@ export function playPlayerAttackEffect(
   action: PlayerAttackAction,
   timeScale = 1
 ): void {
-  sprite.anims.timeScale = Math.max(0.1, timeScale);
+  playerAttackEffectTimers.get(sprite)?.remove(false);
+  sprite.anims.stop();
   sprite
     .setVisible(true)
     .setScale(PLAYER_SPRITE_SCALE)
-    .play(playerAnimationKey(action), true);
+    .setTexture(playerTextureKey(action, 1));
+  playerAttackEffectTimers.set(
+    sprite,
+    sprite.scene.time.delayedCall(200 / Math.max(0.1, timeScale), () => {
+      if (sprite.active) sprite.setVisible(false);
+      playerAttackEffectTimers.delete(sprite);
+    })
+  );
 }
+
+const playerAttackEffectTimers = new WeakMap<Phaser.GameObjects.Sprite, Phaser.Time.TimerEvent>();
