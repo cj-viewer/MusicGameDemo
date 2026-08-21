@@ -3385,7 +3385,7 @@ export class MainScene extends Phaser.Scene {
           .setOrigin(0, 0.5)
           .setVisible(false);
         this.batonHoldLabel = this.add.text(holdCenterX, FORMAL_PATTERN_ICON_Y + 43, '长按 · 松开', {
-          fontFamily: PIXEL_UI_FONT, fontSize: '10px', fontStyle: 'bold', color: '#4f3b63', resolution: 2
+          fontFamily: PIXEL_UI_FONT, fontSize: '10px', fontStyle: 'bold', color: '#ffffff', resolution: 2
         }).setOrigin(0.5);
         ui.add([pressMark, releaseMark, this.batonHoldTrack, this.batonHoldFill, this.batonHoldLabel]);
       }
@@ -3916,7 +3916,7 @@ export class MainScene extends Phaser.Scene {
       .setVisible(true)
       .setFillStyle(FORMAL_PATTERN_HEAVY_COLOR, 1)
       .setDisplaySize(Math.max(1, 72 * progress), 6);
-    this.batonHoldLabel.setText('长按 · 松开').setColor('#4f3b63');
+    this.batonHoldLabel.setText('长按 · 松开').setColor('#ffffff');
   }
 
   private showBatonHoldPressFeedback(judgement: AttackJudgement): void {
@@ -3927,7 +3927,7 @@ export class MainScene extends Phaser.Scene {
       .setVisible(true)
       .setDisplaySize(1, 6)
       .setFillStyle(missed ? 0xef4444 : FORMAL_PATTERN_HEAVY_COLOR, 1);
-    this.batonHoldLabel.setText('长按 · 松开').setColor(missed ? '#fecaca' : '#4f3b63');
+    this.batonHoldLabel.setText('长按 · 松开').setColor(missed ? '#fecaca' : '#ffffff');
   }
 
   private showBatonHoldReleaseFeedback(success: boolean, _judgement: AttackJudgement): void {
