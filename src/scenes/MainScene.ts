@@ -15,7 +15,7 @@ import { registerFanAnimations } from '../game/fanAnimation';
 import { registerGuardAnimations } from '../game/guardAnimation';
 import { registerTutorialCharacterAnimations } from '../game/tutorialCharacterAnimation';
 import { GAMEPAD_BUTTON, rumbleParameters, type RumbleKind } from '../game/GamepadControls';
-import { WORLD_OBJECT_SCALE, worldSize } from '../game/visualScale';
+import { WORLD_OBJECT_SCALE, worldDepth, worldSize } from '../game/visualScale';
 import type { FpvMiniScene } from './FpvMiniScene';
 import { passesDropChance, TuningEditor } from '../game/TuningEditor';
 import {
@@ -210,8 +210,7 @@ const FIRST_LEVEL_DIALOGUE_LINES = [
 ] as const;
 const WAVE_THREE_WEAPON_DIALOGUE_LINES = [
   '拾起新的武器吧。',
-  '新的武器会带来新的节奏型。',
-  '你可以用鼠标滚轮切换武器。'
+  '新的武器会带来新的节奏型。'
 ] as const;
 const VICTORY_DIALOGUE_LINES = ['终于可以通过第一道安检口了。'] as const;
 const TUTORIAL_ENERGY_DIALOGUE_LINES = [
@@ -231,7 +230,7 @@ const FIRST_LEVEL_INTRO_TARGET_X = VIEW_WIDTH * 0.5;
 
 /** 教学要求累计完成的完整四拍 Pattern 数 */
 const TUTORIAL_TARGET_STREAK = 3;
-type AudioChannel = 'master' | 'bgm' | 'rhythm';
+type AudioChannel = 'master' | 'bgm' | 'rhythm' | 'playerCall';
 type VolumeControlChannel = AudioChannel;
 type CombatSettingsPage = 'speed' | 'playerDamage' | 'comboMeter' | 'enemy' | 'boss' | 'mode';
 type CombatSettingKey =
@@ -347,7 +346,8 @@ export class MainScene extends Phaser.Scene {
   private masterVolume = DEFAULT_MASTER_VOLUME;
   private bgmChannelVolume = DEFAULT_BGM_CHANNEL_VOLUME;
   private audioChannelVolumes: Record<Exclude<AudioChannel, 'master' | 'bgm'>, number> = {
-    rhythm: 1
+    rhythm: 1,
+    playerCall: 1
   };
   private volumePanel!: Phaser.GameObjects.Container;
   private volumePanelFrostTexture?: Phaser.Textures.CanvasTexture;
@@ -1667,7 +1667,8 @@ export class MainScene extends Phaser.Scene {
     const audioRows: Array<[VolumeControlChannel, string, number]> = [
       ['master', '主音量', MAX_MASTER_VOLUME],
       ['bgm', 'BGM', MAX_CHANNEL_VOLUME],
-      ['rhythm', '节拍与轻重喊声', MAX_CHANNEL_VOLUME]
+      ['rhythm', '节拍声', MAX_CHANNEL_VOLUME],
+      ['playerCall', '轻重喊声', MAX_CHANNEL_VOLUME]
     ];
     audioRows.forEach(([channel, label, max], index) => {
       addVolumeRow(channel, 175 + index * 80, label, max);
@@ -2234,7 +2235,9 @@ export class MainScene extends Phaser.Scene {
   }
 
   private applyAudioCategoryVolumes(): void {
-    this.conductor?.setSfxVolume(this.shouldMuteRhythm() ? 0 : this.audioChannelVolumes.rhythm);
+    const muted = this.shouldMuteRhythm();
+    this.conductor?.setRhythmVolume(muted ? 0 : this.audioChannelVolumes.rhythm);
+    this.conductor?.setPlayerCallVolume(muted ? 0 : this.audioChannelVolumes.playerCall);
   }
 
   private adjustCombatSetting(key: CombatSettingKey, delta: number): void {
@@ -2756,7 +2759,8 @@ export class MainScene extends Phaser.Scene {
       | 'victoryDialogue'
   ): void {
     this.state = dialogueState;
-    this.conductor?.setSfxVolume(0);
+    this.conductor?.setRhythmVolume(0);
+    this.conductor?.setPlayerCallVolume(0);
     this.activeDialogueLines = lines;
     this.tutorialDialogueIndex = 0;
     this.tutorialDialogueTransitioning = false;
@@ -5951,6 +5955,60 @@ export class MainScene extends Phaser.Scene {
   private unlockWeapon(weapon: WeaponDef): void {
     this.unlockedWeapons.add(weapon.id);
     this.equipWeapon(weapon);
+    this.showWeaponEquippedFx(weapon);
+  }
+
+  /** 拾取后用一次性场内反馈确认换装，不再用额外对白长期提示滚轮。 */
+  private showWeaponEquippedFx(weapon: WeaponDef): void {
+    const color = weapon.id === BATON.id ? 0x67e8f9 : 0xffa340;
+    const x = this.player.x;
+    const y = this.player.y;
+    const fx = this.add.container(x, y).setDepth(worldDepth(y) + 0.02);
+    const outerRing = this.add.circle(0, 0, worldSize(30))
+      .setStrokeStyle(worldSize(4), color, 0.95)
+      .setBlendMode(Phaser.BlendModes.ADD);
+    const innerRing = this.add.circle(0, 0, worldSize(18))
+      .setStrokeStyle(worldSize(2), 0xffffff, 0.9)
+      .setBlendMode(Phaser.BlendModes.ADD);
+    const rays = Array.from({ length: 8 }, (_, index) => {
+      const angle = index * Math.PI / 4;
+      return this.add.rectangle(
+        Math.cos(angle) * worldSize(38),
+        Math.sin(angle) * worldSize(38),
+        worldSize(18),
+        worldSize(3),
+        color,
+        0.95
+      ).setRotation(angle).setBlendMode(Phaser.BlendModes.ADD);
+    });
+    const icon = this.add.image(
+      0,
+      -worldSize(72),
+      weapon.id === BATON.id ? 'player-weapon-baton' : 'player-weapon-glowsticks'
+    ).setScale(0.38).setAlpha(0);
+    const label = this.add.text(0, -worldSize(112), '已装备 · ' + weapon.name, {
+      fontFamily: 'Microsoft YaHei UI, Microsoft YaHei, sans-serif',
+      fontSize: worldSize(17) + 'px',
+      fontStyle: 'bold',
+      color: '#ffffff',
+      stroke: '#111827',
+      strokeThickness: worldSize(3)
+    }).setOrigin(0.5).setAlpha(0);
+    fx.add([outerRing, innerRing, ...rays, icon, label]);
+    outerRing.setScale(0.35);
+    innerRing.setScale(0.25);
+    rays.forEach((ray) => ray.setScale(0.25).setAlpha(0));
+    this.tweens.add({ targets: outerRing, scale: 2.8, alpha: 0, duration: 620, ease: 'Cubic.Out' });
+    this.tweens.add({ targets: innerRing, scale: 2, alpha: 0, duration: 480, ease: 'Quad.Out' });
+    this.tweens.add({ targets: rays, scaleX: 1.25, scaleY: 1, alpha: 0, duration: 540, ease: 'Cubic.Out' });
+    this.tweens.add({ targets: [icon, label], y: '-=' + worldSize(18), alpha: 1, duration: 180, ease: 'Back.Out' });
+    this.tweens.add({
+      targets: [icon, label],
+      alpha: 0,
+      delay: 520,
+      duration: 260,
+      onComplete: () => fx.destroy()
+    });
   }
 
   private switchUnlockedWeapon(direction: 1 | -1): void {
@@ -5968,10 +6026,6 @@ export class MainScene extends Phaser.Scene {
     this.combo.startSwitch(weapon.pattern);
     this.hud.setPattern(weapon.pattern, weapon.name);
     this.buildPatternPanel(this.state === 'tutorial');
-    this.hud.setState('武器已切换 · 等待玩家输入');
-    this.time.delayedCall(900, () => {
-      if (this.state !== 'over') this.hud.setState('');
-    });
   }
 
   // ---------- HUD ----------

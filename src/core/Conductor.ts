@@ -47,7 +47,8 @@ export class Conductor extends Phaser.Events.EventEmitter {
   private nextClickBeat = 0;
   private scene: Phaser.Scene;
   private playerCallAudioReady: boolean;
-  private sfxVolume = 1;
+  private rhythmVolume = 1;
+  private playerCallVolume = 1;
   /** 独立于预排鼓点节点的总增益门，保证对白开始时已排程的下一拍也能立刻静音。 */
   private rhythmGain: GainNode | null = null;
   private activePlayerCalls = new Set<Phaser.Sound.WebAudioSound>();
@@ -61,7 +62,7 @@ export class Conductor extends Phaser.Events.EventEmitter {
     this.ctx = sm.context ?? null;
     if (this.ctx) {
       this.rhythmGain = this.ctx.createGain();
-      this.rhythmGain.gain.value = this.sfxVolume;
+      this.rhythmGain.gain.value = this.rhythmVolume;
       this.rhythmGain.connect(this.ctx.destination);
     }
     this.playerCallAudioReady = scene.cache.audio.exists('beat-light') && scene.cache.audio.exists('beat-heavy');
@@ -124,14 +125,18 @@ export class Conductor extends Phaser.Events.EventEmitter {
   }
 
   /** 独立节拍喊声音量：作用于背景鼓点及之后触发的玩家轻重“嘿”。 */
-  setSfxVolume(volume: number): void {
-    this.sfxVolume = Math.max(0, volume);
+  setRhythmVolume(volume: number): void {
+    this.rhythmVolume = Math.max(0, volume);
     if (this.ctx && this.rhythmGain) {
-      this.rhythmGain.gain.setValueAtTime(this.sfxVolume, this.now());
+      this.rhythmGain.gain.setValueAtTime(this.rhythmVolume, this.now());
     }
-    for (const sound of this.activePlayerCalls) sound.setVolume(this.sfxVolume);
   }
 
+  /** 玩家正确输入后的轻 / 重“嘿”独立音量，并即时更新尚未结束的喊声。 */
+  setPlayerCallVolume(volume: number): void {
+    this.playerCallVolume = Math.max(0, volume);
+    for (const sound of this.activePlayerCalls) sound.setVolume(this.playerCallVolume);
+  }
   update(): void {
     if (!this._started || this.pausedAt !== null) return;
     const t = this.now();
@@ -194,7 +199,7 @@ export class Conductor extends Phaser.Events.EventEmitter {
     const gain = this.ctx.createGain();
     const startTime = Math.max(time, this.now());
     const outputGain = DRUM_GAIN;
-    if (this.sfxVolume <= 0) return;
+    if (this.rhythmVolume <= 0) return;
     osc.type = 'square';
     osc.frequency.setValueAtTime(330, startTime);
     osc.frequency.exponentialRampToValueAtTime(220, startTime + DRUM_DURATION);
@@ -214,7 +219,7 @@ export class Conductor extends Phaser.Events.EventEmitter {
     if (!this.playerCallAudioReady) return;
     const heavy = cue === 'H';
     const key = heavy ? 'beat-heavy' : 'beat-light';
-    const cueGain = this.sfxVolume;
+    const cueGain = this.playerCallVolume;
     const sound = this.scene.sound.add(key, { volume: cueGain }) as Phaser.Sound.WebAudioSound;
     this.activePlayerCalls.add(sound);
     sound.once(Phaser.Sound.Events.COMPLETE, () => {

@@ -6,10 +6,10 @@ import type { WeaponId } from './weapons';
 
 export type TunableEnemyKind = 'smallGuard' | 'midGuard' | 'fan' | 'bossGuard';
 
-const PERSISTED_TUNING_STORAGE_KEY = 'music-game-demo:tuning-config:v1';
+const PERSISTED_TUNING_STORAGE_KEY = 'music-game-demo:tuning-config:v2';
 
 interface PersistedTuningConfig {
-  schemaVersion: 1;
+  schemaVersion: 2;
   player: {
     moveSpeed: number;
     manualAimEnabled: boolean;
@@ -161,7 +161,7 @@ export class TuningEditor {
   };
   weaponAttackDamage: Record<WeaponId, { light: number; heavy: number }> = {
     glowsticks: { light: 10, heavy: 18 },
-    baton: { light: 12, heavy: 20 }
+    baton: { light: 16, heavy: 20 }
   };
   enemyProjectileDamage = {
     smallGuard: 12,
@@ -396,7 +396,7 @@ export class TuningEditor {
       const raw = localStorage.getItem(PERSISTED_TUNING_STORAGE_KEY);
       if (!raw) return false;
       const saved = JSON.parse(raw) as Partial<PersistedTuningConfig>;
-      if (saved.schemaVersion !== 1) return false;
+      if (saved.schemaVersion !== 2) return false;
       this.applyPersistedConfig(saved);
       this.refresh();
       return true;
@@ -413,7 +413,7 @@ export class TuningEditor {
   buildCombatConfigText(generatedAt = new Date()): string {
     const lines = [
       '# MusicGameDemo 战斗参数快照',
-      'schemaVersion=1',
+      'schemaVersion=2',
       `generatedAt=${generatedAt.toISOString()}`,
       '',
       '[player]',
@@ -543,7 +543,7 @@ export class TuningEditor {
 
   private buildPersistedConfig(): PersistedTuningConfig {
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
       player: {
         moveSpeed: this.playerMoveSpeed,
         manualAimEnabled: this.manualAimEnabled,
