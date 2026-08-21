@@ -4930,6 +4930,7 @@ export class MainScene extends Phaser.Scene {
    * 速度倍率是归一化曲线的区间平均斜率，因此无论帧率如何，窗口总位移都严格等于 baseSpeed × 0.2s。
    */
   private updateEnemyBulletBeatSurge(deltaMs: number): void {
+    if (!this.tuningEditor.enemyBulletBeatSurgeEnabled) return;
     const now = this.conductor.now();
     const dt = Math.max(0, deltaMs) / 1000;
     const beatDuration = this.conductor.beatDur;
@@ -5384,7 +5385,10 @@ export class MainScene extends Phaser.Scene {
   private updateBulletTrails(deltaMs: number): void {
     const now = this.time.now;
     const dt = Math.max(deltaMs, 1) / 1000;
-    for (const group of [this.bullets, this.playerBullets]) {
+    const trailGroups = this.tuningEditor.enemyBulletBeatSurgeEnabled
+      ? [this.bullets, this.playerBullets]
+      : [this.playerBullets];
+    for (const group of trailGroups) {
       for (const obj of group.getChildren()) {
         const bullet = obj as Phaser.GameObjects.Rectangle;
         if (bullet.getData('skipTrail')) continue;
@@ -5837,11 +5841,13 @@ export class MainScene extends Phaser.Scene {
   }
 
   private cleanupBullets(): void {
-    const pad = 30;
+    const playerPad = 30;
+    const enemyPad = worldSize(160);
     const beatFloat = this.conductor.beatFloatAt(this.conductor.now());
     for (const group of [this.bullets, this.playerBullets]) {
       for (const obj of group.getChildren().slice()) {
         const bullet = obj as Phaser.GameObjects.Rectangle;
+        const pad = group === this.bullets ? enemyPad : playerPad;
         const outsideArena =
           bullet.x < ARENA.x - pad ||
           bullet.x > ARENA.x + ARENA.width + pad ||
@@ -5857,7 +5863,8 @@ export class MainScene extends Phaser.Scene {
           && Phaser.Math.Distance.Between(launchX, launchY, bullet.x, bullet.y) >= maxTravelDistance;
         if (
           beatFloat >= (bullet.getData('despawnBeat') as number) ||
-          (group === this.playerBullets && (outsideArena || exceededPlayerRange))
+          outsideArena ||
+          (group === this.playerBullets && exceededPlayerRange)
         ) {
           if (group === this.playerBullets) this.destroyPlayerBullet(bullet);
           else this.destroyEnemyBullet(bullet);

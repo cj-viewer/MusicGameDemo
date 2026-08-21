@@ -5,17 +5,17 @@ export type TutorialCharacterAction = 'idle' | 'run' | 'roll';
 export type TutorialCharacterAttackEffect = 'attack-light' | 'attack-hard';
 
 export const TUTORIAL_CHARACTER_FRAME_COUNTS: Record<TutorialCharacterAction, number> = {
-  idle: 8,
-  run: 8,
-  roll: 12
+  idle: 1,
+  run: 1,
+  roll: 1
 };
 
 export const TUTORIAL_CHARACTER_ATTACK_EFFECT_FRAMES: Record<
   TutorialCharacterAttackEffect,
   readonly number[]
 > = {
-  'attack-light': [1, 2, 3, 4, 5],
-  'attack-hard': [1, 2, 3, 4, 5, 6]
+  'attack-light': [3],
+  'attack-hard': [3]
 };
 
 /** 教学角色、攻击特效与阴影共用 256 x 256 画布及同一运行时倍率。 */
@@ -29,12 +29,6 @@ export const TUTORIAL_CHARACTER_BODY_SOURCE_BOUNDS = {
   offsetY: 80
 } as const;
 
-const characterAnimationKey: Record<TutorialCharacterAction, string> = {
-  idle: 'tutorial-character-idle',
-  run: 'tutorial-character-run',
-  roll: 'tutorial-character-roll'
-};
-
 const attackEffectTimers = new WeakMap<Phaser.GameObjects.Sprite, Phaser.Time.TimerEvent>();
 
 export function tutorialCharacterTextureKey(action: TutorialCharacterAction, frame: number): string {
@@ -42,7 +36,8 @@ export function tutorialCharacterTextureKey(action: TutorialCharacterAction, fra
 }
 
 export function tutorialCharacterAssetPath(action: TutorialCharacterAction, frame: number): string {
-  const suffix = String(frame).padStart(2, '0');
+  const sourceFrame = action === 'roll' ? 3 : frame;
+  const suffix = String(sourceFrame).padStart(2, '0');
   return `images/characters/npc/npc_tutorial01/${action}/npc_tutorial01_${action}_${suffix}.png`;
 }
 
@@ -69,30 +64,18 @@ export function registerTutorialCharacterAnimations(scene: Phaser.Scene): void {
         .get(tutorialCharacterTextureKey(action, frame))
         .setFilter(Phaser.Textures.FilterMode.NEAREST);
     }
-    const key = characterAnimationKey[action];
-    if (scene.anims.exists(key)) continue;
-    scene.anims.create({
-      key,
-      frames: Array.from({ length: TUTORIAL_CHARACTER_FRAME_COUNTS[action] }, (_, index) => ({
-        key: tutorialCharacterTextureKey(action, index + 1)
-      })),
-      ...(action === 'roll'
-        ? { duration: TUTORIAL_CHARACTER_ROLL_DURATION_MS, repeat: 0 }
-        : { frameRate: action === 'run' ? 10 : 8, repeat: -1 })
-    });
   }
 }
 
 export function playTutorialCharacterAnimation(
   sprite: Phaser.GameObjects.Sprite,
   action: TutorialCharacterAction,
-  restart = false
+  _restart = false
 ): void {
   sprite.setScale(TUTORIAL_CHARACTER_SPRITE_SCALE);
-  const key = characterAnimationKey[action];
-  if (restart || sprite.anims.currentAnim?.key !== key || !sprite.anims.isPlaying) {
-    sprite.play(key, true);
-  }
+  if (sprite.anims.isPlaying) sprite.anims.stop();
+  const key = tutorialCharacterTextureKey(action, 1);
+  if (sprite.texture.key !== key) sprite.setTexture(key);
 }
 
 /** Phaser 4.2.1 的独立特效动画路径曾卡住主线程，沿用场景时钟手动推进帧。 */

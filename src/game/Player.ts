@@ -117,7 +117,6 @@ export class Player {
         threshold: 0.06
       }
     );
-    this.attackFx.on(Phaser.Animations.Events.ANIMATION_COMPLETE, () => this.attackFx.setVisible(false));
     this.shadowSprite = scene.add
       .image(x, y, 'player-shadow')
       .setScale(PLAYER_SPRITE_SCALE)

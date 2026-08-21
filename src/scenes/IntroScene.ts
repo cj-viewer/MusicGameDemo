@@ -30,7 +30,10 @@ export class IntroScene extends Phaser.Scene {
 
   preload(): void {
     const asset = (file: string): string => `${import.meta.env.BASE_URL}assets/${file}`;
-    this.load.image(INTRO_TITLE_BACKGROUND_KEY, asset('images/backgrounds/intro/intro-title-background.png'));
+    this.load.image(
+      INTRO_TITLE_BACKGROUND_KEY,
+      asset('images/backgrounds/intro/intro-title-background-1280.webp')
+    );
     this.load.video(INTRO_VIDEO_KEY, asset('video/intro.mp4'));
   }
 
